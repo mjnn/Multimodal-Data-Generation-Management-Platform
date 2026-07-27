@@ -1,0 +1,74 @@
+---
+description: rosbag 管线目录结构、状态机、时间轴对齐与 MC 表命名约定
+alwaysApply: true
+---
+
+# 管线架构约定
+
+## SDK v1（2026-07 起，新数据默认）
+- **新 clip / DataWorks / OSS / MC** 以 **OMS Multimodal SDK + sdk_v1** 为准，见 **`sdk-v1-pipeline.mdc`**、**`oms-multimodal-sdk.mdc`**
+- 旧 **clip-omni v2**（Job1–4、`parsed/aligned/ai`、`aig_rosbag__`）仅维护历史 run，勿为新 bag 写入
+
+## 目录与 ID
+- 本地：每条 clip `clips/{clip_id}/rosbag/` + `parsed_data/`
+- 上云 OSS：**bag** `rosbags/...`（Job0/Job1 同路径，不拷贝）；**产物** `clips/{clip_id}/runs/{run_id}/`
+- `clip_id = sha256:{hex}`（内容 hash），非路径名；OSS ETag 仅作校验
+
+## 状态机
+- Job0 发现 → `discovered`；**Job0 dispatch** 写 OSS manifest 并挑选 clip/run
+- Job1 解析 → `job1_done`；Job2 抽样+ASR → `job2_done`；Job3 打标 → `job3_done`；Job4 向量 → `job4_done`
+- 版本化 run：`dim_clip.active_run_id` 指向生效版本；回滚通过 API 切换 active_run_id，不硬删历史
+
+## 时间轴对齐
+- 统一基准：rosbag `record_time_ns`
+- Job1 必须产出 `audio/chunks.jsonl`（chunk_idx + timestamp_ns），禁止只留无索引 WAV
+- 跨模态互查默认 ±200ms；不设 master camera
+- **抽样策略分两种**：`uniform` 四路**独立**抽样；**`uniform_sync`** Job2 起四路对齐成 `sync_group`，Job3 **一组一套标签**（见 `uniform-sync-hmi.mdc`）
+
+## MC 表
+- **新管线**：前缀 **`aig_sdk__`**（`pipeline/sql/maxcompute/aig_sdk__ddl.sql`）
+- **遗留 v2**：`aig_rosbag__`（`pipeline/sql/maxcompute/aig_rosbag__ddl.sql`）— 勿与新 SDK run 混写
+- 配置外置：路径/模型在 `config.yaml`，代码不硬编码
+
+## 配置入口
+- 抽样策略：`cloud.job2.sample_policies` + `active_sample_policy`
+- Job3/Job4 模型：`cloud.job3_label` / `cloud.job4_embed`（含 `storage_mode: separate|unified|both`）
+
+## 忽略规则（`.cursorignore` / `.gitignore`）
+- **不忽略** `clips/**/rosbag/**`（含 `.bag`）；解析时同步写 `rosbag/manifest.json` 供 Agent 发现
+- **忽略** 解析图像目录、`audio.wav`、`.venv`、`data/*.db`
+
+## 本地数据库
+- `data/parse_records.db`：`clip_parse_records` + `clip_pipeline_runs`
+- `data/timeline.db`：Job1 时间轴表（见 `job1-local.mdc`）
+
+## 上云运行时（强制）
+- **MaxFrame + 自定义 DPE 镜像**；详见 `maxframe-dpe-cloud.mdc`（`alwaysApply`）
+- DataWorks 节点：`pipeline/dataworks/`；编排见 `pipeline/dataworks/WORKFLOW.md`
+- 镜像只装依赖：`docker/custom-dpe-image.md`；业务代码粘贴进节点，禁止 subprocess 调镜像内脚本
+
+## MC 环境（已就绪）
+- 项目：`rogbag_label_pipline`；桶：`rosbag-labels-bucket`；区域：`cn_shanghai`
+- DDL：`pipeline/sql/maxcompute/aig_rosbag__ddl.sql`；SDK：`pipeline/sql/maxcompute/aig_sdk__ddl.sql`
+
+## 上云调度传参
+- **clip_id/run_id**：`job0_dispatch` → OSS `pipeline/dispatch/latest.json` → 下游 `resolve_pipeline_context()`（见 `dataworks-dispatch-oss.mdc`）
+- **禁止** PyODPS 节点输出参数传递运行时计算值；无 DW 赋值节点时用 OSS，不用 MC dispatch_staging
+
+## Agent 文档入口
+- **本机 OSS/MC CLI**：`.cursor/skills/cloud-cli-ops/`（验数、查表、读 dispatch；非 DataWorks 触发 Job）
+- **上云 DataWorks**：`pipeline/dataworks/WORKFLOW.md` · `.cursor/rules/dataworks-dispatch-oss.mdc`
+
+## HMI Web（2026-06-11，路径 2026-07 更新）
+- `hmi/frontend/` + `hmi/hmi/backend/hmi/`：时间轴 ±200ms、标签检索、向量相似
+- 数据源：**local**（`hmi/data/hmi_local/`）；见 `hmi-local-datasource.mdc`、`hmi-web-stack.mdc`
+- 同步：`hmi/hmi/scripts/sync_hmi_local.py`
+- 布局：`docs/REPO_LAYOUT.md`
+
+## Job0-4 状态（2026-06-11）
+- **11 节点**：discover + **dispatch** + Job1~4（含 mc_write）
+- **全链 E2E 27/27**；Job3 真实打标已落 MC
+- Job2/3/4 MaxFrame AI；Job3 VL 见 `job3-maxframe-vl.mdc`
+
+## 来源
+沉淀自 session 2026-06-08~11（全链 E2E + HMI Web + local 数据源）

@@ -1,0 +1,149 @@
+# DataWorks 工作流参数模板（clip-omni v2）
+# 用法：工作流「参数」面板 → 新增参数 → 参数名=key、参数值=value（不要写 key=value 在同一格）
+# 详编排见 dataworks/WORKFLOW.md
+
+# =============================================================================
+# 工作流级参数（所有节点共用，配一次即可）
+# =============================================================================
+
+# OSS 桶名。与 .env 的 OSS_BUCKET、config.yaml cloud.oss.bucket 一致。
+oss_bucket=rosbag-labels-pipeline-bucket2
+
+# v2 管线版本标识；job0_dispatch 写入 manifest，下游可读取。
+pipeline_version=clip_omni_v2
+
+# Dispatch manifest OSS key
+dispatch_oss_key=pipeline/dispatch/latest.json
+
+# 区域简写，决定 OSS/MC 内网 endpoint。上海填 cn_shanghai。
+cloud_region=cn_shanghai
+
+# MaxCompute 表名前缀
+table_prefix=aig_rosbag__
+
+# Job0 扫描 OSS 的前缀
+scan_prefix=rosbags/
+
+# clip_id 格式
+clip_id_format=sha256:{hex}
+
+# 【Job1 解析必填】DPE 挂载 OSS 用的 RAM 角色 ARN
+# 格式：acs:ram::1234567890123456:role/角色名
+oss_ram_role_arn=acs:ram::<你的阿里云账号ID>:role/<角色名>
+
+# Job0 / Job1 写 MC 的 DPE 资源
+dpe_cpu=4
+dpe_memory_gb=16
+
+# 【Job1 解析】挂载 OSS 的子路径。留空=挂整桶根目录（推荐）。
+oss_mount_prefix=
+
+# 【Job1】解析产物 OSS 目录模板
+oss_prefix_template=clips/{clip_id}/
+oss_runs_subdir=runs/{run_id}/
+
+# DPE 挂载本地路径
+dpe_mount_path=/mnt/oss
+
+# MaxCompute 登记的 DPE 自定义镜像名
+dpe_image=sq_maxframe
+
+# MC 分区
+ds=${bizdate}
+
+# =============================================================================
+# Job0 发现 · 节点参数（可选）
+# =============================================================================
+# max_scan=200
+# dry_run=false
+
+# =============================================================================
+# Job0 调度 · job0_dispatch（在 job0_discover 之后）
+# =============================================================================
+# job0_dispatch 写 pipeline/dispatch/latest.json
+# Job1~4 读 OSS（resolve_pipeline_context），不必配节点上下文 clip_id
+# 勿设 write_dispatch_oss=false
+
+# =============================================================================
+# Job1 解析 · 节点参数（单 clip 测试；定时任务留空走 dispatch）
+# =============================================================================
+# clip_id=
+# clip_dir_name=2026-06-05_13-27-07
+# bag_oss_key=rosbags/2026-06-05_13-27-07/output.bag
+# run_id=
+
+# =============================================================================
+# Job1 写 MC · 节点参数
+# =============================================================================
+# clip_id / run_id 与 Job1 解析相同
+
+# =============================================================================
+# Job1 对齐 · job1_align（依赖 Job1 mc_write）
+# =============================================================================
+# clip_id / run_id 与 Job1 相同
+# 输出：aligned/timeline.json, aligned/sync_manifest.jsonl
+
+# =============================================================================
+# Job2 主模型打标 · job2_labeling（依赖 Job1 align）
+# =============================================================================
+# clip_id / run_id 与 Job1 相同
+# label_taxonomy_oss_key=config/taxonomy/latest.json
+# primary_model=                 # 留空=stub（结构正确，值为空）
+# primary_model_version=
+
+# =============================================================================
+# Job2 向量 · job2_embedding（可与 job2_labeling / job3 并行）
+# =============================================================================
+# clip_id / run_id 与 Job1 相同
+# embed_model=                   # 留空=stub（零向量）
+# embed_model_version=
+# embedding_dim=768
+
+# =============================================================================
+# Job3 副模型打标 · job3_labeling_by_other_model（可与 job2 并行）
+# =============================================================================
+# clip_id / run_id 与 Job1 相同
+# label_taxonomy_oss_key=config/taxonomy/latest.json
+# secondary_model=               # 留空=stub
+# secondary_model_version=
+
+# =============================================================================
+# Job4 合并 · job4_label_merge_and_compare（需 primary + secondary 均存在）
+# =============================================================================
+# clip_id / run_id 与 Job1 相同
+# agreement_threshold=0.7
+# 输出：ai/labels_merged.json, ai/consensus_meta.json, ai/labels.json
+
+# =============================================================================
+# Job4 写 MC · job4_mc_write（待实现）
+# =============================================================================
+# 读 ai/labels_merged.json + ai/embedding.json + ai/consensus_meta.json
+# 写 fact_clip_label, fact_clip_embedding
+
+# =============================================================================
+# MaxFrame AI Function（模型参数非空时生效）
+# =============================================================================
+# ai_cu_quota_name=mf_cpu_quota
+# ai_gu_quota_name=mf_gu_quota
+# ai_modelset_project=bigdata_public_modelset
+# ai_parallel_partitions=4
+# ai_memory=8G
+# total_rpm_limit=12000
+# request_timeout=300
+
+# =============================================================================
+# HMI 校核（非 DataWorks 节点）
+# =============================================================================
+# 校核 save reviewed → OSS reviews/clips/{clip_id}/runs/{run_id}/labels.json
+# 数据集 export：特征=embedding，目标=校核 labels
+# gate_passed=false 时校核页高亮争议字段
+
+# =============================================================================
+# Legacy 十节点参数（已废弃，仅供参考）
+# =============================================================================
+# job2_sample / job2_asr / job3_label / job4_embed 见 PARAMETERS.md legacy 章节
+# job2_clip_omni 已 deprecated
+# sample_policy=uniform
+# asr_model=qwen3-asr-flash
+# label_model=qwen3.6-plus
+# storage_mode=separate

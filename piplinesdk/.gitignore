@@ -1,0 +1,14 @@
+# Build / install
+build/
+dist/
+*.egg-info/
+oms_multimodal_sdk.egg-info/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets
+.env

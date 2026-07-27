@@ -1,0 +1,44 @@
+---
+description: MaxFrame/MaxCompute 编码与 Job 分工；上云强制见 maxframe-dpe-cloud.mdc
+globs: "**/*.{py,yaml}"
+alwaysApply: false
+---
+
+# MaxFrame 迁移约定
+
+> **上云强制栈**：MaxFrame + 自定义 DPE + 节点粘贴代码 → `maxframe-dpe-cloud.mdc`（alwaysApply）
+
+## 职责边界（已定）
+- **MaxFrame + DPE**：Job0~Job1 三节点（OSS 挂载、hash/解析、读 payload）及 Job2~4（抽样、ASR、打标、向量）
+- **Driver（PyODPS `o`）**：Job0/Job1 写 MC 维度表与事实表（UDF 返回结果后 execute）
+- **Job1 解析**：自定义 DPE 镜像需含 `rosbags`；标准 DPE 无法直接解析 rosbag
+
+## MaxFrame 编码规范
+- 导入：`import maxframe.dataframe as md`；`from maxframe.session import new_session`（禁止 `from maxframe import new_session`）
+- 惰性执行：仅在最终写表/写出时 `.execute()`，中间 DataFrame 不要 execute
+- Session：`new_session()` 后必须在 `finally` 中 `session.destroy()`
+- 凭证：`dotenv.load_dotenv()`，禁止硬编码 AK/SK，禁止用 Read 工具读 `.env`
+- 远程调试：except 中打印 `session.get_logview_address()`
+- 自定义 DPE：`new_session(odps=odps_connection, image="...")`；镜像内设置 `MF_PYTHON_EXECUTABLE`；**不要把 maxframe/pyodps SDK 打进 DPE 镜像**
+
+## 本地 → 上云路径
+1. ~~P1 本地~~：timeline + chunks.jsonl + taxonomy（**已完成**）
+2. ~~P2 本地~~：`active_run_id` 切换 API（**已完成**）
+3. ~~P3 本地~~：MC DDL + `.env.example` + `pipeline/scripts/apply_mc_ddl.py`（**已完成**）
+4. ~~P4~~：Job1 上云（**DataWorks 双节点**为主路径）
+   - 节点1 `pipeline/dataworks/job1_parse_node.py`：OSS 挂载解析 + 写 `job1_mc_payload.json`
+   - 节点2 `pipeline/dataworks/job1_mc_write_node.py`：读 payload 写 `aig_rosbag__*`
+   - 基础镜像只装依赖；参数用工作流/节点 `key=value`
+5. Job2~4：**MaxFrame DPE UDF** + MC AI Function（同 Job0~1 节点模式，新增 `pipeline/dataworks/job*.py`）
+
+## 已废弃为新功能开发路径（勿扩展）
+- `cloud/job1_submit.py` + `docker/job1-dpe/Dockerfile`（subprocess + COPY 业务代码）
+- 纯 PyODPS 上云节点（无 MaxFrame session/UDF）
+
+## ODPS 环境
+- 复制 `.env.example` → `.env`，填 `ODPS_PROJECT` / `ODPS_ACCESS_ID` / `ODPS_ACCESS_KEY` / `OSS_BUCKET`
+- 建表：`pip install -r requirements-cloud.txt` 后 `py -3 pipeline/scripts/apply_mc_ddl.py --check-only` / 去掉 `--check-only` 执行 DDL
+- 区域默认 `cn_shanghai`（`config.yaml` 与 `.env.example` 已对齐）
+
+## 来源
+沉淀自 session 2026-06-08；参考 alibabacloud-odps-maxframe-coding skill

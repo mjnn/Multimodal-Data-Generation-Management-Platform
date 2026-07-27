@@ -1,0 +1,29 @@
+services:
+  app:
+    container_name: ${SERVICE_NAME}
+    image: ${IMAGE}
+    restart: always
+    ports:
+      - "${HOST_PORT}:${CONTAINER_PORT}"
+    env_file:
+      - .env.runtime
+    environment:
+      FRONTEND_DIST: /app/frontend/dist
+      PORT: "8000"
+      HMI_DATA_SOURCE: ${HMI_DATA_SOURCE:-local}
+      HMI_PUBLIC_API_BASE: ${HMI_PUBLIC_API_BASE:-/tools/rosbag-labels/api}
+      HMI_OSS_SYNC_POLL_INTERVAL_SEC: ${HMI_OSS_SYNC_POLL_INTERVAL_SEC:-30}
+      HMI_OSS_SYNC_AUTO_LOCAL: ${HMI_OSS_SYNC_AUTO_LOCAL:-1}
+    volumes:
+      - ./data/hmi_local:/app/data/hmi_local
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

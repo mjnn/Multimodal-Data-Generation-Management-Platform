@@ -1,0 +1,37 @@
+---
+description: 本项目 Agent 技能与文档入口（cloud-cli-ops、DataWorks rules）
+alwaysApply: false
+---
+
+# 项目 Agent 入口
+
+## 项目 skills（`.cursor/skills/`）
+
+| Skill | 何时读 |
+|-------|--------|
+| `cloud-cli-ops/SKILL.md` | 本机 ossutil/odpscmd、查 MC/OSS、验 pipeline、读 dispatch manifest |
+| `cloud-cli-ops/reference.md` | 需要完整命令、tunnel、reset、eval cases |
+
+**维护约定：** CLI 文档只改 skill 目录；`ref/cloud-cli-ops/`、`docs/cloud-cli-runbook.md` 为遗留指针。
+
+## Rules（`.cursor/rules/`）
+
+| Rule | 用途 |
+|------|------|
+| `cloud-cli-odpscmd-ossutil.mdc` | 指向 cloud-cli-ops skill |
+| `dataworks-dispatch-oss.mdc` | 上云 dispatch manifest、内网 OSS、调度去重 |
+| `dataworks-e2e-verify.mdc` | 11 节点 E2E 验收 |
+| `job-pipeline-handoff.mdc` | 进度与下一 session |
+| `maxframe-dpe-cloud.mdc` | 上云 MaxFrame/DPE（alwaysApply） |
+
+## 分工
+
+| 场景 | 用 |
+|------|-----|
+| 本机查表 / 验 OSS 产物 | cloud-cli-ops skill |
+| 触发 Job0~4 | DataWorks 控制台 |
+| 改节点代码 | `pipeline/dataworks/bundled/` + `bundle_all_dataworks.py` |
+
+## 来源
+
+沉淀自 session 2026-06-11（ref/cloud-cli-ops 合并为项目 skill）

@@ -1,0 +1,85 @@
+---
+description: 上云开发强制 MaxFrame + 自定义 DPE 镜像；禁止纯 PyODPS/子进程上云路径
+alwaysApply: true
+---
+
+# 上云运行时：MaxFrame + 自定义 DPE 镜像（强制）
+
+后续 **Job0~Job4 及一切 DataWorks/MaxCompute 上云开发** 均遵循本约定，无例外。
+
+## 必须
+
+| 项 | 要求 |
+|----|------|
+| 计算引擎 | **MaxFrame** + **DPE**（`options.dag.settings.engine_order = ["DPE"]`） |
+| Driver 镜像 | DataWorks 节点「自定义镜像」+ pip（maxframe/pyodps） |
+| DPE 镜像 | MC 登记镜像 + 工作流 `dpe_image`（`docker/dpe-deps`）；与 Driver **分离** |
+| 业务代码 | **粘贴进 PyODPS3 节点整文件**；UDF 内联调用模块级函数 |
+| OSS I/O | `@with_fs_mount` 挂载桶；禁止在 DPE 内用裸 `oss2` 下载整包替代挂载 |
+| Session | `new_session(o)`；`finally: session.destroy()`；异常时 `session.get_logview_address()` |
+| 配置 | 路径/模型/资源外置 `config.yaml` + DataWorks `key=value` 参数 |
+
+## 自定义镜像内容
+
+- **只装 pip/conda 依赖**，见 `docker/custom-dpe-image.md`
+- **禁止** COPY 业务 `.py` 进镜像后在 DPE 内 `subprocess` 调用
+- **禁止** 把 `maxframe` / `pyodps` SDK 打进 DPE 镜像（由 MaxCompute 侧提供）
+- **DPE 镜像**（Job1+）需含：`rosbags`、`pyyaml`、**ossfs2**；见 `docker/dpe-deps/Dockerfile`
+- Driver **不要**依赖装 rosbags 来解决 DPE `ModuleNotFoundError`
+
+## 禁止（新代码不得引入）
+
+- 纯 PyODPS 脚本上云（无 `new_session` / 无 DPE UDF）
+- `cloud/job1_submit.py` 的 subprocess + `/app/...` 模式作为**新功能**实现路径
+- 标准 DPE 默认镜像跑 rosbag 解析（无 `rosbags`）
+- 本地逻辑硬编码 AK/SK；应用 `o.account` 或 `oss_ram_role_arn`
+- bag 在 OSS 间拷贝（`incoming/` → `clips/.../raw/`）；统一 `rosbags/` + `bag_oss_key`
+- **DPE UDF 路径使用 `@dataclass` / 自定义 `class`**（见下方「DPE pickle」）
+
+## DPE pickle（Job0~4 必读）
+
+MaxFrame 将 UDF pickle 到 DPE worker；worker 侧 `__main__` 是 `entry_wrapper.py`，**无法**反序列化节点脚本里定义的类。
+
+| 禁止 | 替代 |
+|------|------|
+| `@dataclass` / `class Foo` / `NamedTuple` / `Enum` | `dict` / `list` / 内置类型 |
+| UDF 返回 dataclass 实例 | 返回 `dict[str, Any]` |
+| 从 `parse_rosbag.py` 等本地模块 import 带 class 的逻辑 | 逻辑内联到 `pipeline/dataworks/*_node.py` 且仅用 dict |
+
+典型报错：`AttributeError: Can't get attribute 'TopicStats.__init__' on <module '__main__' ...>`
+
+提交前运行：`py -3 pipeline/scripts/check_dpe_nodes.py`（扫描 `pipeline/dataworks/*_node.py`）
+
+## 节点模板（复制结构）
+
+```python
+from maxframe.config import options as mf_options
+mf_options.dag.settings = {"engine_order": ["DPE"], "unavailable_engines": ["MCSQL", "SPE"]}
+mf_options.sql.settings = {"odps.sql.python.version": "cp311", "odps.session.image": "<dpe_image>"}  # Job1+
+mf_options.local_execution.enabled = False
+session = new_session(o)
+try:
+    result = input_df.apply(_udf, axis=1, dtypes={...}, skip_infer=True, ...).execute().fetch()
+    # driver 写 MC / 打印 DISCOVERED_JSON
+except Exception:
+    print(session.get_logview_address())
+    raise
+finally:
+    session.destroy()
+```
+
+## 职责分界
+
+- **DPE UDF**：OSS 挂载读写、重计算（hash、parse_bag、读 payload、Job2~4 AI）
+- **Driver（`o`）**：轻量 MC SQL / `open_writer`、列举 OSS key、编排参数
+
+## 参考实现
+
+- `pipeline/dataworks/job0_discover_node.py` — `_job0_hash_bag_row`
+- `pipeline/dataworks/job1_parse_node.py` — `_job1_parse_row` + `parse_bag`
+- `pipeline/dataworks/job1_mc_write_node.py` — `_job1_load_payload_row`
+- 编排：`pipeline/dataworks/WORKFLOW.md`
+
+## 来源
+
+沉淀自 session 2026-06-08/09（Driver/DPE 镜像分离 + dpe_image）

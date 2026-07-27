@@ -1,0 +1,34 @@
+---
+description: SDK v1 产物 OSS 树、aig_sdk__ MC 表、clip_id=sha256:{bag}；替代 clip-omni v2 parsed/aligned/ai
+globs: pipeline/**,hmi/**,shared/**,piplinesdk/**
+alwaysApply: false
+---
+
+# SDK v1 管线（当前标准）
+
+## 真相源
+- **OMS Multimodal SDK**（`process_bag`）产出：`labels.jsonl`、`fusion_embeddings.jsonl`、`clip_videos.jsonl` + 预览 MP4（SDK 原名 `clip_preview_camera*.mp4`）
+- 设计文档：`docs/sdk-first-pipeline-design.md`
+
+## clip_id
+- **`sha256:{.bag 文件内容 SHA256 hex}`**（非目录名、非 `sha256:real_*`）
+- `dim_clip.content_hash` = hex（无 `sha256:` 前缀）
+
+## OSS（`clips/{clip_id}/runs/{run_id}/`）
+- 必传：`run.json`（`layout_version: sdk_v1`）、三个 jsonl、`preview/manifest.json`、`preview/clip_preview_camera*.mp4`、`preview/audio.wav`、可选 `preview/grid.mp4`
+- **不要**为新数据写 `parsed/`、`aligned/`、`ai/`（归档见 `legacy/`）
+- 上传：`pipeline/scripts/upload_clip_preview_to_oss.py` · dispatch：`pipeline/scripts/publish_sdk_dispatch.py`
+
+## MC
+- 表前缀：**`aig_sdk__`**（DDL：`pipeline/sql/maxcompute/aig_sdk__ddl.sql`）
+- 写入：`pipeline/scripts/ingest_sdk_run_to_mc.py` · 同步本地：`hmi/hmi/scripts/sync_hmi_local.py`（SDK 表集 + OSS `preview/` 与 jsonl）
+
+## HMI 本地
+- Artifacts：`hmi/data/hmi_local/artifacts/`；ingest：`hmi/hmi/backend/hmi/sdk_ingest.py`
+- 预览 manifest：`preview/manifest.json`（fallback 旧 `parsed/preview/`）
+
+## 管线步骤（UI / pipeline_step）
+- `sdk_discover` → `sdk_infer` → `sdk_upload` → `sdk_mc_write` → `sdk_dispatch`（非 job1_parse…job4）
+
+## 来源
+沉淀自 session 2026-07-27（SDK-first 重构 + real_data 对齐）

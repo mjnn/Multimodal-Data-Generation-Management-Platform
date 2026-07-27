@@ -1,0 +1,11 @@
+{
+  "rosbag_dir": "D:\\AIG_Projects\\rosbag_to_labels_pipline\\clips\\2026-06-05_13-27-07\\rosbag",
+  "bags": [
+    {
+      "name": "output.bag",
+      "path": "D:\\AIG_Projects\\rosbag_to_labels_pipline\\clips\\2026-06-05_13-27-07\\rosbag\\output.bag",
+      "size_bytes": 29604133,
+      "kind": "ros1_bag"
+    }
+  ]
+}

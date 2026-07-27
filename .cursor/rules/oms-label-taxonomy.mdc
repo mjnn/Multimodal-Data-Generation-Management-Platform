@@ -1,0 +1,22 @@
+﻿---
+description: Job3 打标须基于 OMS 标签体系，输出写入 MC 标签表
+globs: "**/*.{py,yaml,json}"
+alwaysApply: false
+---
+
+# OMS 标签体系（Job3）
+
+## 约束
+- 来源 xlsx：`DMS数据采集标签选择方案_v2.xlsx`（项目根）
+- 生成配置：`config/oms_label_taxonomy.yaml`（68 条全量）
+- `config.yaml` → `cloud.job3_label.label_taxonomy` 指向该文件
+- Job3 不得自由 JSON 乱标：须映射 OMS 标签项
+- 临时排除：`cloud.job3_label.exclude_labels` 或 `python parse_oms_taxonomy.py --exclude <id>`
+
+## value_schema
+- `enum`：取值按 `/` 拆分写入 `values`
+- 复合类型：`value_schema: { type: array, items: bool, length: 5 }` 等形式
+- 落库表名待定（如 `aig_rosbag__fact_oms_label`）
+
+## 来源
+沉淀自 session 2026-06-08（P1 taxonomy 已生成）

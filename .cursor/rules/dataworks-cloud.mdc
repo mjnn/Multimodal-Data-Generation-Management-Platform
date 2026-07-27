@@ -1,0 +1,68 @@
+---
+description: DataWorks 上云节点约定（UDF 内联业务代码、双节点 Job1、key=value 参数）
+globs: "pipeline/dataworks/**/*.py"
+alwaysApply: false
+---
+
+# DataWorks 上云实现（已定）
+
+## 部署形态（三节点均 MaxFrame + DPE）
+- **Driver 镜像**：DataWorks 自定义镜像 + pip（maxframe、pyodps、pandas）；**不含**业务 `.py`
+- **DPE 镜像**：`dpe_image` 指向 MC 登记镜像（`docker/dpe-deps`：rosbags+pyyaml+ossfs2）；无则 Job1 回退 PythonPack
+- **业务代码**：整文件粘贴进 PyODPS 3 节点；**禁止** subprocess 调 `/app/...`
+- **OSS**：`@with_fs_mount` + `oss_ram_role_arn`（内网 URL）
+- **Job0**：DPE 挂载扫 `rosbags/` 算 hash → driver 写 `dim_clip`
+- **Job1 解析**：DPE 内联 `parse_bag` → OSS `parsed/` + `job1_mc_payload.json`
+- **Job1 写 MC**：DPE 读 payload JSON → driver `write_job1_to_mc`
+- **Job2 抽样**：DPE 读 Job1 payload → OSS `job2_sample_payload.json` + `sample_manifest.jsonl`
+- **Job2 ASR**：DPE 切 wav → Driver MC AI ASR → OSS `job2_asr_payload.json`
+- **Job2 写 MC**：合并 sample + asr payload → `job2_mc_payload.json` → MC
+- **Job3 打标**：DPE 读 Job2 sample（不必等 ASR）→ OSS `job3_mc_payload.json`
+- **Job3 写 MC**：DPE 读 payload → `fact_image_label`
+- **Job4 向量化**：DPE 读 Job3 payload + Job2 ASR payload → OSS `job4/`
+- **Job4 写 MC**：DPE 读 payload → `fact_embedding`
+
+## 参数
+- 工作流/节点「参数」面板：**参数名**与**参数值**分列（见 `dataworks-ops.mdc`）
+- 节点内 `get_arg` 读 `args` + `SKYNET_ARGS` + 项目默认值
+- `run_id` 工作流级定一次；Job1 **无需**配置输出参数
+
+## 工作流编排
+- 顺序：**Job0 → Job1 → Job2_sample ∥ Job2_asr → Job3 → Job4**（写 MC 子节点，共 **十节点**，详见 `pipeline/dataworks/WORKFLOW.md`）
+- 测试：十节点串行或 Job2/Job3 并行验证（见 `dataworks-e2e-verify.mdc`）
+- 批量：Job0 后 **For-each** 子流，`clip_id`/`bag_oss_key`/`clip_dir_name` 来自 `DISCOVERED_JSON` 的 `item.*`
+
+## 节点清单
+| 节点 | 文件 | 说明 |
+|------|------|------|
+| Job0 发现 | `pipeline/dataworks/job0_discover_node.py` | OSS 扫 bag → 新 clip 写入 `dim_clip`（`active_run_id` 空） |
+| Job1 解析 | `pipeline/dataworks/job1_parse_node.py` | DPE 解析 + 写 `job1_mc_payload.json` |
+| Job1 写 MC | `pipeline/dataworks/job1_mc_write_node.py` | 读 payload 写 `aig_rosbag__*` |
+| Job2 抽样 | `pipeline/dataworks/job2_sample_node.py` | 抽样帧 → `job2_sample_payload.json` |
+| Job2 ASR | `pipeline/dataworks/job2_asr_node.py` | 切 wav + MC AI ASR → `job2_asr_payload.json` |
+| Job2 写 MC | `pipeline/dataworks/job2_mc_write_node.py` | 合并 payload 写 MC |
+| Job3 打标 | `pipeline/dataworks/job3_label_node.py` | OMS 打标 → `job3_mc_payload.json` |
+| Job3 写 MC | `pipeline/dataworks/job3_mc_write_node.py` | 读 payload 写 `fact_image_label` |
+| Job4 向量化 | `pipeline/dataworks/job4_embed_node.py` | 帧+ASR 分段 → `job4_mc_payload.json` |
+| Job4 写 MC | `pipeline/dataworks/job4_mc_write_node.py` | 读 payload 写 `fact_embedding` |
+
+## OSS 路径（统一，禁止拷贝 bag）
+- **bag 区**：`rosbags/`（`cloud.oss.data_prefix`）— 上传后不动；Job0 扫描、Job1 原地读
+- **产物区**：`clips/{clip_id}/runs/{run_id}/parsed/` — Job1；`.../job2/` — Job2；`.../job3/` — Job3；`.../job4/` — Job4
+- **配置区**：`config/oms_label_taxonomy.yaml` — Job3 打标读 taxonomy（桶根相对 key）
+- `dim_clip.bag_oss_key` 记录 bag 的 object key；Job1 挂载桶根（`oss_mount_prefix` 空）+ `bag_oss_key`
+
+## Job0 状态约定（无 status 列）
+- `dim_clip.active_run_id IS NULL` → 已发现、待 Job1
+- `active_run_id` 非空 → 已有生效 parse run（Job1 完成由节点 2 写入）
+
+## 新 Job 开发检查清单（Job2+）
+- [ ] `pipeline/dataworks/jobN_*.py` 单文件可粘贴
+- [ ] `mf_options`（非 `options`）+ `new_session(o)` + DPE UDF
+- [ ] `apply` 含 `dtypes` + `skip_infer=True`（若 UDF 含重逻辑/第三方库）
+- [ ] 需额外 pip 依赖 → `dpe_image` 扩 `docker/dpe-deps` 或 `@with_python_requirements`
+- [ ] 参数进 `workflow-params.example` + `WORKFLOW.md`
+- [ ] 进度见 `job-pipeline-handoff.mdc`
+
+## 来源
+沉淀自 session 2026-06-08/09；强制栈见 `maxframe-dpe-cloud.mdc`

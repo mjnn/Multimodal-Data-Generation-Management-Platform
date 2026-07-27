@@ -1,0 +1,70 @@
+---
+description: 管线进度与下一 session 接续（全链 E2E + HMI Web 本地/云端双数据源）
+alwaysApply: false
+---
+
+# 管线进度（接续开发用）
+
+## 状态（2026-06-11）
+
+- **11 节点**：discover + dispatch + Job1~4 ×2；`pipeline/dataworks/bundled/` 粘贴
+- **全链 E2E**：**27/27**（`pipeline/scripts/verify_pipeline_run.py`）
+- **完整工作流文档**：`pipeline/dataworks/WORKFLOW_COMPLETE.md`（参数传递、idle 判断、OSS/MC 数据流）
+- **HMI Web**：`hmi/frontend/` + `backend/`；云端 MC+OSS 已对接；**local 模式** SQLite+artifacts（见 `hmi-local-datasource.mdc`）
+- **Job3**：`qwen3.6-plus` 真实打标已写入 MC；**勿用** `qwen-vl-max-latest`（Catalog NoSuchObject）→ `job3-maxframe-vl.mdc`
+- **`uniform_sync`**：云上 Job2→Job3 已验证（`sync_mode=True`）；**HMI 尚未按组展示** → `uniform-sync-hmi.mdc`
+- **Job2 ASR 真实模型**：待 `qwen3-asr-flash`
+
+## 已通过 run（测试 clip）
+
+| 项 | 值 |
+|----|-----|
+| clip_id | `sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b` |
+| run_id | `6a2f479e-64b4-443e-a73c-47a0cc23d81f` |
+| ds | `20260609` |
+| bag | `rosbags/2026-06-05_13-27-07/output.bag` |
+
+MC：五步 `success`；`fact_frame`=1817；`fact_image_label`=39；`fact_embedding`=40。
+
+## HMI 下一 session
+
+1. **`uniform_sync` UI**：读 `sync_group_id` / `label_scope` / `anchor_timestamp_ns`；组内四帧**同一标签**去重展示（`uniform-sync-hmi.mdc`）
+2. **local 模式**浏览器 E2E：时间轴图像 `/api/local-files/...`、检索、相似时刻
+3. **云端**继续减 MC 查询（timeline 快照缓存、检索倒排）
+4. 上传页仅 cloud；标签检索建议用英文 taxonomy（`labels_util`）
+5. ECS 部署可选（local 为开发预览，非生产替代）
+
+## 启动 HMI
+
+```powershell
+# 终端 1（务必 .venv；见 hmi-web-stack.mdc「重启」）
+cd backend; ..\.venv\Scripts\python.exe -m uvicorn hmi.main:app --host 127.0.0.1 --port 8000
+# 终端 2
+cd frontend; npm run dev
+# 健康检查
+curl http://127.0.0.1:8000/api/health
+```
+
+本地数据：`python hmi/scripts/sync_hmi_local.py --clip-id sha256:...`
+
+## 节点清单
+
+| # | 粘贴文件 |
+|---|----------|
+| 0 | `pipeline/dataworks/job0_discover_node.py` |
+| 0b | `bundled/job0_dispatch_node.py` |
+| 1~4 | `bundled/job{1..4}_*.py` |
+
+## 验收命令
+
+```powershell
+py -3 pipeline/scripts/verify_pipeline_run.py --clip-id sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b
+```
+
+## 本机 OSS/MC（Agent）
+
+- `.cursor/skills/cloud-cli-ops/SKILL.md` · `.cursor/rules/cloud-cli-odpscmd-ossutil.mdc`
+
+## 来源
+
+session 2026-06-08~11（全链 E2E + HMI Web + local 数据源 + 云端性能优化）

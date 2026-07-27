@@ -1,0 +1,79 @@
+---
+description: DataWorks 十节点 E2E 已验证踩坑与参数约束（clip_id/ds/节点代码版本/OSS 路径）
+alwaysApply: false
+---
+
+# DataWorks E2E 踩坑（已验证 2026-06-10）
+
+> **stub 全工作流 E2E 已通过**（`verify_pipeline_run.py` 27/27）；单节点踩坑仍适用。
+
+## Dispatch / Driver OSS（2026-06-10）
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| `oss2 is required to write dispatch payload` | Driver 无 oss2 | 用 bundled 版 `pipeline_dispatch`（oss_v2 兜底） |
+| connect timeout 公网 bucket 域名 | Driver 在 VPC | 默认内网 `-internal` endpoint |
+| `InvalidAccessKeyId` + STS 提示 | `o.account` 为 STS 无 token | 配 `oss_vl_access_key_id/secret` |
+| 已完成 clip 仍跑 Job1 | 未理解 dispatch | 五步 completed → `action=idle`，下游空跑 |
+
+## 参数（最常见失败）
+
+| 坑 | 正确做法 |
+|----|----------|
+| 下游只配「本节点输入参数」clip_id | **无效**；用 OSS manifest 或节点参数面板手写 clip_id（见 `dataworks-dispatch-oss.mdc`） |
+| `write_dispatch_oss=false` | **删除**；dispatch 始终写 OSS（除非 dry_run） |
+| 单独跑 job1 未先跑 dispatch | OSS 无 manifest → 报错；须同工作流先 job0_dispatch |
+| job0_dispatch `pipeline_step` full scan | MC 要求分区谓词；`pipeline_dispatch` 查 step 须带 `ds`（见 bundled 新版） |
+| `clip_id` 只填 hex | **必须** `sha256:{hex}`，与 Job1 OSS 目录一致 |
+| 节点 `ds=bizdate` | 字面量错误；用手动 `ds=20260608` 或工作流 `${bizdate}`（靠 `SKYNET_BIZDATE`） |
+| 节点覆盖工作流 `ds` | 写 MC 节点勿写错；`${bizdate}` 未展开时用 `SKYNET_BIZDATE` |
+
+## 节点代码版本（DataWorks 须与仓同步）
+
+| 节点 | 易粘贴旧版 | 现行行为 |
+|------|------------|----------|
+| `job2_mc_write` | 读 `job2_mc_payload.json` | 读 sample+asr payload **合并**写 `job2_mc_payload.json` |
+| `job2_sample_asr` | 单体节点 | **已废弃**，用 sample + asr |
+| `job3_label` | `parsed_root / image_relpath` 直拼 | 兼容 Job1 全路径 + 旧 manifest 重复路径 |
+
+## OSS 路径
+
+- Job1 `parse_result.frames[].image_path` = **相对桶根**（含 `clips/.../parsed/output/...`）
+- Job2 manifest `image_relpath` = **相对 `parsed/`**（`output/images/...`）；见 `job2_sample_node._resolve_parsed_image_relpath`
+- Job3 读图：`parsed_root` + 上述相对路径
+
+## 编排必连边
+
+- `job0_discover` → **`job0_dispatch`** → `job1_parse`（dispatch 写 OSS manifest）
+- `job2_asr` → `job2_mc_write`（合并需 asr payload）
+- `job2_asr` → `job4_embed`（读 `job2_asr_payload.json`）
+- `job2_sample` → `job3_label`（不必等 asr）
+
+## Job3 前置
+
+- OSS：`config/oms_label_taxonomy.yaml`（`py -3 pipeline/scripts/upload_taxonomy_to_oss.py`）
+
+## 测试环境重置
+
+```powershell
+py -3 pipeline/scripts/reset_cloud_test_env.py --dry-run
+py -3 pipeline/scripts/reset_cloud_test_env.py --yes
+```
+
+- OSS：删 `clips/**`；`rosbags/**` 仅保留测试 bag；默认保留 taxonomy
+- MC：清空 `aig_rosbag__*` 全表数据（表结构保留）
+
+## Job3 MaxFrame VL（真实打标）
+
+- 粘贴 **`pipeline/dataworks/bundled/job3_label_node.py`**（改源码后须 `bundle_dataworks_node.py`）
+- 工作流：`label_model=qwen3.6-plus`、`oss_ram_role_arn`、`ai_parallel_partitions=16`
+- 详：`job3-maxframe-vl.mdc`
+
+## 测试 clip（stub 全链已通过 2026-06-10）
+
+- `clip_id=sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b`
+- `run_id=6a2f479e-64b4-443e-a73c-47a0cc23d81f`（`dim_clip.active_run_id`；重跑须 reset）
+
+## 来源
+
+沉淀自 session 2026-06-09~10（stub 单节点 + dispatch OSS + 全链 E2E）

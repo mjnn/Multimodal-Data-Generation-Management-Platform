@@ -1,0 +1,27 @@
+---
+description: 本机 ossutil / odpscmd 操作 OSS+MC；Agent 必读项目 skill cloud-cli-ops
+alwaysApply: false
+---
+
+# 本机 CLI：ossutil + odpscmd
+
+**Canonical skill:** `.cursor/skills/cloud-cli-ops/SKILL.md`（决策表 + 速查）  
+**Full commands:** `.cursor/skills/cloud-cli-ops/reference.md`
+
+操作 OSS/MC 前先读 skill。触发词：ossutil、odpscmd、验 pipeline、查 MC 表、dispatch manifest。
+
+## 快速入口
+
+```powershell
+py -3 pipeline/scripts/sync_cloud_cli_config.py
+py -3 pipeline/scripts/e2e_precheck.py
+py -3 pipeline/scripts/verify_pipeline_run.py --clip-id sha256:...
+```
+
+## 不在 CLI 范围
+
+触发 Job0~4 → DataWorks 控制台（见 `pipeline/dataworks/WORKFLOW.md`）
+
+## 遗留文档
+
+`docs/cloud-cli-runbook.md` · `ref/cloud-cli-ops/` 已合并进 skill；以 `.cursor/skills/cloud-cli-ops/` 为准。

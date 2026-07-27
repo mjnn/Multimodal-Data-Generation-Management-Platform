@@ -1,0 +1,64 @@
+---
+description: Job0 dispatch 经 OSS manifest 传 clip_id/run_id；Driver 内网 OSS 与 AK 约定
+globs: "pipeline/dataworks/**/*"
+alwaysApply: false
+---
+
+# DataWorks Dispatch · OSS 传参（强制）
+
+## 拓扑（11 节点，无 assignment 节点）
+
+```
+job0_discover → job0_dispatch → job1_parse → … → job4_mc_write
+```
+
+- **clip_id/run_id 不传节点上下文**；`job0_dispatch` 写 OSS，`resolve_pipeline_context()` 读
+- 详：`pipeline/dataworks/DISPATCH_PARAMS.md`
+- **SDK v1**：manifest 宜含 `layout_version: sdk_v1`、`run_oss_prefix`；推理节点 **`pipeline/dataworks/sdk_infer_node.py`**
+
+## 必须
+
+| 项 | 要求 |
+|----|------|
+| job0_dispatch | 粘贴 `pipeline/dataworks/bundled/job0_dispatch_node.py`；日志含 `Job0 dispatch OSS manifest:` |
+| 下游 Job1~4 | 工作流有 `oss_bucket`；定时任务 **勿**填 `clip_id`/`run_id` |
+| 运行顺序 | 同一实例内 **先** job0_dispatch **再** job1_parse |
+| bundle | 改 `pipeline_dispatch.py` 后跑 `py -3 pipeline/scripts/bundle_all_dataworks.py` |
+| Driver OSS AK | 工作流配 `oss_vl_access_key_id` + `oss_vl_access_key_secret`（长期 AK，非 STS.*） |
+
+## Driver 读写 dispatch manifest（`pipeline_dispatch.py`）
+
+| 项 | 约定 |
+|----|------|
+| SDK | **无 `oss2`**；用 Driver pip 已装的 `alibabacloud_oss_v2` |
+| Endpoint | 默认 **内网** `https://oss-{region}-internal.aliyuncs.com`（`oss_use_internal=true`） |
+| 凭证 | 优先 `oss_vl_access_key_id/secret`；`o.account` 为 STS 时必须带 `security_token` |
+| DPE 挂载 | `oss_ram_role_arn` **仅** `@with_fs_mount`；**不能**替代 Driver 写 manifest |
+
+## 调度去重（`pick_dispatch_target`）
+
+- `dim_clip.active_run_id` 对应 run 在 `pipeline_step` **五步均 completed** → **跳过**该 clip
+- 未完成 → `resume_incomplete`（复用 `active_run_id`）
+- 无 `active_run_id` → `new_run`（新 UUID）
+- 全部 clip 已完成 → `action=idle`；下游 `PIPELINE_IDLE` 空跑成功
+
+五步：`job1_parse` `job2_sample` `job2_asr` `job3_label` `job4_embed`
+
+## 禁止
+
+- PyODPS `args['clip_id']=...` / 节点输出参数传运行时 clip_id
+- `write_dispatch_oss=false`
+- Driver 用公网 OSS endpoint（DataWorks VPC 内会 connect timeout）
+- 仅用 `o.account` STS AK 写 manifest（报 `InvalidAccessKeyId`）
+
+## 验收
+
+**job0_dispatch：** `Job0 dispatch OSS manifest: oss://rosbag-labels-bucket/pipeline/dispatch/latest.json`
+
+**job1_parse：** `resolve_pipeline_context: loaded dispatch from OSS (action=run)`
+
+**整链：** `py -3 pipeline/scripts/verify_pipeline_run.py --clip-id sha256:...`
+
+## 来源
+
+session 2026-06-10（OSS manifest 主路径 + Driver oss_v2/内网/长期 AK + 调度去重）

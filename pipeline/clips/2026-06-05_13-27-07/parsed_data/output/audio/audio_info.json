@@ -1,0 +1,10 @@
+{
+  "channels": 1,
+  "sample_rate": 48000,
+  "sample_format": "S16LE",
+  "bitrate": 192,
+  "coding_format": "wave",
+  "chunk_count": 1426,
+  "pcm_bytes": 1368960,
+  "duration_sec": 14.26
+}

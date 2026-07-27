@@ -1,0 +1,346 @@
+# 相对 shared/config.yaml：管线代码与 clips/、data/*.db 根目录
+project_root: ../pipeline
+
+paths:
+  # clip 根目录，每个子目录代表一条采集数据
+  clips_dir: clips
+  # 每个 clip 内部的 rosbag 目录名
+  rosbag_subdir: rosbag
+  # 每个 clip 内部的解析结果目录名
+  parsed_data_subdir: parsed_data
+
+bag:
+  # ROS1 bag 文件匹配规则
+  ros1_glob: "*.bag"
+  # ROS2 bag 目录标识文件
+  ros2_metadata_file: metadata.yaml
+
+output:
+  summary_file: summary.json
+  # 每个 bag 的输出子目录，{bag_stem} 会被替换为 bag 文件名（不含扩展名）
+  bag_output_dir: "{bag_stem}"
+  images_subdir: images
+  audio_subdir: audio
+  labels_subdir: labels
+  metadata_file: metadata.json
+  audio_file: audio.wav
+  audio_chunks_file: chunks.jsonl
+  audio_info_file: audio_info.json
+  event_labels_file: event_labels.jsonl
+  # 图像文件名模板：index=帧序号, timestamp=纳秒时间戳, ext=扩展名
+  image_filename: "{index:06d}_{timestamp}.{ext}"
+
+topics:
+  compressed_image_suffix: "/CompressedImage"
+  audio_data_suffix: "/AudioData"
+  audio_info_suffix: "/AudioInfo"
+  string_suffix: "/String"
+  # 从 topic 提取相机编号
+  camera_pattern: "/camera(\\d+)/"
+  camera_name_template: "camera{index}"
+
+image:
+  jpeg_aliases:
+    - jpeg
+    - jpg
+  default_extension: bin
+
+audio:
+  sample_formats:
+    S8: 1
+    S16LE: 2
+    S16BE: 2
+    S24LE: 3
+    S24BE: 3
+    S32LE: 4
+    S32BE: 4
+    F32LE: 4
+    F32BE: 4
+
+json:
+  indent: 2
+  ensure_ascii: false
+
+database:
+  enabled: true
+  path: data/parse_records.db
+  table: clip_parse_records
+  timeline:
+    enabled: true
+    path: data/timeline.db
+    table_prefix: aig_rosbag__
+  topic_columns:
+    - topic: /audio
+      count_column: audio_count
+      msgtype_column: audio_msgtype
+    - topic: /audio_info
+      count_column: audio_info_count
+      msgtype_column: audio_info_msgtype
+    - topic: /camera0/image_raw/compressed
+      count_column: camera0_count
+      msgtype_column: camera0_msgtype
+    - topic: /camera1/image_raw/compressed
+      count_column: camera1_count
+      msgtype_column: camera1_msgtype
+    - topic: /camera2/image_raw/compressed
+      count_column: camera2_count
+      msgtype_column: camera2_msgtype
+    - topic: /camera3/image_raw/compressed
+      count_column: camera3_count
+      msgtype_column: camera3_msgtype
+    - topic: /event_label
+      count_column: event_label_count
+      msgtype_column: event_label_msgtype
+
+pipeline:
+  name: rosbag_to_labels
+  table: clip_pipeline_runs
+  initial_run_status: pending
+  running_status: running
+  completed_status: completed
+  failed_status: failed
+  rolled_back_status: rolled_back
+  initial_step_status: pending
+  step_running_status: running
+  step_completed_status: completed
+  step_failed_status: failed
+  run_statuses:
+    - pending
+    - running
+    - completed
+    - failed
+    - rolled_back
+  step_statuses:
+    - pending
+    - running
+    - completed
+    - failed
+    - skipped
+    - rolled_back
+  steps:
+    - id: parse_rosbag
+      name: 解析 Rosbag
+      enabled: true
+      inline: true
+      command: python parse_rosbag.py --clip {clip_id} --run-id {run_id}
+      cloud_step_id: job1_parse
+    - id: job0_discover
+      name: OSS 发现新 Bag
+      enabled: false
+      cloud_only: true
+    - id: job2_sample
+      name: 帧图抽样
+      enabled: false
+      cloud_only: true
+    - id: job2_asr
+      name: 音频 ASR
+      enabled: false
+      cloud_only: true
+    - id: job3_label
+      name: 抽样帧打标
+      enabled: false
+      cloud_only: true
+    - id: job4_embed
+      name: 向量化
+      enabled: false
+      cloud_only: true
+
+# 上云管线：SDK v1 + MC 表前缀 aig_sdk__（见 sql/maxcompute/aig_sdk__ddl.sql）
+# 运行时强制：MaxFrame + 自定义 DPE 镜像（见 .cursor/rules/maxframe-dpe-cloud.mdc）
+cloud:
+  runtime:
+    engine: maxframe
+    executor: dpe
+    deploy: dataworks_pyodps3
+    # 自定义镜像只装 pip 依赖；业务代码粘贴 dataworks/*.py
+    image_spec: docker/custom-dpe-image.md
+    # .env DPE_IMAGE 仅 ACR 调试可选；DataWorks 主路径用控制台自定义镜像
+  clip_id:
+    algorithm: sha256
+    format: "sha256:{hex}"
+  alignment:
+    default_window_ms: 200
+    default_window_ns: 200000000
+    camera_mode: independent
+  oss:
+    # 可与 .env 的 OSS_BUCKET 二选一；.env 优先
+    bucket: rosbag-labels-pipeline-bucket2
+    region: cn_shanghai
+    endpoint: https://oss-cn-shanghai.aliyuncs.com
+    # bag 上传区（Job0 扫描、Job1 原地读，不做拷贝）
+    data_prefix: rosbags/
+    # 解析产物区（仅 parsed/runs，与 bag 路径分离）
+    prefix_template: "clips/{clip_id}/"
+    raw_subdir: raw/
+    runs_subdir: runs/{run_id}/
+  maxcompute:
+    table_prefix: aig_sdk__
+    # 可与 .env 的 ODPS_PROJECT 二选一；.env 优先
+    project: ""
+    region: cn_shanghai
+    endpoint: https://service.cn-shanghai.maxcompute.aliyun.com/api
+    ddl_file: sql/maxcompute/aig_rosbag__ddl.sql
+  rollback:
+    mode: version
+    switch_via: api
+
+  job0_discover:
+    scan_glob: "**/*.bag"
+    scan_prefix: rosbags/
+    schedule_cron: "0 */10 * * * *"
+    # DataWorks 节点：dataworks/job0_discover_node.py
+  job0_dispatch:
+    dispatch_oss_key: pipeline/dispatch/latest.json
+    pipeline_version: clip_omni_v2
+    # DataWorks 节点：dataworks/job0_dispatch_node.py（job0_discover 之后）
+
+  job1_parse:
+    manifest_file: parsed/manifest.json
+    events_file: parsed/events.jsonl
+    audio_chunks_file: parsed/output/audio/chunks.jsonl
+    dpe:
+      # 与 .env 的 DPE_IMAGE 二选一；.env 优先。需先 build + push 到 ACR
+      image: ""
+      cpu: 4
+      memory_gb: 16
+      mount_path: /mnt/clip
+    write_tables:
+      - dim_clip
+      - pipeline_run
+      - pipeline_step
+      - fact_message_timeline
+      - fact_frame
+      - fact_audio_chunk
+      - fact_event
+      - clip_parse_summary
+
+  job1_align:
+    timeline_file: aligned/timeline.json
+    sync_manifest_file: aligned/sync_manifest.jsonl
+    write_tables:
+      - pipeline_step
+      - fact_frame
+      - fact_event
+
+  job2_labeling:
+    provider: maxframe_ai_function
+    primary_model: ""
+    primary_model_version: ""
+    label_taxonomy_oss_key: config/taxonomy/latest.json
+    output_file: ai/labels_primary.json
+    write_tables:
+      - pipeline_step
+
+  job2_embedding:
+    provider: maxframe_ai_function
+    embed_model: ""
+    embed_model_version: ""
+    ai_embedding_file: ai/embedding.json
+    embedding_dim: 768
+    write_tables:
+      - pipeline_step
+      - fact_clip_embedding
+
+  job3_labeling_by_other_model:
+    provider: maxframe_ai_function
+    secondary_model: ""
+    secondary_model_version: ""
+    label_taxonomy_oss_key: config/taxonomy/latest.json
+    output_file: ai/labels_secondary.json
+    write_tables:
+      - pipeline_step
+
+  job4_label_merge_and_compare:
+    agreement_threshold: 0.7
+    prefer_primary_on_conflict: true
+    labels_merged_file: ai/labels_merged.json
+    consensus_meta_file: ai/consensus_meta.json
+    labels_alias_file: ai/labels.json
+    write_tables:
+      - pipeline_step
+      - fact_clip_label
+
+  # deprecated monolithic step (use job2_labeling + job2_embedding + job3 + job4 above)
+  job2_clip_omni:
+    provider: maxframe_ai_function
+    model: ""
+    model_version: ""
+    label_taxonomy_oss_key: config/taxonomy/latest.json
+    ai_labels_file: ai/labels.json
+    ai_embedding_file: ai/embedding.json
+    ai_infer_meta_file: ai/infer_meta.json
+    embedding_dim: 768
+    write_tables:
+      - pipeline_step
+      - fact_clip_label
+      - fact_clip_embedding
+
+  # --- legacy pipeline (job2 sample/asr + job3 + job4); use legacy/ OSS prefix ---
+  job2:
+    active_sample_policy: uniform
+    sample_policies:
+      - name: uniform
+        type: uniform
+        params:
+          interval_sec: 1.0
+          cameras: all
+      - name: uniform_sync
+        type: uniform_sync
+        params:
+          interval_sec: 1.0
+          cameras: all
+          align_window_ms: 200
+      - name: event_dense
+        type: event_window
+        params:
+          pre_sec: 2.0
+          post_sec: 2.0
+          baseline_policy: uniform
+          baseline_interval_sec: 1.0
+      - name: hybrid_default
+        type: hybrid
+        params:
+          uniform_interval_sec: 2.0
+          event_pre_sec: 3.0
+          event_post_sec: 3.0
+    asr:
+      provider: maxframe_ai_function
+      model: ""
+      model_version: ""
+      language: zh-CN
+      segment_sec: 30.0
+
+  job3_label:
+    provider: maxframe_ai_function
+    model: ""
+    model_version: ""
+    label_taxonomy: config/oms_label_taxonomy.yaml
+    label_taxonomy_oss_key: config/oms_label_taxonomy.yaml
+    label_timezone: Asia/Shanghai
+    exclude_labels:
+      - L1.1.timestamp
+      - L1.1.day_period
+      - L1.1.commute_flag
+      - L1.1.is_holiday
+    batch_size: 32
+
+  job4_embed:
+    provider: maxframe_ai_function
+    # separate: 图像/文本各用各的模型与向量空间（推荐默认）
+    # unified: 多模态模型，帧与 ASR 文本进同一向量空间
+    # both: 同时写 separate + unified 两套，便于对比与迁移
+    storage_mode: separate
+    models:
+      image:
+        model: ""
+        model_version: ""
+        dim: 768
+      text:
+        model: ""
+        model_version: ""
+        dim: 768
+      unified:
+        model: ""
+        model_version: ""
+        dim: 768
+    batch_size: 64

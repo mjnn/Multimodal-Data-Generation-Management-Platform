@@ -1,0 +1,38 @@
+{
+  "bag_file": "output.bag",
+  "duration_ns": 14254197586,
+  "duration_sec": 14.254197586,
+  "start_time_ns": 1780637229858114019,
+  "end_time_ns": 1780637244112311605,
+  "message_count": 3245,
+  "topics": {
+    "/audio": {
+      "msgtype": "audio_common_msgs/msg/AudioData",
+      "count": 1426
+    },
+    "/audio_info": {
+      "msgtype": "audio_common_msgs/msg/AudioInfo",
+      "count": 1
+    },
+    "/camera0/image_raw/compressed": {
+      "msgtype": "sensor_msgs/msg/CompressedImage",
+      "count": 455
+    },
+    "/camera1/image_raw/compressed": {
+      "msgtype": "sensor_msgs/msg/CompressedImage",
+      "count": 454
+    },
+    "/camera2/image_raw/compressed": {
+      "msgtype": "sensor_msgs/msg/CompressedImage",
+      "count": 454
+    },
+    "/camera3/image_raw/compressed": {
+      "msgtype": "sensor_msgs/msg/CompressedImage",
+      "count": 454
+    },
+    "/event_label": {
+      "msgtype": "std_msgs/msg/String",
+      "count": 1
+    }
+  }
+}

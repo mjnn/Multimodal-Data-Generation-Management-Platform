@@ -1,0 +1,69 @@
+---
+description: uniform_sync 四路对齐抽样与 Job3 组级共享标签；HMI 展示/检索/sync 必读
+globs: hmi/backend/hmi/**,hmi/frontend/**,hmi/scripts/sync_hmi_local.py
+alwaysApply: false
+---
+
+# uniform_sync：四路一体 + 同一套标签（HMI 必读）
+
+## 何时生效
+
+| 抽样策略 | 四路关系 | Job3 标签粒度 |
+|----------|----------|---------------|
+| `uniform`（默认） | 各相机**独立**抽样 | **每帧**一套标签 |
+| **`uniform_sync`** | Job2 起对齐成 **sync_group** | **每组 1 次 VL**，四帧**共用同一套** `labels_json` |
+
+工作流启用：`sample_policy=uniform_sync`（或 `config.yaml` → `cloud.job2.active_sample_policy: uniform_sync`）。
+
+## 管线语义（HMI 不要按四帧四场景理解）
+
+1. **Job2**：全局时间网格 + 锚点 ±`align_window_ms`（默认 200ms）为每路取最近帧；**四路齐全**才输出一组。
+2. **Job3**：每个 `sync_group_id` **只调一次 VL**（四图进一条 prompt）；结果 **复制** 到组内 4 行 `fact_image_label`。
+3. **L1.1 时间标签**（timestamp/day_period 等）以 **`anchor_timestamp_ns`** 为准，不是各帧各自的 `timestamp_ns`（VL 不填时间）。
+
+## MC / OSS 字段
+
+**表**
+
+- `aig_rosbag__fact_sample_sync_group`：每组一行（`sync_group_id`, `anchor_timestamp_ns`, `frame_ids_json`）
+- `aig_rosbag__fact_image_label` 扩展列：
+  - `sync_group_id` — 同组四行相同
+  - `anchor_timestamp_ns` — 组锚点
+  - `label_scope` — `sync_group` | `frame`（旧 run 为空 sync_group_id 时视为 `frame`）
+
+**OSS**
+
+- `job2/job2_sample_payload.json`：`sample_sync_mode`, `sample_groups[]`, `sampled_frames[]`（每帧带 `sync_group_id`）
+- `job2/sample_manifest.jsonl`：同上
+- `job3/job3_mc_payload.json`：`sample_sync_mode: true`；`labeled_frames[]` 四行 `labels_json` **内容相同**
+
+## HMI 展示约定（必须遵守）
+
+- **`label_scope=sync_group`**（或存在非空 `sync_group_id`）：UI 按 **组** 展示标签，**禁止**暗示四路标签不同。
+- 时间轴/详情：组级场景时间用 **`anchor_timestamp_ns`**；各帧 `timestamp_ns` 仅表示对齐误差（±200ms 内），**不是**四个独立时刻。
+- 检索/过滤：按标签查命中时，同组四帧会重复命中——**去重以 `sync_group_id` 或 anchor 为展示单位**，避免列表刷四条相同标签。
+- **`uniform` 旧 run**：无 `sync_group_id`，仍按 **单帧单标签** 展示（与现网行为一致）。
+
+## 本地 sync
+
+`hmi/scripts/sync_hmi_local.py` 同步时需包含：
+
+- `fact_sample_sync_group`
+- `fact_image_label` 新列（若 MC 已迁移）
+
+SQLite schema 若缺列，local 模式读 sync 字段前需对齐 `hmi/backend/hmi/local/schema.sql`。
+
+## 尚未整体化（勿误以为已做）
+
+- **Job4 向量**：仍按单帧/单对象，未读 `sync_group_id`
+- **hmi/backend/hmi/**：截至 2026-06-11 **未实现** sync 组 UI；新 session 需按本规则补读/去重/组展示
+
+## 参考
+
+- 抽样实现：`pipeline/dataworks/sample_sync.py` · `pipeline/dataworks/job2_sample_node.py`
+- Job3 组打标：`pipeline/dataworks/mf_ai_function.py` → `ai_label_sync_groups_with_model`
+- DDL/迁移：`pipeline/sql/maxcompute/aig_rosbag__ddl.sql` · `pipeline/sql/maxcompute/migrate_fact_sample_sync_group.sql`
+
+## 来源
+
+沉淀自 session 2026-06-10~11（uniform_sync 策略 + Job3 四图一组 VL + MC 表扩展）

@@ -1,0 +1,49 @@
+id,type,milestone,title,status,percent,owner,priority,plan_start,plan_end,actual_start,actual_end,depends_on,notes
+DOC-PRD,doc,governance,PRD v0.2 gap review,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,,docs/prd-rosbag-labels.md P0=0
+DOC-M1,doc,M1,M1 implementation notes v1.0,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,DOC-PRD,docs/m1-implementation-notes.md
+BOOT-E,doc,governance,project-management Bootstrap,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,DOC-M1,CURRENT+handoff rule+AGENTS
+M1.1,task,M1,App DB + JWT auth backend,done,100,TBD,P0,2026-07-22,2026-07-23,2026-07-21,2026-07-21,DOC-M1,app_db.py auth middleware
+M1.2,task,M1,Admin users API + bootstrap,done,100,TBD,P0,2026-07-24,2026-07-24,2026-07-21,2026-07-21,M1.1,admin router bootstrap_admin.py
+M1.3,task,M1,Frontend login + Auth context,done,100,TBD,P0,2026-07-24,2026-07-25,2026-07-21,2026-07-21,M1.1,LoginPage axios RequireAuth
+M1.4,task,M1,Route guards + role menu + OSS ACL,done,100,TBD,P0,2026-07-26,2026-07-27,2026-07-21,2026-07-21,M1.2;M1.3,AdminUsersPage RequireRole oss ACL
+M1.5,task,M1,M1 acceptance hardening,done,100,TBD,P0,2026-07-28,2026-07-28,2026-07-21,2026-07-21,M1.4,acceptance/M1.md test_auth_m1_exit
+M1,milestone,M1,M1 milestone exit,done,100,TBD,P0,2026-07-22,2026-07-28,2026-07-21,2026-07-21,M1.5,S1 partial S6
+DOC-M2,doc,M2,M2 implementation notes v1.0,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,M1,docs/m2-implementation-notes.md
+M2.1,task,M2,Taxonomy DB + taxonomy_db.py,done,100,TBD,P0,,,2026-07-21,2026-07-21,DOC-M2,taxonomy_db.py test_taxonomy_m21
+M2.2,task,M2,YAML import + bootstrap script,done,100,TBD,P0,,,2026-07-21,2026-07-21,M2.1,taxonomy_import.py import_taxonomy_yaml.py v2 draft 68
+M2.3,task,M2,Taxonomy REST API,done,100,TBD,P0,,,2026-07-21,2026-07-21,M2.1,/api/taxonomy/* test_taxonomy_m23
+M2.4,task,M2,label-taxonomy switch to DB,done,100,TBD,P0,,,2026-07-21,2026-07-21,M2.3,GET /api/label-taxonomy compat test_taxonomy_m24
+M2.5,task,M2,Frontend Taxonomy page,done,100,TBD,P0,,,2026-07-21,2026-07-21,M2.3,/taxonomy TaxonomyPage playwright e2e
+M2.6,task,M2,OSS export + dispatch + MC DDL,done,100,TBD,P0,,,2026-07-21,2026-07-21,M2.3,taxonomy/export.py test_taxonomy_m26
+M2.7,task,M2,M2 acceptance hardening,done,100,TBD,P0,,,2026-07-21,2026-07-21,M2.4;M2.5;M2.6,acceptance/M2.md test_taxonomy_m2.py
+M2,milestone,M2,M2 Taxonomy milestone exit,done,100,TBD,P0,,,2026-07-21,2026-07-21,M2.7,S2 C2 N3
+DOC-M3,doc,M3,M3 implementation notes v1.0,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,M2,docs/m3-implementation-notes.md
+M3.1,task,M3,Review DB + review_db.py + audit,done,100,TBD,P0,,,2026-07-21,2026-07-21,DOC-M3,review_db.py audit.py test_review_m31
+M3.2,task,M3,AI aggregate + enqueue script,done,100,TBD,P0,,,2026-07-21,2026-07-21,M3.1,aggregate.py enqueue.py test_review_m32
+M3.3,task,M3,Review REST API,done,100,TBD,P0,,,2026-07-21,2026-07-21,M3.2,router.py require_reviewer test_review_m33
+M3.4,task,M3,Optimistic lock + audit write,done,100,TBD,P0,,,2026-07-21,2026-07-21,M3.3,audit on save reopen test_review_m34
+M3.5,task,M3,Frontend Review pages,done,100,TBD,P0,,,2026-07-21,2026-07-21,M3.3,ReviewQueuePage ReviewDetailPage review-admin e2e
+M3.6,task,M3,M3 acceptance hardening,done,100,TBD,P0,,,2026-07-21,2026-07-21,M3.4;M3.5,test_review_m3.py acceptance/M3.md
+M3,milestone,M3,M3 Clip review milestone exit,done,100,TBD,P0,,,2026-07-21,2026-07-21,M3.6,S3 C3 C4 N5 N6
+DOC-M4,doc,M4,M4 implementation notes v1.0,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,M3,docs/m4-implementation-notes.md
+M4.1,task,M4,Dataset DB + dataset_db.py,done,100,TBD,P0,,,2026-07-21,2026-07-21,DOC-M4,dataset_db.py test_dataset_m41
+M4.2,task,M4,Filter + X/y assemble,done,100,TBD,P0,,,2026-07-21,2026-07-21,M4.1,assemble.py test_dataset_m42
+M4.3,task,M4,Async build + OSS export,done,100,TBD,P0,,,2026-07-21,2026-07-21,M4.2,build.py export.py test_dataset_m43
+M4.4,task,M4,MC export + DDL,done,100,TBD,P0,,,2026-07-21,2026-07-21,M4.3,mc_export.py migrate SQL test_dataset_m44
+M4.5,task,M4,Dataset REST API,done,100,TBD,P0,,,2026-07-21,2026-07-21,M4.4,router.py test_dataset_m45
+M4.6,task,M4,Frontend Datasets pages,done,100,TBD,P0,,,2026-07-21,2026-07-21,M4.5,DatasetListPage DatasetDetailPage e2e
+M4.7,task,M4,M4 acceptance hardening,done,100,TBD,P0,,,2026-07-21,2026-07-21,M4.5;M4.6,acceptance/M4.md test_dataset_m4.py
+M4,milestone,M4,M4 Dataset milestone exit,done,100,TBD,P0,,,2026-07-21,2026-07-21,M4.7,S4 S5 C5 C6 C7 N4
+DOC-M5,doc,M5,M5 implementation notes v1.0,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,M4,docs/m5-implementation-notes.md
+M5.1,task,M5,Full integration PRD appendix C,done,100,TBD,P0,,,2026-07-21,2026-07-21,DOC-M5,test_prd_appendix_c.py
+M5.2,task,M5,WIKI route table update,done,100,TBD,P0,,,2026-07-21,2026-07-21,M5.1,WIKI §8 §9
+M5.3,task,M5,M5 acceptance hardening,done,100,TBD,P0,,,2026-07-21,2026-07-21,M5.1;M5.2,acceptance/M5.md
+M5,milestone,M5,M5 full PRD appendix C exit,done,100,TBD,P0,,,2026-07-21,2026-07-21,M5.3,C1-C8 N1-N6
+DOC-M6,doc,M6,M6 implementation notes v1.0,done,100,TBD,P0,2026-07-23,2026-07-23,2026-07-23,2026-07-23,M5,docs/m6-implementation-notes.md + prd-review-v2.md P0=0
+M6.1,task,M6,field review DB + merge,done,100,TBD,P0,2026-07-23,2026-07-24,2026-07-23,2026-07-23,DOC-M6,field_review_db.py merge.py test_review_m61.py
+M6.2,task,M6,v2 task queue API,done,100,TBD,P0,2026-07-24,2026-07-25,2026-07-23,2026-07-23,M6.1,v2_tasks.py v2_router.py test_review_m62.py
+M6.3,task,M6,submit + clip status rollup,done,100,TBD,P0,2026-07-25,2026-07-26,2026-07-23,2026-07-23,M6.2,POST /api/review/v2/submit audit reopen clears field reviews
+M6.4,task,M6,ReviewWorkbenchPage,todo,0,TBD,P0,2026-07-26,2026-07-28,,,M6.2,single page dual mode clip card actions
+M6.5,task,M6,route replace remove old review UI,todo,0,TBD,P0,2026-07-28,2026-07-29,,,M6.4,drop ReviewQueue ReviewDetail
+M6.6,task,M6,M6 acceptance hardening,todo,0,TBD,P0,2026-07-29,2026-07-30,,,M6.3;M6.5,test_review_v2.py e2e/review-v2.spec.ts acceptance/M6.md
+M6,milestone,M6,M6 review workbench v2 exit,todo,0,TBD,P0,2026-07-23,2026-07-30,,,M6.6,replace clip-level form review UX

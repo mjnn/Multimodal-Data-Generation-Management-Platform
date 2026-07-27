@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMS 标签树 · v2</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent: #2563eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+    }
+    h1 { margin: 0 0 6px; font-size: 1.35rem; }
+    .meta { color: var(--muted); font-size: .9rem; }
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+      align-items: center;
+    }
+    input[type="search"] {
+      flex: 1;
+      min-width: 220px;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: .95rem;
+    }
+    button {
+      padding: 9px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.1fr);
+      gap: 16px;
+      padding: 16px 24px 32px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+    @media (max-width: 960px) {
+      main { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel h2 {
+      margin: 0;
+      padding: 12px 16px;
+      font-size: .95rem;
+      border-bottom: 1px solid var(--border);
+      background: #f1f5f9;
+    }
+    .tree-wrap { max-height: calc(100vh - 180px); overflow: auto; padding: 8px 0; }
+    ul.tree { list-style: none; margin: 0; padding: 0 0 0 8px; }
+    .node {
+      border-left: 2px solid transparent;
+      margin: 2px 0;
+    }
+    .node.major > .row { font-weight: 600; }
+    .node.group > .row { font-weight: 500; color: #334155; }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .row:hover { background: #f1f5f9; }
+    .row.active { background: #dbeafe; }
+    .toggle {
+      width: 18px;
+      text-align: center;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .badge {
+      font-size: .72rem;
+      padding: 1px 6px;
+      border-radius: 999px;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .count { color: var(--muted); font-size: .8rem; margin-left: auto; }
+    .leaf-id { font-family: Consolas, monospace; font-size: .78rem; color: var(--muted); }
+    .children { display: none; padding-left: 14px; }
+    .children.open { display: block; }
+    .detail {
+      padding: 16px 18px;
+      min-height: 280px;
+    }
+    .detail.empty { color: var(--muted); }
+    .detail h3 { margin: 0 0 4px; }
+    .detail .id { font-family: Consolas, monospace; color: var(--accent); margin-bottom: 12px; }
+    .kv { margin: 10px 0; }
+    .kv dt { font-size: .78rem; color: var(--muted); margin-bottom: 2px; }
+    .kv dd { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; }
+    .schema {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 12px;
+      border-radius: 8px;
+      font-family: Consolas, monospace;
+      font-size: .8rem;
+      overflow: auto;
+      max-height: 220px;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: .8rem;
+      color: var(--muted);
+    }
+    .legend i {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    mark { background: #fef08a; padding: 0 2px; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>OMS 标签树</h1>
+    <div class="meta" id="meta"></div>
+    <div class="legend" id="legend"></div>
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="搜索 id / 名称 / 定义 / 取值…" />
+      <button type="button" id="expandAll">全部展开</button>
+      <button type="button" id="collapseAll">全部折叠</button>
+    </div>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>层级结构 <span id="matchCount" style="font-weight:400;color:#64748b"></span></h2>
+      <div class="tree-wrap"><ul class="tree" id="tree"></ul></div>
+    </section>
+    <section class="panel">
+      <h2>标签详情</h2>
+      <div class="detail empty" id="detail">点击左侧叶子节点查看定义、类型与取值 schema。</div>
+    </section>
+  </main>
+  <script>
+    const DATA = {"meta": {"version": "v2", "source": "DMS数据采集标签选择方案_v2.xlsx", "label_count": 68}, "tree": [{"id": "L1", "name": "环境与车辆", "color": "#2563eb", "children": [{"id": "L1.1", "name": "时间维度", "children": [{"no": "①", "id": "L1.1.timestamp", "name": "时间戳", "definition": "Unix毫秒时间戳 + 时区偏移", "dtype": "int64 + string", "value_schema": {"type": "composite", "fields": [{"name": "timestamp_ms", "type": "int64"}, {"name": "timezone", "type": "string"}], "range_hint": "合法时间戳"}, "values_hint": "合法时间戳", "selection_reason": "DMS数据帧时间同步基准"}, {"no": "②", "id": "L1.1.day_period", "name": "日时段", "definition": "按小时划分", "dtype": "enum", "value_schema": {"type": "enum", "values": ["dawn", "morning", "noon", "afternoon", "dusk", "evening", "night"]}, "values_hint": "dawn/morning/noon/afternoon/dusk/evening/night", "selection_reason": "不同时段疲劳概率不同"}, {"no": "③", "id": "L1.1.commute_flag", "name": "通勤标记", "definition": "基于时间+路线历史判断，工作日早晚高峰期间、目的地为家或公司", "dtype": "enum", "value_schema": {"type": "enum", "values": ["morning_commute", "evening_commute", "non_commute"]}, "values_hint": "morning_commute/evening_commute/non_commute", "selection_reason": "通勤场景疲劳特征不同"}, {"no": "④", "id": "L1.1.is_holiday", "name": "是否节假日", "definition": "根据日历判断，含周末和法定假日", "dtype": "bool", "value_schema": {"type": "bool", "values": ["true", "false"]}, "values_hint": "true/false", "selection_reason": "节假日驾驶行为模式差异"}]}, {"id": "L1.2", "name": "光照条件", "children": [{"no": "⑤", "id": "L1.2.dms_face_lux", "name": "DMS面部照度", "definition": "驾驶员面部区域的平均照度（DMS摄像头视野内）", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ 50000（弱，中，强）"}, "values_hint": "0 ~ 50000（弱，中，强）", "selection_reason": "光照直接影响DMS检测质量"}, {"no": "⑥", "id": "L1.2.backlight_flag", "name": "逆光标记", "definition": "摄像头是否处于逆光状态", "dtype": "bool", "value_schema": {"type": "bool", "values": ["true", "false"]}, "values_hint": "true/false", "selection_reason": "逆光导致面部过曝影响检测"}, {"no": "⑦", "id": "L1.2.light_source", "name": "光源类型", "definition": "主导光源类别", "dtype": "enum", "value_schema": {"type": "enum", "values": ["natural", "artificial", "mixed"]}, "values_hint": "natural/artificial/mixed", "selection_reason": "光源类型影响红外/可见光切换策略"}]}, {"id": "L1.3", "name": "天气", "children": [{"no": "⑧", "id": "L1.3.weather", "name": "天气类型", "definition": "主流天气分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["sunny", "cloudy", "overcast", "light_rain", "heavy_rain", "snow", "fog", "dust_storm"]}, "values_hint": "sunny/cloudy/overcast/light_rain/heavy_rain/snow/fog/dust_storm", "selection_reason": "天气影响DMS策略与疲劳特征"}, {"no": "⑨", "id": "L1.3.visibility", "name": "能见度", "definition": "车外摄像头可识别的最远距离估算", "dtype": "int", "value_schema": {"type": "int", "range_hint": "0 ~ 5000 m"}, "values_hint": "0 ~ 5000 m", "selection_reason": "低能见度时驾驶员注意力更集中"}]}, {"id": "L1.4", "name": "温度", "children": [{"no": "⑩", "id": "L1.4.cabin_temp", "name": "舱内温度", "definition": "车内温度传感器读数（取多个传感器均值）", "dtype": "float", "value_schema": {"type": "float", "range_hint": "-20 ~ 60 ℃"}, "values_hint": "-20 ~ 60 ℃", "selection_reason": "高温加速疲劳"}, {"no": "⑪", "id": "L1.4.outside_temp", "name": "车外温度", "definition": "车外温度传感器读数", "dtype": "float", "value_schema": {"type": "float", "range_hint": "-40 ~ 50 ℃"}, "values_hint": "-40 ~ 50 ℃", "selection_reason": "温差影响舒适度判断"}]}, {"id": "L1.5", "name": "噪声", "children": [{"no": "⑫", "id": "L1.5.spl", "name": "声压级", "definition": "A计权等效连续声压级 (LAeq)", "dtype": "float", "value_schema": {"type": "float", "range_hint": "30 ~ 120 dB(A)"}, "values_hint": "30 ~ 120 dB(A)", "selection_reason": "高噪声环境影响语音交互DMS"}, {"no": "⑬", "id": "L1.5.snr_voice", "name": "语音信噪比", "definition": "语音信号与背景噪声的功率比", "dtype": "float", "value_schema": {"type": "float", "range_hint": "-10 ~ 30 dB"}, "values_hint": "-10 ~ 30 dB", "selection_reason": "语音信噪比影响语音指令识别"}]}, {"id": "L1.6", "name": "车辆物理状态", "children": [{"no": "⑭", "id": "L1.6.seat_occupancy", "name": "座位占用", "definition": "各座位是否被占用（重量传感器 > 阈值）", "dtype": "bool[5]", "value_schema": {"type": "array", "items": {"type": "bool"}, "length": 5, "range_hint": "true/false per seat"}, "values_hint": "true/false per seat", "selection_reason": "座位占用影响DMS/OMS策略"}, {"no": "⑮", "id": "L1.6.seat_position", "name": "座椅位置", "definition": "各座椅前后/高低/靠背角度", "dtype": "float[3] per seat", "value_schema": {"type": "array", "items": {"type": "float"}, "length": 3, "per_seat": true, "range_hint": "各车型标定范围"}, "values_hint": "各车型标定范围", "selection_reason": "座椅位置影响摄像头视角和遮挡"}, {"no": "⑯", "id": "L1.6.window_open", "name": "车窗开度", "definition": "各车窗开度百分比", "dtype": "float[4]", "value_schema": {"type": "array", "items": {"type": "float"}, "length": 4, "range_hint": "0 ~ 100%"}, "values_hint": "0 ~ 100%", "selection_reason": "车窗开度影响光照和噪声"}, {"no": "⑰", "id": "L1.6.sunshade_state", "name": "遮阳帘状态", "definition": "遮阳帘打开/关闭", "dtype": "bool", "value_schema": {"type": "bool", "values": ["true", "false"]}, "values_hint": "true/false", "selection_reason": "遮阳帘影响面部光照条件"}]}, {"id": "L1.7", "name": "车辆运行状态", "children": [{"no": "⑱", "id": "L1.7.speed", "name": "车速", "definition": "GPS或CAN车速", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ 250 km/h"}, "values_hint": "0 ~ 250 km/h", "selection_reason": "车速影响疲劳阈值设定"}, {"no": "⑲", "id": "L1.7.acceleration", "name": "加速度", "definition": "纵向/横向加速度", "dtype": "float[2]", "value_schema": {"type": "array", "items": {"type": "float"}, "length": 2, "range_hint": "-10 ~ 10 m/s²"}, "values_hint": "-10 ~ 10 m/s²", "selection_reason": "加速度变化关联注意力状态"}, {"no": "⑳", "id": "L1.7.driving_state", "name": "行驶状态", "definition": "当前行驶状态分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["parked", "idling", "urban_low", "urban_high", "expressway", "traffic_jam", "off_road"]}, "values_hint": "parked/idling/urban_low/urban_high/expressway/traffic_jam/off_road", "selection_reason": "行驶状态决定DMS灵敏度等级"}, {"no": "㉑", "id": "L1.7.gear", "name": "档位", "definition": "当前档位状态", "dtype": "enum", "value_schema": {"type": "enum", "values": ["P", "R", "N", "D", "M"]}, "values_hint": "P/R/N/D/M", "selection_reason": "档位变化关联注意力转移"}]}, {"id": "L1.8", "name": "导航与位置", "children": [{"no": "㉒", "id": "L1.8.road_type", "name": "道路类型", "definition": "当前道路分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["highway", "urban_arterial", "local_street", "rural", "parking_lot", "unknown"]}, "values_hint": "highway/urban_arterial/local_street/rural/parking_lot/unknown", "selection_reason": "高速场景需更严格疲劳检测"}, {"no": "㉓", "id": "L1.8.eta_min", "name": "预计到达时间", "definition": "当前预计剩余驾驶时间", "dtype": "int", "value_schema": {"type": "int", "range_hint": "0 ~ 1440 min"}, "values_hint": "0 ~ 1440 min", "selection_reason": "ETA影响驾驶压力评估"}, {"no": "㉔", "id": "L1.8.route_familiarity", "name": "路线熟悉度", "definition": "该路线历史通行次数", "dtype": "int", "value_schema": {"type": "int", "range_hint": "0 ~ N"}, "values_hint": "0 ~ N", "selection_reason": "熟悉路线降低警觉性"}]}]}, {"id": "L2", "name": "乘员与状态", "color": "#7c3aed", "children": [{"id": "L2.0", "name": "传感器能力", "children": [{"no": "㉕", "id": "L2.0.dms_available", "name": "DMS可用", "definition": "是否配备驾驶员监测摄像头", "dtype": "bool", "value_schema": {"type": "bool", "values": ["true", "false"]}, "values_hint": "true/false", "selection_reason": "DMS功能前置条件"}, {"no": "㉖", "id": "L2.0.dms_type", "name": "DMS类型", "definition": "DMS摄像头类型", "dtype": "enum", "value_schema": {"type": "enum", "values": ["none", "2d_rgb", "2d_ir", "3d_tof", "stereo_ir"]}, "values_hint": "none/2d_rgb/2d_ir/3d_tof/stereo_ir", "selection_reason": "摄像头类型决定检测能力"}]}, {"id": "L2.1", "name": "乘员统计与身份", "children": [{"no": "㉗", "id": "L2.1.driver_id_hash", "name": "驾驶员ID", "definition": "端侧人脸/声纹哈希值（不可逆脱敏），SHA256后8位", "dtype": "string", "value_schema": {"type": "string", "range_hint": "64位hex"}, "values_hint": "64位hex", "selection_reason": "驾驶员身份关联个性化设置"}, {"no": "㉘", "id": "L2.1.driver_type", "name": "驾驶员类型", "definition": "注册用户/临时访客/未知", "dtype": "enum", "value_schema": {"type": "enum", "values": ["registered", "guest", "unknown"]}, "values_hint": "registered/guest/unknown", "selection_reason": "用户类型影响个性化策略"}]}, {"id": "L2.2", "name": "人口属性", "children": [{"no": "㉙", "id": "L2.2.age_group", "name": "年龄组", "definition": "视觉估计年龄区间（非精确年龄，仅分组）", "dtype": "enum", "value_schema": {"type": "enum", "values": ["infant", "child", "teen", "adult", "senior"]}, "values_hint": "infant/child/teen/adult/senior", "selection_reason": "年龄影响疲劳阈值"}, {"no": "㉚", "id": "L2.2.role", "name": "角色", "definition": "座椅位置决定", "dtype": "enum", "value_schema": {"type": "enum", "values": ["driver", "front_passenger", "rear_left", "rear_center", "rear_right", "rear_third"]}, "values_hint": "driver/front_passenger/rear_left/rear_center/rear_right/rear_third", "selection_reason": "识别驾驶员角色"}]}, {"id": "L2.3", "name": "疲劳", "children": [{"no": "㉛", "id": "L2.3.fatigue_level", "name": "疲劳等级", "definition": "综合疲劳评估等级", "dtype": "enum", "value_schema": {"type": "enum", "values": ["alert", "mild_fatigue", "moderate_fatigue", "severe_fatigue"]}, "values_hint": "alert/mild_fatigue/moderate_fatigue/severe_fatigue", "selection_reason": "DMS核心输出：疲劳等级"}, {"no": "㉜", "id": "L2.3.perclos", "name": "PERCLOS值", "definition": "单位时间内眼睛闭合时间占比", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ 1.0"}, "values_hint": "0 ~ 1.0", "selection_reason": "疲劳检测核心指标"}, {"no": "㉝", "id": "L2.3.yawn_count", "name": "打哈欠次数", "definition": "最近5分钟内打哈欠次数", "dtype": "int", "value_schema": {"type": "int", "range_hint": "0 ~ N"}, "values_hint": "0 ~ N", "selection_reason": "疲劳辅助指标"}, {"no": "㉞", "id": "L2.3.blink_rate", "name": "眨眼频率", "definition": "每分钟眨眼次数", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ 60 bpm"}, "values_hint": "0 ~ 60 bpm", "selection_reason": "疲劳辅助指标"}, {"no": "㉟", "id": "L2.3.head_nodding", "name": "点头频率", "definition": "头部周期性下垂频率（微睡眠标志）", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ 30 次/min"}, "values_hint": "0 ~ 30 次/min", "selection_reason": "微睡眠检测指标"}]}, {"id": "L2.4", "name": "健康", "children": [{"no": "㊱", "id": "L2.4.heart_rate", "name": "心率", "definition": "毫米波雷达/穿戴设备心率估计值", "dtype": "int", "value_schema": {"type": "int", "range_hint": "40 ~ 200 bpm"}, "values_hint": "40 ~ 200 bpm", "selection_reason": "心率异常关联疲劳/健康状态"}, {"no": "㊲", "id": "L2.4.resp_rate", "name": "呼吸频率", "definition": "毫米波雷达呼吸频率估计值", "dtype": "int", "value_schema": {"type": "int", "range_hint": "8 ~ 40 bpm"}, "values_hint": "8 ~ 40 bpm", "selection_reason": "呼吸频率关联疲劳状态"}]}, {"id": "L2.5", "name": "情绪", "children": [{"no": "㊳", "id": "L2.5.facial_expression", "name": "面部表情", "definition": "可观察的面部肌肉动作", "dtype": "enum[]", "value_schema": {"type": "array", "items": {"type": "enum", "values": ["smile", "laugh", "frown", "brow_furrow", "lip_press", "eye_wide", "mouth_open", "neutral"]}}, "values_hint": "smile/laugh/frown/brow_furrow/lip_press/eye_wide/mouth_open/neutral", "selection_reason": "面部表情关联情绪状态"}, {"no": "㊴", "id": "L2.5.emotion_category", "name": "情绪分类", "definition": "谨慎使用。仅当面部+声音+情境三者一致且置信度>0.8时输出", "dtype": "enum", "value_schema": {"type": "enum", "values": ["neutral", "happy", "sad", "angry", "surprised", "fearful", "disgusted", "unknown"]}, "values_hint": "neutral/happy/sad/angry/surprised/fearful/disgusted/unknown", "selection_reason": "情绪影响交互策略"}]}, {"id": "L2.6", "name": "注意力", "children": [{"no": "㊵", "id": "L2.6.gaze_target", "name": "注视目标", "definition": "驾驶员当前注视的对象分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["road_ahead", "left_mirror", "right_mirror", "rear_mirror", "instrument_cluster", "center_screen", "left_window", "right_window", "passenger", "phone", "other"]}, "values_hint": "road_ahead/left_mirror/right_mirror/rear_mirror/instrument_cluster/center_screen/left_window/right_window/passenger/phone/other", "selection_reason": "DMS核心：视线追踪"}, {"no": "㊶", "id": "L2.6.gaze_duration", "name": "注视时长", "definition": "对当前目标的持续注视时长", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ N s"}, "values_hint": "0 ~ N s", "selection_reason": "注视时长判断注意力"}, {"no": "㊷", "id": "L2.6.distraction_level", "name": "分心等级", "definition": "视线离开道路的累计时长占比（30s窗口）", "dtype": "enum", "value_schema": {"type": "enum", "values": ["attentive", "slight_distraction", "moderate_distraction", "severe_distraction"]}, "values_hint": "attentive/slight_distraction/moderate_distraction/severe_distraction", "selection_reason": "DMS核心输出：分心等级"}, {"no": "㊸", "id": "L2.6.distraction_type", "name": "分心类型", "definition": "分心行为的分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["phone_use", "eating_drinking", "infotainment", "adjusting_controls", "passenger_interaction", "child_care", "external_event", "other"]}, "values_hint": "phone_use/eating_drinking/infotainment/adjusting_controls/passenger_interaction/child_care/external_event/other", "selection_reason": "分心类型分类"}]}]}, {"id": "L3", "name": "行为交互", "color": "#059669", "children": [{"id": "L3.1", "name": "语音行为", "children": [{"no": "㊹", "id": "L3.1.dialogue_type", "name": "对话类型", "definition": "当前语音交互的分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["hmi_command", "casual_chat_with_hmi", "human_to_human", "phone_call", "solo_talking_to_self", "singing", "humming", "silence"]}, "values_hint": "hmi_command/casual_chat_with_hmi/human_to_human/phone_call/solo_talking_to_self/singing/humming/silence", "selection_reason": "语音行为类型分析"}, {"no": "㊺", "id": "L3.1.paralinguistic", "name": "副语言事件", "definition": "非词汇语音事件", "dtype": "enum[]", "value_schema": {"type": "array", "items": {"type": "enum", "values": ["laugh", "sigh", "cough", "sneeze", "cry", "yawn_sound", "groan", "clear_throat"]}}, "values_hint": "laugh/sigh/cough/sneeze/cry/yawn_sound/groan/clear_throat", "selection_reason": "打哈欠/叹气等关联疲劳"}]}, {"id": "L3.4", "name": "肢体与物品交互", "children": [{"no": "㊻", "id": "L3.4.body_action", "name": "肢体动作", "definition": "乘员当前的身体动作分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["driving", "eating", "drinking", "smoking", "phone_calling", "phone_using", "reading", "makeup", "adjusting_clothing", "buckling_seatbelt", "holding_child", "petting", "resting_sleeping", "other", "none"]}, "values_hint": "driving/eating/drinking/smoking/phone_calling/phone_using/reading/makeup/adjusting_clothing/buckling_seatbelt/holding_child/petting/resting_sleeping/other/none", "selection_reason": "DMS核心：肢体动作检测"}, {"no": "㊼", "id": "L3.4.object_in_hand", "name": "手中物品", "definition": "乘员手中持有的物品分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["phone", "food", "beverage", "cigarette", "book", "newspaper", "makeup", "toy", "tissue", "child", "pet", "other", "none"]}, "values_hint": "phone/food/beverage/cigarette/book/newspaper/makeup/toy/tissue/child/pet/other/none", "selection_reason": "手中物品检测"}, {"no": "㊽", "id": "L3.4.dangerous_action", "name": "危险行为标记", "definition": "是否检测到危险行为（如驾驶中双手离开方向盘操作手机）", "dtype": "bool", "value_schema": {"type": "bool", "values": ["true", "false"]}, "values_hint": "true/false", "selection_reason": "DMS核心：危险行为检测"}]}]}, {"id": "L4", "name": "意图推断", "color": "#d97706", "children": [{"id": "L4.2", "name": "隐式意图", "children": [{"no": "㊾", "id": "L4.2.physiology_intent", "name": "生理推断意图", "definition": "基于生理状态推断的需求", "dtype": "enum + rationale", "value_schema": {"type": "composite", "fields": [{"name": "value", "type": "enum"}, {"name": "rationale", "type": "string"}], "range_hint": "枚举值 + 依据句子"}, "values_hint": "枚举值 + 依据句子", "selection_reason": "疲劳时推断休息需求"}, {"no": "㊿", "id": "L4.2.implicit_confidence", "name": "隐式意图置信度", "definition": "该隐式意图判断的置信度", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ 1"}, "values_hint": "0 ~ 1", "selection_reason": "推断结果可信度"}]}]}, {"id": "L5", "name": "决策与反馈", "color": "#dc2626", "children": [{"id": "L5.1", "name": "决策策略", "children": [{"no": "51", "id": "L5.1.response_strategy", "name": "响应策略", "definition": "系统对用户意图的响应方式", "dtype": "enum", "value_schema": {"type": "enum", "values": ["execute_directly", "ask_confirm", "proactive_push", "silent_execute", "deferred", "rejected"]}, "values_hint": "execute_directly/ask_confirm/proactive_push/silent_execute/deferred/rejected", "selection_reason": "DMS警告策略"}, {"no": "52", "id": "L5.1.trigger_source", "name": "触发来源", "definition": "服务触发方式", "dtype": "enum", "value_schema": {"type": "enum", "values": ["user_command", "system_proactive", "condition_trigger", "scheduled"]}, "values_hint": "user_command/system_proactive/condition_trigger/scheduled", "selection_reason": "DMS触发方式"}, {"no": "53", "id": "L5.1.decision_confidence", "name": "决策置信度", "definition": "模型输出的决策置信度", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ 1"}, "values_hint": "0 ~ 1", "selection_reason": "决策可信度"}]}, {"id": "L5.2", "name": "服务执行", "children": [{"no": "54", "id": "L5.2.action", "name": "执行动作", "definition": "系统执行的具体动作", "dtype": "enum", "value_schema": {"type": "enum", "values": ["见动作枚举"]}, "values_hint": "见动作枚举", "selection_reason": "DMS警告执行动作"}, {"no": "55", "id": "L5.2.result", "name": "执行结果", "definition": "动作执行结果分类", "dtype": "enum", "value_schema": {"type": "enum", "values": ["success", "failed", "partial_success", "timeout"]}, "values_hint": "success/failed/partial_success/timeout", "selection_reason": "执行结果追踪"}]}, {"id": "L5.3", "name": "多模态反馈", "children": [{"no": "56", "id": "L5.3.tts_text", "name": "TTS播报文本", "definition": "系统播报的完整文本", "dtype": "string", "value_schema": {"type": "string", "range_hint": "文本"}, "values_hint": "文本", "selection_reason": "DMS语音警告内容"}, {"no": "57", "id": "L5.3.haptic_type", "name": "触觉反馈类型", "definition": "触觉反馈的类型", "dtype": "enum", "value_schema": {"type": "enum", "values": ["none", "seat_vibration", "steering_vibration", "both"]}, "values_hint": "none/seat_vibration/steering_vibration/both", "selection_reason": "DMS触觉警告方式"}, {"no": "58", "id": "L5.3.screen_content", "name": "屏幕显示内容", "definition": "中控屏显示的页面/弹窗类型", "dtype": "enum", "value_schema": {"type": "enum", "values": ["nav_map", "nav_instruction", "music_player", "phone_ui", "settings", "climate_ui", "notification", "toast", "other"]}, "values_hint": "nav_map/nav_instruction/music_player/phone_ui/settings/climate_ui/notification/toast/other", "selection_reason": "DMS视觉警告内容"}]}]}, {"id": "L6", "name": "质量与安全", "color": "#0891b2", "children": [{"id": "L6.1", "name": "客观质量指标", "children": [{"no": "59", "id": "L6.1.e2e_latency", "name": "端到端延迟分布", "definition": "从用户说完到系统完成动作的延迟(P50/P95/P99)", "dtype": "float[3]", "value_schema": {"type": "array", "items": {"type": "float"}, "length": 3, "range_hint": "0 ~ N ms"}, "values_hint": "0 ~ N ms", "selection_reason": "DMS响应延迟评估"}, {"no": "60", "id": "L6.1.task_completion_rate", "name": "任务完成率", "definition": "用户发起的任务中成功完成的比例", "dtype": "float", "value_schema": {"type": "float", "range_hint": "0 ~ 1"}, "values_hint": "0 ~ 1", "selection_reason": "DMS任务完成率"}]}, {"id": "L6.2", "name": "主观体验标签", "children": [{"no": "61", "id": "L6.2.explicit_rating", "name": "显式评分", "definition": "用户主动给出的评分", "dtype": "int", "value_schema": {"type": "int", "range_hint": "1 ~ 5"}, "values_hint": "1 ~ 5", "selection_reason": "DMS功能满意度"}, {"no": "62", "id": "L6.2.manual_correction", "name": "是否手动纠正", "definition": "用户是否在系统自动执行后手动纠正了结果", "dtype": "bool", "value_schema": {"type": "bool", "values": ["true", "false"]}, "values_hint": "true/false", "selection_reason": "DMS误报反馈"}]}, {"id": "L6.3", "name": "安全与合规", "children": [{"no": "63", "id": "L6.3.distraction_warning_count", "name": "分心警告次数", "definition": "系统触发的分心驾驶警告总次数", "dtype": "int", "value_schema": {"type": "int", "range_hint": "0 ~ N"}, "values_hint": "0 ~ N", "selection_reason": "DMS分心警告统计"}, {"no": "64", "id": "L6.3.fatigue_warning_count", "name": "疲劳警告次数", "definition": "系统触发的疲劳驾驶警告总次数", "dtype": "int", "value_schema": {"type": "int", "range_hint": "0 ~ N"}, "values_hint": "0 ~ N", "selection_reason": "DMS疲劳警告统计"}, {"no": "65", "id": "L6.3.dangerous_behavior", "name": "危险行为检测", "definition": "检测到的危险行为列表", "dtype": "list of enum", "value_schema": {"type": "array", "items": {"type": "enum", "values": ["phone_while_driving", "eating_while_driving", "no_hands", "no_seatbelt", "other"]}}, "values_hint": "phone_while_driving/eating_while_driving/no_hands/no_seatbelt/other", "selection_reason": "DMS危险行为记录"}, {"no": "66", "id": "L6.3.takeover_event", "name": "交互接管事件", "definition": "因语音/触控交互导致驾驶员注意力分散、需要接管的事件", "dtype": "int", "value_schema": {"type": "int", "range_hint": "0 ~ N"}, "values_hint": "0 ~ N", "selection_reason": "DMS安全事件记录"}]}, {"id": "L6.4", "name": "长期学习标签", "children": [{"no": "67", "id": "L6.4.personalization_gain", "name": "个性化增益", "definition": "个性化模型 vs 通用模型的效果差异", "dtype": "float", "value_schema": {"type": "float", "range_hint": "-1 ~ 1"}, "values_hint": "-1 ~ 1", "selection_reason": "DMS个性化效果评估"}, {"no": "68", "id": "L6.4.ab_experiment_group", "name": "A/B实验分组", "definition": "当前用户所属的实验分组", "dtype": "string", "value_schema": {"type": "string", "range_hint": "分组ID"}, "values_hint": "分组ID", "selection_reason": "DMS算法实验"}]}]}]};
+
+    const metaEl = document.getElementById('meta');
+    const legendEl = document.getElementById('legend');
+    const treeEl = document.getElementById('tree');
+    const detailEl = document.getElementById('detail');
+    const qEl = document.getElementById('q');
+    const matchCountEl = document.getElementById('matchCount');
+
+    metaEl.textContent = `版本 ${DATA.meta.version} · 共 ${DATA.meta.label_count} 项 · 来源 ${DATA.meta.source}`;
+    DATA.tree.forEach(t => {
+      const s = document.createElement('span');
+      s.innerHTML = `<i style="background:${t.color}"></i>${t.id} ${t.name}`;
+      legendEl.appendChild(s);
+    });
+
+    function schemaText(v) {
+      try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+    }
+
+    function leafHaystack(leaf) {
+      return [leaf.no, leaf.id, leaf.name, leaf.definition, leaf.dtype,
+        leaf.values_hint, leaf.selection_reason, schemaText(leaf.value_schema)]
+        .join(' ').toLowerCase();
+    }
+
+    function renderDetail(leaf) {
+      detailEl.classList.remove('empty');
+      detailEl.innerHTML = `
+        <h3>${leaf.name} <small style="color:#64748b">#${leaf.no || ''}</small></h3>
+        <div class="id">${leaf.id}</div>
+        <dl class="kv">
+          <dt>定义</dt><dd>${leaf.definition || '—'}</dd>
+          <dt>数据类型</dt><dd>${leaf.dtype || '—'}</dd>
+          <dt>取值提示</dt><dd>${leaf.values_hint || '—'}</dd>
+          <dt>选用理由</dt><dd>${leaf.selection_reason || '—'}</dd>
+          <dt>value_schema</dt>
+          <dd><pre class="schema">${schemaText(leaf.value_schema)}</pre></dd>
+        </dl>`;
+    }
+
+    function makeToggle(childrenUl) {
+      const btn = document.createElement('span');
+      btn.className = 'toggle';
+      btn.textContent = '▸';
+      const setOpen = (open) => {
+        childrenUl.classList.toggle('open', open);
+        btn.textContent = open ? '▾' : '▸';
+      };
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setOpen(!childrenUl.classList.contains('open'));
+      });
+      return { btn, setOpen };
+    }
+
+    function buildLeaf(leaf) {
+      const li = document.createElement('li');
+      li.className = 'node leaf';
+      li.dataset.hay = leafHaystack(leaf);
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<span class="toggle">•</span><span>${leaf.name}</span><span class="leaf-id">${leaf.id}</span>`;
+      row.addEventListener('click', () => {
+        document.querySelectorAll('.row.active').forEach(r => r.classList.remove('active'));
+        row.classList.add('active');
+        renderDetail(leaf);
+      });
+      li.appendChild(row);
+      return li;
+    }
+
+    function buildGroup(group) {
+      const li = document.createElement('li');
+      li.className = 'node group';
+      const row = document.createElement('div');
+      row.className = 'row';
+      const childrenUl = document.createElement('ul');
+      childrenUl.className = 'children';
+      const { btn, setOpen } = makeToggle(childrenUl);
+      row.appendChild(btn);
+      const title = document.createElement('span');
+      title.textContent = `${group.id} ${group.name}`;
+      row.appendChild(title);
+      const count = document.createElement('span');
+      count.className = 'count';
+      count.textContent = `${group.children.length}`;
+      row.appendChild(count);
+      row.addEventListener('click', () => setOpen(!childrenUl.classList.contains('open')));
+      group.children.forEach(c => childrenUl.appendChild(buildLeaf(c)));
+      li.appendChild(row);
+      li.appendChild(childrenUl);
+      li._setOpen = setOpen;
+      return li;
+    }
+
+    function buildMajor(major) {
+      const li = document.createElement('li');
+      li.className = 'node major';
+      const row = document.createElement('div');
+      row.className = 'row';
+      const childrenUl = document.createElement('ul');
+      childrenUl.className = 'children open';
+      const { btn, setOpen } = makeToggle(childrenUl);
+      row.appendChild(btn);
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.style.background = major.color;
+      badge.textContent = major.id;
+      row.appendChild(badge);
+      const title = document.createElement('span');
+      title.textContent = major.name;
+      row.appendChild(title);
+      const count = document.createElement('span');
+      count.className = 'count';
+      const n = major.children.reduce((s, g) => s + g.children.length, 0);
+      count.textContent = `${n} 项`;
+      row.appendChild(count);
+      row.addEventListener('click', () => setOpen(!childrenUl.classList.contains('open')));
+      major.children.forEach(g => childrenUl.appendChild(buildGroup(g)));
+      li.appendChild(row);
+      li.appendChild(childrenUl);
+      li._setOpen = setOpen;
+      return li;
+    }
+
+    function renderTree(filter = '') {
+      const q = filter.trim().toLowerCase();
+      treeEl.innerHTML = '';
+      let visible = 0;
+      DATA.tree.forEach(major => {
+        const majorLi = buildMajor(major);
+        let majorShow = false;
+        majorLi.querySelectorAll('.node.leaf').forEach(leafLi => {
+          const hit = !q || leafLi.dataset.hay.includes(q);
+          leafLi.style.display = hit ? '' : 'none';
+          if (hit) { visible++; majorShow = true; }
+        });
+        majorLi.querySelectorAll('.node.group').forEach(groupLi => {
+          const leaves = [...groupLi.querySelectorAll('.node.leaf')];
+          const any = leaves.some(l => l.style.display !== 'none');
+          groupLi.style.display = any ? '' : 'none';
+          if (any && groupLi._setOpen) groupLi._setOpen(true);
+        });
+        majorLi.style.display = majorShow ? '' : 'none';
+        if (majorShow && majorLi._setOpen) majorLi._setOpen(true);
+        treeEl.appendChild(majorLi);
+      });
+      matchCountEl.textContent = q ? `（匹配 ${visible} 项）` : '';
+    }
+
+    document.getElementById('expandAll').onclick = () => {
+      document.querySelectorAll('.children').forEach(el => el.classList.add('open'));
+      document.querySelectorAll('.toggle').forEach(el => {
+        if (el.textContent === '▸' || el.textContent === '▾') el.textContent = '▾';
+      });
+    };
+    document.getElementById('collapseAll').onclick = () => {
+      document.querySelectorAll('.children').forEach(el => el.classList.remove('open'));
+      document.querySelectorAll('.toggle').forEach(el => {
+        if (el.textContent === '▸' || el.textContent === '▾') el.textContent = '▸';
+      });
+    };
+    qEl.addEventListener('input', () => renderTree(qEl.value));
+    renderTree();
+  </script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+---
+description: Job3 MaxFrame VL 打标：OSS 凭证、图像输入格式、执行位置、并发与 bundled 粘贴
+globs: pipeline/dataworks/job3*.py,pipeline/dataworks/mf_ai_function.py,pipeline/dataworks/bundled/job3*.py
+alwaysApply: false
+---
+
+# Job3 MaxFrame VL 打标
+
+## 执行位置（必读）
+
+- **VL 推理**（qwen3.6-plus）：`llm.generate(...).execute()` 提交后在 **DPE + MCSQL Worker** 上跑，**不在** DataWorks Driver Pod。
+- Driver 只做：建 `md.DataFrame`、`.execute().fetch()`、校验、写下一 stage 参数。
+- **base64 / oss_url** 是 **图像输入格式**（`ImageContentType.BASE64` vs `IMAGE_URL`），**不是**「推理改到 Driver」。
+
+详：`maxframe-driver-dpe-mcsql.mdc`。
+
+## OSS 凭证（与 DPE 挂载分离）
+
+| 场景 | `storage_options` |
+|------|-------------------|
+| DPE `@with_fs_mount` | `{"role_arn": oss_ram_role_arn}` |
+| VL `cp.image(IMAGE_URL)`（在 MC Worker 上读 OSS） | **优先** `{"role_arn": ...}` |
+| DataWorks `o.account` | 多为 `STS.*`；勿只传 AK/SK → `InvalidAccessKeyId` |
+
+`IMAGE_URL` 仍 403：工作流 `label_image_mode=base64`。
+
+## 图像模式 `label_image_mode`
+
+| 值 | 图像如何进 VL | VL 推理在哪 | Driver 额外负担 |
+|----|---------------|-------------|-----------------|
+| `auto` + role_arn | OSS URL | DPE+MCSQL | 轻（只传 URL） |
+| `oss_url` | OSS URL + role_arn | DPE+MCSQL | 轻 |
+| `base64` | BASE64 字段 | **仍是 DPE+MCSQL** | encode 结果 **fetch 回 Driver** 再 submit generate（Tunnel 开销） |
+
+MaxFrame 2.7.1 枚举：**`ImageContentType.BASE64`**（非 `IMAGE_BASE64`）。
+
+### base64 链路（三步，推理不在 Driver）
+
+```text
+① DPE UDF（RAM Role 读 OSS）→ JPG → base64 → fetch 字符串到 Driver
+② Driver 拼 md.DataFrame(image_b64) → llm.generate(BASE64).execute() 提交 MC
+③ DPE+MCSQL Worker 调百炼 → fetch  label 文本回 Driver → DPE write OSS
+```
+
+prepare **不再**把全量 base64 塞进单条 `manifest_json`（曾致 Tunnel ~70s/39 帧）。
+
+## 提速
+
+```properties
+ai_parallel_partitions=16
+label_image_mode=auto
+label_prompt_compact=true
+```
+
+- 优先 **oss_url** 避免 base64 二次 submit + Tunnel
+- 并发：`min(帧数, max(参数,8), 32)`
+- 可选：`running_options.total_rpm_limit`（见 `ref/maxframe_ai_function_bailian_vl_gen_demo.ipynb`）
+
+## Bundled 粘贴
+
+```bash
+py -3 pipeline/scripts/bundle_dataworks_node.py pipeline/dataworks/job3_label_node.py
+```
+
+DataWorks 粘贴 **`pipeline/dataworks/bundled/job3_label_node.py` 整文件**。
+
+## 模型集命名（read_odps_model）
+
+| 工作流 `label_model` | 结果 |
+|----------------------|------|
+| **`qwen3.6-plus`** | 推荐；本项目 E2E 已验证；多模态打标 |
+| `qwen-vl-max-latest` 等 DashScope API 名 | **失败** `odps.errors.NoSuchObject`（非 `bigdata_public_modelset` Catalog 名） |
+| 可选尝试 | `qwen-vl-max`（SDK 示例名，未在本项目 E2E） |
+
+- 百炼 Token 模型：`ai_cu_quota_name` / `ai_gu_quota_name` **留空**
+- `_DASHSCOPE_MODEL_HINTS` 含 `qwen-vl` 仅为走 Token Quota 路径，**不**表示任意 DashScope 名已注册
+
+## 验收
+
+- `labels_json.values` 含 OMS id（`L1.x.x`），非 OSS/凭证 `raw` 错误
+- 失败帧：`status: "error"`（`_infer_label_status`）
+- uniform_sync：`sync_mode=True groups=N` 后 VL 成功
+
+## 参考
+
+- `pipeline/dataworks/mf_ai_function.py` — `ai_label_frames_with_model`, `resolve_vl_storage_options`
+- `ref/maxframe_ai_function_bailian_vl_gen_demo.ipynb`
+
+## 来源
+
+session 2026-06-09：凭证/STS/BASE64 枚举/并发；2026-06-11：Catalog 模型名 vs DashScope API 名（qwen-vl-max-latest）

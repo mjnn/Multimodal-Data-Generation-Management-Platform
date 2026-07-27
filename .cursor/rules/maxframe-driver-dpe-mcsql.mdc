@@ -1,0 +1,55 @@
+---
+description: MaxFrame 上云运行时概念：Driver/DPE/MCSQL/UDF/两套镜像；代码在 Driver 不等于算力在 Driver
+globs: pipeline/dataworks/**/*.py,pipeline/dataworks/MAXFRAME_AI_FUNCTION.md
+alwaysApply: false
+---
+
+# MaxFrame 运行时：Driver / DPE / MCSQL
+
+## 两套容器（勿混）
+
+| 环境 | 物理位置 | 配置 | 典型依赖 |
+|------|----------|------|----------|
+| **Driver** | DataWorks Serverless **PyODPS 节点 Pod** | 节点自定义镜像 + 启动 pip | maxframe、pyodps、pandas |
+| **DPE Worker** | MaxCompute **Worker Pod** | MC 镜像管理 + `dpe_image` → `odps.session.image` | rosbags、pyyaml、ossfs2（业务 UDF） |
+
+Driver 上 `pip install rosbags` **不会**进入 DPE Worker。
+
+## 核心区分：代码位置 vs 算力位置
+
+| 说法 | 含义 |
+|------|------|
+| 代码在 Driver 里写/调用 | PyODPS 节点进程执行 `main()`、`new_session`、`df.apply(...).execute().fetch()` |
+| 算力在 DPE / MCSQL | `.execute()` 把 MaxFrame DAG **提交到 MC**；重计算在 Worker 上跑 |
+| **错误理解** | 「Driver 侧做 VL 推理」— 仅当 **没有** `.execute()`、在 Driver 本机调 API 时才成立；Job3 **不是** |
+
+**UDF**：用 `@with_running_options(engine="dpe")` + `@with_fs_mount` 包住的函数；经 `df.apply(udf).execute()` 在 **DPE Worker** 执行。
+
+## 引擎分工
+
+| 阶段 | `engine_order` | 跑什么 |
+|------|----------------|--------|
+| OSS I/O、parse_bag、prepare/encode/write | `["DPE"]` | 业务 UDF |
+| MaxFrame AI Function（`llm.generate/embed`） | `["DPE", "MCSQL"]` | **VL/ASR/embedding 推理在 MC Worker**；MCSQL 协作 DAG，非老式 `select ai_xxx()` |
+
+百炼 VL demo：推理 **通过 DPE 引擎**；与 Job3 `prepare_mf_ai_runtime()` 一致。
+
+## Job3 一次打标谁在干活
+
+```text
+Driver：提交 job、fetch 小结果、拼下一阶段 DataFrame（编排）
+DPE UDF：prepare 校验路径、base64 encode（读 OSS）、write payload
+DPE+MCSQL：llm.generate(qwen3.6-plus) ← 重推理在这里
+```
+
+Driver **不算** VL；Driver **可能中转** base64 字符串（见 `job3-maxframe-vl.mdc`）。
+
+## 参考
+
+- `docker/custom-dpe-image.md` — Driver / DPE 镜像分离
+- `pipeline/dataworks/MAXFRAME_AI_FUNCTION.md`
+- `ref/maxframe_ai_function_bailian_vl_gen_demo.ipynb` — OSS URL + `read_odps_model` + `generate`
+
+## 来源
+
+沉淀自 session 2026-06-09（Driver/DPE/MCSQL 概念澄清 + base64 非 Driver 推理）

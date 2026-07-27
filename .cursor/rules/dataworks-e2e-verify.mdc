@@ -1,0 +1,108 @@
+---
+description: DataWorks 十节点串行 E2E 验证顺序、日志/OSS/MC 验收与 stub 说明
+alwaysApply: false
+---
+
+# DataWorks E2E 串行验证（Job0~4）
+
+> 首次联调 **必须全串行**（算子 → 写 MC → 下一算子）。并行旁路写 MC 见 `pipeline/dataworks/WORKFLOW.md`「编排模式」，跑通后再优化。
+
+## 串行依赖链（11 节点）
+
+```
+job0_discover → job0_dispatch → job1_parse → job1_mc_write
+  → job2_sample ──→ job3_label → job3_mc_write → job4_embed → job4_mc_write
+  → job2_asr   ──┘
+  → job2_mc_write
+```
+
+## 整链验收（2026-06-10 已通过）
+
+```powershell
+py -3 pipeline/scripts/verify_pipeline_run.py --clip-id sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b
+```
+
+期望 27/27：`pipeline_step` 五步 completed；OSS 九类 payload + parsed 对象齐全。
+
+## 工作流参数（全流程配一次）
+
+见 `pipeline/dataworks/workflow-params.example`。关键项：
+
+| 参数 | 说明 |
+|------|------|
+| `oss_bucket` | `rosbag-labels-bucket` |
+| `cloud_region` | `cn_shanghai` |
+| `oss_ram_role_arn` | RAM 角色，Principal 含 `odps.aliyuncs.com` |
+| `dpe_image` | MC 登记名，如 `rosbag_dpe_deps` |
+| `ds` | `${bizdate}` |
+| `oss_vl_access_key_id/secret` | Driver dispatch 读写 manifest + Job3 VL |
+| clip_id/run_id | **定时任务留空**；由 dispatch OSS manifest 传递 |
+
+**禁止**依赖节点输出参数传 clip_id（见 `dataworks-dispatch-oss.mdc`）。
+
+## 测试资产
+
+- Bag：`rosbags/2026-06-05_13-27-07/output.bag`
+- `clip_id=sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b`
+- Job3 前上传：`config/oms_label_taxonomy.yaml` → 桶根同路径
+
+## 逐节点验收表
+
+| # | 节点 | 成功日志关键词 | OSS 检查 | MC 检查（ds=业务日） |
+|---|------|----------------|----------|---------------------|
+| 0b | job0_dispatch | `Job0 dispatch OSS manifest:` | `pipeline/dispatch/latest.json` | — |
+| 0 | job0_discover | `DISCOVERED_JSON` / `new=0` | — | `dim_clip`；已存在 clip 不重复插入 |
+| 1a | job1_parse | `Job1 parse done` | `.../parsed/job1_mc_payload.json` | — |
+| 1b | job1_mc_write | `MC write done` | 同上 payload 可读 | `fact_frame`、`fact_audio_chunk`、`dim_clip.active_run_id` |
+| 2a | job2_sample | `Job2 sample done` | `job2/sample_manifest.jsonl`、`job2_sample_payload.json` | — |
+| 2b | job2_asr | `Job2 ASR done` | `job2/asr_segments/`、`job2_asr_payload.json` | — |
+| 2c | job2_mc_write | `Job2 MC write done` | `job2_mc_payload.json`（合并） | `fact_sample_policy`、`fact_audio_segment` |
+| 3a | job3_label | `Job3 label done` | `job3/frame_labels.jsonl`、`job3_mc_payload.json` | — |
+| 3b | job3_mc_write | `Job3 MC write done` | — | `fact_image_label` |
+| 4a | job4_embed | `Job4 embed done`、`PIPELINE_DONE` | `job4/embeddings.jsonl`、`job4_mc_payload.json` | — |
+| 4b | job4_mc_write | `Job4 MC write done` | — | `fact_embedding` |
+
+全链路 step：
+
+```sql
+SELECT step_id, status FROM aig_rosbag__pipeline_step
+WHERE run_id='<run_id>' AND ds='${bizdate}' ORDER BY step_id;
+-- 期望：job1_parse, job2_sample, job2_asr, job3_label, job4_embed
+```
+
+## Stub 模式（模型未配，当前默认）
+
+| Job | 参数 | 行为 |
+|-----|------|------|
+| Job2 sample | `sample_policy` 空 | 默认 `uniform` 抽样 |
+| Job2 ASR | `asr_model` 空 | 切分 wav + 分段元数据，`asr_text` 空 |
+| Job2 ASR | `asr_model` 已配 | MaxFrame `input_audio`；**勿**用 `qwen3.6-flash`（文本模型）；待 modelset 有 `qwen3-asr-flash` |
+| Job3 | `label_model` 空 | OMS 形 `labels_json`，`values: {}` |
+| Job3 | `label_model=qwen3.6-plus` | MaxFrame AI Function；见 `job3-maxframe-vl.mdc` |
+| Job4 | embed models 空 | `dim` 维零向量，`model_version=none` |
+
+跑通 stub 后再接 MaxFrame AI Function（非 MC SQL 模板）。
+
+## 排错速查
+
+| 现象 | 检查 |
+|------|------|
+| `Missing required parameter` | 节点/工作流参数面板，`SKYNET_ARGS` 是否为空 |
+| DPE `ModuleNotFoundError: rosbags` | `dpe_image` + `docker/dpe-deps` |
+| DPE `Can't get attribute 'X.__init__' on __main__` | 节点内禁止 dataclass/自定义 class；改 dict；跑 `pipeline/scripts/check_dpe_nodes.py` |
+| Job3 taxonomy 找不到 | OSS 是否已有 `config/oms_label_taxonomy.yaml` |
+| Job2/3/4 找不到上游 payload | 上一节点 OSS 路径、`run_id` 是否一致；**`clip_id` 是否带 `sha256:`** |
+| Job3 图片 not found（路径重复 `parsed/output/clips/...`） | 更新 `job3_label_node`；可选重跑 `job2_sample` |
+| Job3 VL `storage_options` / `InvalidAccessKeyId` | 用 `label_image_mode=auto`（`oss_url`+`role_arn`）或 `base64`；勿只用 `o.account` AK；见 `job3-maxframe-vl.mdc` |
+| Job3 `AttributeError: IMAGE_BASE64` | 改为 `ImageContentType.BASE64`；重跑 `bundle_dataworks_node.py` |
+| Job3 极慢（prepare 70s+） | 勿在 `manifest_json` 传 base64；`label_image_mode=auto` + `ai_parallel_partitions=16` |
+| Job3 `status:ok` 但 values 是错误串 | 查 `_infer_label_status`；OSS/模型错误应标 `error` |
+| job2_mc_write 找 `job2_mc_payload.json` | 节点须为**合并版** `_job2_merge_payload_row` |
+| dispatch OSS timeout / InvalidAccessKeyId | 内网 endpoint + `oss_vl_*` AK；见 `dataworks-dispatch-oss.mdc` |
+| 节点 `ds=bizdate` | 改为 `${bizdate}` 或 `20260608` |
+| 写 MC 失败 | Quota、`ds` 分区、表 DDL |
+| `trying to delete from a non-transactional table` | `dim_clip` 用 `INSERT OVERWRITE` upsert |
+
+## 来源
+
+沉淀自 session 2026-06-09~10；stub 全链 E2E 见 `job-pipeline-handoff.mdc`

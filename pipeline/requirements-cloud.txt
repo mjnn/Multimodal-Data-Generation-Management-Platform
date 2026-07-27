@@ -1,0 +1,6 @@
+# 上云工具链（P3+）：建表、MaxFrame Job
+pyodps>=0.12.0
+python-dotenv>=1.0.0
+oss2>=2.18.0
+maxframe>=1.0.0
+pandas>=2.0.0

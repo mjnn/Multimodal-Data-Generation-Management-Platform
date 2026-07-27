@@ -1,0 +1,86 @@
+---
+description: DataWorks 运维踩坑（参数面板、OSS SDK、MC 列序、测试 clip）
+globs: "pipeline/dataworks/**/*"
+alwaysApply: false
+---
+
+# DataWorks 运维约定
+
+## 参数必须进面板
+
+- 日志 `SKYNET_ARGS=` 为空 → 节点**未配置参数**，会报 `Missing required parameter`
+- 在节点/工作流「参数」里**分两列**：参数名 + 参数值（勿写成一格 `key=value`）
+- 节点内读参：`args` + `SKYNET_ARGS` + 项目默认值（见各节点 `_PROJECT_DEFAULTS`）
+- 模板：`pipeline/dataworks/workflow-params.example`；编排：`pipeline/dataworks/WORKFLOW.md`
+
+## Job0 dispatch → 下游（OSS manifest）
+
+详见 **`pipeline/dataworks/DISPATCH_PARAMS.md`** · **`dataworks-dispatch-oss.mdc`**。
+
+- `job0_dispatch` 写 `oss://{oss_bucket}/pipeline/dispatch/latest.json`
+- 下游 **不必**配节点上下文 clip_id；`resolve_pipeline_context()` 读 OSS
+- 去掉 `write_dispatch_oss=false`；须先 dispatch 再 parse
+- 粘贴 **`bundled/job0_dispatch_node.py`** 及下游 bundled；改源码后 `py -3 pipeline/scripts/bundle_all_dataworks.py`
+- Driver 写/读 manifest：**内网 OSS** + 工作流 **`oss_vl_access_key_id/secret`**（非 `o.account` 裸 STS）；见 `dataworks-dispatch-oss.mdc`
+
+## Job1 解析节点
+
+- 解析节点**不配** DataWorks 输出参数（`run_id` 由 dispatch 统一下发）
+- 写 MC 读 OSS `job1_mc_payload.json`，不靠上游 output 变量
+
+## OSS 控制台 / MaxCompute 要配什么
+
+**OSS 控制台**（`rosbag-labels-bucket`）通常只需：
+- 区域 **华东2（上海）**，与 MaxCompute 同区
+- 默认私有读即可；**不必**在 OSS 里单独「绑定 MaxCompute」
+- 确认已有对象：`rosbags/.../*.bag`
+
+**RAM 控制台**（OSS 挂载 STS）：
+- 角色 `maxframe-rosbag-oss`：权限 `AliyunOSSFullAccess`（或桶级策略）
+- **信任策略 Principal.Service** 必须含 `odps.aliyuncs.com`（同账号 MC+OSS）
+- 缺此项 → `sts token generation failed` / `Failed to create sts token for role_arn=...`
+- 工作流：`oss_ram_role_arn=acs:ram::账号ID:role/maxframe-rosbag-oss`
+
+**MaxCompute 控制台**（`rogbag_label_pipline`）：
+- 项目管理 → **OSS 开通 / 外部数据源** → 登记 RAM 角色
+- **配额管理**：项目绑定按量 Quota（如 `os_PayAsYouGoQuota`）
+- 执行账号需 Quota 的 `odps:Usage`，否则 `new_session` 报 `NoPermission` 或 DPE `engine is not running`
+- IDE/节点高级设置 `mcQuota` 与工作流节点需一致
+
+## Driver 镜像 ≠ DPE 镜像
+
+| 环境 | 配置方式 | Job1 需要 rosbags？ |
+|------|----------|---------------------|
+| Driver（DataWorks 节点 Pod） | 自定义镜像启动脚本 pip | **否**（只跑 maxframe/pyodps） |
+| DPE worker | `dpe_image` + MC 镜像管理，或 `@with_python_requirements` | **是** |
+
+Job1 推荐：`docker/dpe-deps` 构建 → ACR → MC 登记 → `dpe_image=rosbag_dpe_deps`（见 `docker/custom-dpe-image.md`）
+
+## MaxFrame 代码踩坑
+
+- 用 `from maxframe.config import options as mf_options`，**禁止** `import options`（与 PyODPS 冲突）
+- 复杂 UDF `apply` 必须 `dtypes={...}` + `skip_infer=True`（含 `parse_bag` 的 Job1）
+- DPE 验证 UDF 需 `@with_running_options(engine="dpe")`；裸 lambda 可能走 MCSQL
+
+## OSS 访问方式
+
+- **Job0 discover**：禁止 driver 用 `o.account` 调 OSS API；仅 DPE `@with_fs_mount` 扫描（内网挂载）
+- **Job0 dispatch / 下游读 manifest**：Driver 用 `alibabacloud_oss_v2` + 内网 endpoint + **`oss_vl_*` 长期 AK**（`pipeline_dispatch.py`）
+- `oss_ram_role_arn`：DPE 挂载专用，**不能**替代 Driver 写 manifest
+
+## OSS 路径与 MC
+
+- bag 区 `rosbags/`；`dim_clip.bag_oss_key`；**禁止**拷贝 bag 到 `clips/.../raw/`
+- `ALTER ADD bag_oss_key` 后列在**末列**；INSERT 顺序：
+  `clip_id, clip_dir_name, content_hash, active_run_id, created_at, updated_at, bag_oss_key`
+- 列升级脚本：`pipeline/scripts/migrate_mc_dim_clip_bag_oss_key.py`
+
+## 测试资产（已上传）
+
+- `rosbags/2026-06-05_13-27-07/output.bag`
+- `clip_id=sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b`
+- 上传：`pipeline/scripts/upload_clip_to_oss.py --clip 2026-06-05_13-27-07`
+
+## 来源
+
+沉淀自 session 2026-06-08~11；dispatch Driver OSS 凭证 2026-06-10；cloud-cli skill 2026-06-11

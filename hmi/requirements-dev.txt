@@ -1,0 +1,5 @@
+# HMI + 管线 + SDK（editable）
+-r ../pipeline/requirements.txt
+-r backend/requirements.txt
+-r ../pipeline/requirements-cloud.txt
+-e ../piplinesdk

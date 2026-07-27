@@ -1,0 +1,128 @@
+"""FastAPI dependencies for authenticated routes."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import jwt
+from fastapi import Depends, HTTPException, Request
+
+from hmi.app_db import get_user_by_id
+from hmi.auth.jwt_utils import ACCESS_COOKIE, decode_token
+
+PUBLIC_API_PATHS = frozenset(
+    {
+        "/api/health",
+        "/api/auth/login",
+        "/api/auth/refresh",
+    }
+)
+
+
+def public_api_path(path: str) -> bool:
+    if path in PUBLIC_API_PATHS:
+        return True
+    return False
+
+
+def extract_bearer_token(request: Request) -> str | None:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:].strip()
+        return token or None
+    cookie_token = request.cookies.get(ACCESS_COOKIE)
+    if cookie_token:
+        return cookie_token
+    return None
+
+
+def resolve_user_from_token(token: str) -> dict[str, Any]:
+    try:
+        payload = decode_token(token, expected_type="access")
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "401_UNAUTHORIZED", "message": "invalid or expired token"},
+        ) from exc
+
+    user = get_user_by_id(str(payload["sub"]))
+    if user is None or not user["is_active"]:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "401_UNAUTHORIZED", "message": "user not found or inactive"},
+        )
+    return user
+
+
+def get_current_user(request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "user", None)
+    if user is not None:
+        return user
+    token = extract_bearer_token(request)
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "401_UNAUTHORIZED", "message": "authentication required"},
+        )
+    user = resolve_user_from_token(token)
+    request.state.user = user
+    return user
+
+
+def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    if "admin" not in (user.get("roles") or []):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "403_FORBIDDEN", "message": "admin role required"},
+        )
+    return user
+
+
+def require_oss_access(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    roles = user.get("roles") or []
+    if not any(r in roles for r in ("admin", "dataset_manager")):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "403_FORBIDDEN", "message": "OSS access requires admin or dataset_manager"},
+        )
+    return user
+
+
+def require_oss_write(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    return require_oss_access(user)
+
+
+def require_reviewer(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    roles = user.get("roles") or []
+    if not any(r in roles for r in ("admin", "reviewer")):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "403_FORBIDDEN", "message": "review access requires admin or reviewer"},
+        )
+    return user
+
+
+def require_dataset_read(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    roles = user.get("roles") or []
+    if not any(r in roles for r in ("admin", "dataset_manager", "model_trainer")):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "403_FORBIDDEN",
+                "message": "dataset read requires admin, dataset_manager, or model_trainer",
+            },
+        )
+    return user
+
+
+def require_dataset_manager(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    roles = user.get("roles") or []
+    if not any(r in roles for r in ("admin", "dataset_manager")):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "403_FORBIDDEN",
+                "message": "dataset write requires admin or dataset_manager",
+            },
+        )
+    return user

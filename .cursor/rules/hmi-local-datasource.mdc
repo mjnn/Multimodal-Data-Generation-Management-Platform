@@ -1,0 +1,52 @@
+---
+description: HMI 本地数据源（SQLite+artifacts）与云端切换；sync_hmi_local、HMI_DATA_SOURCE
+globs: hmi/backend/**,hmi/scripts/**,hmi/frontend/**
+alwaysApply: false
+---
+
+# HMI 双数据源（cloud / local）
+
+## 目的
+
+- **local**：`hmi/data/hmi_local/` 镜像 MC 表 + OSS 产物，秒开预览与 UI 联调
+- **cloud**：MaxCompute + OSS 预签名，生产数据；性能优化与 local 并行迭代
+
+## 目录
+
+| 路径 | 内容 |
+|------|------|
+| `hmi/data/hmi_local/hmi.db` | SQLite（`hmi/hmi/backend/hmi/local/schema.sql`） |
+| `hmi/data/hmi_local/artifacts/clips/{safe_clip}/runs/{run_id}/` | **sdk_v1**：三 jsonl + `preview/` |
+| `hmi/data/hmi_local/config.json` | 运行时 `data_source`（前端切换写入） |
+
+**Windows**：`clip_id` 含 `:`，artifacts 目录用 `safe_clip_dir`（`sha256:hex` → `sha256__hex`），逻辑 ID 仍为 `sha256:hex`。
+
+## 切换
+
+- 前端右上角 **云端 MC / 本地 SQLite** → `POST /api/config/data-source`
+- 本地模式下二级：**真实数据 / 演示数据** → `POST /api/config/local-profile`（`real|demo`）
+- 或 `.env`：`HMI_DATA_SOURCE=cloud|local` · `HMI_LOCAL_PROFILE=real|demo`
+- **real**：读 `hmi.db` + artifacts；图像/音频 `GET /api/local-files/...`；禁止上传
+- **demo**：前端 Mock（picsum 占位图）；无需 sync；上传走前端模拟
+
+## 同步（cloud → local）
+
+```bash
+cd hmi
+python scripts/sync_hmi_local.py --clip-id sha256:...
+# 仅表：--skip-oss · 仅 OSS：--oss-only
+```
+
+- 配置：`shared/config.yaml` · 表前缀 **`aig_sdk__`**
+- 同步表（SDK）：`dim_clip`、`pipeline_run/step`、`clip_parse_summary`、`fact_clip_label`、`fact_clip_embedding`、`fact_audio_segment`
+- OSS 下载：`preview/`、`labels.jsonl`、`fusion_embeddings.jsonl`、`clip_videos.jsonl`、`run.json`（legacy：`parsed/`、`ai/` 只读 fallback）
+- OSS 同步后：`hmi/hmi/backend/hmi/sdk_ingest.py` 刷新 SQLite
+
+## 代码分界
+
+- 路由：`hmi/router.py` → `clips_local` / `clips`（cloud）
+- 禁止 local 路径直接调 ODPS；禁止 cloud 路径读 `hmi.db` 当生产源
+
+## 来源
+
+沉淀自 session 2026-06-11 + 2026-07-27（SDK v1 sync / sdk_ingest）

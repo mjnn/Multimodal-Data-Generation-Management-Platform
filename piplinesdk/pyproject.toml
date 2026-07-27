@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oms-multimodal-sdk"
+version = "0.3.0"
+description = "ROS1 rosbag multimodal OMS labeling and fusion embedding SDK for Alibaba Cloud Qwen models"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "OMS Multimodal Team" }]
+keywords = ["rosbag", "oms", "embedding", "qwen", "multimodal", "dashscope"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "rosbags>=0.9.23",
+    "dashscope>=1.22.0",
+    "openai>=1.52.0",
+    "pyyaml>=6.0",
+    "numpy>=1.26.0",
+    "Pillow>=10.0.0",
+    "opencv-python-headless>=4.8.0",
+    "imageio-ffmpeg>=0.5.1",
+    "python-dotenv>=1.0.0",
+]
+[project.optional-dependencies]
+dev = ["build", "twine"]
+
+[project.scripts]
+oms-multimodal = "oms_multimodal.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/example/oms-multimodal-sdk/blob/main/docs/SDK.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["oms_multimodal*"]
+
+[tool.setuptools.package-data]
+oms_multimodal = ["py.typed", "bundled/*"]

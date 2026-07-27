@@ -1,0 +1,22 @@
+---
+description: 跨会话进度交接——开工前读 CURRENT.md，收工回写进度与验收清单
+alwaysApply: true
+---
+
+# 跨会话项目进度交接
+
+## 必须遵守
+
+1. 实现前读 `project-management/CURRENT.md` 与当前 `docs/mN-implementation-notes.md`。
+2. 默认只做「推荐下一个工单」。
+3. 收工回写：CURRENT、tracking.csv（UTF-8 BOM）、progress-board、changelog、`acceptance/<工单ID>.md`（**A · A-E2E · H** 分节，见 `acceptance/_FORMAT.md`）。
+4. 聊天附 **A + A-E2E 结果表** + **H 摘要（若有）**；UI 可断言路径用 A-E2E，H 仅签字/主观。
+5. 需求冲突：PRD > Mn Notes > CURRENT。
+
+## 禁止
+
+- 未读 CURRENT 就写业务代码
+- 静默完成多工单不回写
+- 未出口里程碑实现下一里程碑业务
+- 宣称 done 却无 acceptance
+- UI 回归写 H 不写 A-E2E

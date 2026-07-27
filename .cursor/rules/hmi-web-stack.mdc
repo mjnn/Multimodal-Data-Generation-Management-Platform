@@ -1,0 +1,56 @@
+---
+description: Rosbag HMI Web（FastAPI+React）云端性能、Job3 标签解析、启动与验收
+globs: backend/**,hmi/frontend/**
+alwaysApply: false
+---
+
+# Rosbag HMI Web
+
+## 栈
+
+- **后端** `backend/`：FastAPI · `python run.py` → `:8000`
+- **前端** `hmi/frontend/`：Vite+React+AntD · `npm run dev` → `:5173`（代理 `/api`）
+- Mock：仅 `VITE_USE_MOCK=true`；默认对接后端
+
+## 云端性能（MC 慢在作业非 RTT）
+
+- 合并 COUNT / JOIN 减 MC 次数；`explorer-bootstrap` 一次拉 clip+meta+runs
+- 标签检索：单条 JOIN + 内存过滤 + TTL 缓存（勿 per-row 查 `fact_frame`）
+- 总览：`light=1` + **`GET /api/clips/batch-stats`**（GROUP BY 一次算全表计数，勿 N 次 `/stats`）
+- 时间轴：bootstrap 预热 `_label_map` + **全量 `fact_frame` 内存索引**；拖滑块 **0 MC 查询**（meta/events/asr 同缓存）
+- `list_clips_light`：批量 summary/run/step，禁止 per-clip 三轮查询
+- `resolve_clip_context`：run+summary 单条 JOIN
+
+## Job3 标签（HMI 必读）
+
+- `fact_image_label.labels_json` 业务在 **`.values`** 嵌套（`qwen3.6-plus`）
+- 解析：`hmi/backend/hmi/labels_util.py`；检索用英文枚举（如 `driving`），中文关键词常无命中
+- **`uniform_sync`**：同 `sync_group_id` 四帧 **共用同一套** `labels_json`；组时间用 `anchor_timestamp_ns`；UI 按组展示、检索去重 — 详见 **`uniform-sync-hmi.mdc`**
+
+## 测试 clip（全链 27/27）
+
+- `clip_id`=`sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b`
+- `run_id`=`6a2f479e-64b4-443e-a73c-47a0cc23d81f` · `ds`=`20260609`
+
+## 重启（Windows 踩坑）
+
+- `:8000` 若返回旧版 health（无 `data_source`），多为 **C:\Python314\python.exe** 残留 uvicorn，非 `.venv`
+- 清理：`Get-Process python | Stop-Process -Force` 或 `taskkill /F /PID <pid>`，再单实例启动：
+  ```powershell
+  cd backend
+  ..\.venv\Scripts\python.exe -m uvicorn hmi.main:app --host 127.0.0.1 --port 8000
+  ```
+- 验收新后端：`GET /api/health` 含 `data_source`、`local_db`；`GET /api/config/data-source` 返回 200
+- 前端 `:5173` 已占用则无需再起；否则 `cd frontend; npm run dev`
+
+## 验收
+
+```bash
+py -3 pipeline/scripts/verify_pipeline_run.py --clip-id sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b
+python backend/scripts/probe_hmi.py   # 云端
+# local 切换后列表/检索应秒级
+```
+
+## 来源
+
+沉淀自 session 2026-06-11（HMI 对接 MC/OSS + 性能优化 + local 模式）

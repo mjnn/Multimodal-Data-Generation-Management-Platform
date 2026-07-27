@@ -1,0 +1,28 @@
+# Python
+.venv/
+.env
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 运行时数据库（可重建）
+data/*.db
+data/hmi_local/hmi.db
+data/hmi_local/artifacts/
+
+# 解析大文件（原始 bag 保留在版本库/工作区）
+clips/**/parsed_data/**/images/**
+clips/**/parsed_data/**/audio/audio.wav
+
+# IDE / 工具
+.cursor/session-data/
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 原始 rosbag 源文件：不忽略 clips/**/rosbag/**
+# 若后续改用 Git LFS 管理 .bag，可改为：clips/**/rosbag/*.bag

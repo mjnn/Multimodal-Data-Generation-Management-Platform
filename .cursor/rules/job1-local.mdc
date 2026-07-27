@@ -1,0 +1,32 @@
+﻿---
+description: Job1 本地解析、chunks.jsonl、timeline.db 与 clip_id 约定
+globs: "**/*.{py,yaml}"
+alwaysApply: false
+---
+
+# Job1 本地实现（已完成）
+
+## 模块入口
+- `parse_rosbag.py`：解析 + 写 chunks/timeline/parse_records
+- `clip_id.py`：`sha256:{hex}` + `rosbag/manifest.json`
+- `timeline_db.py`：MC 表 1:1 本地 SQLite + `query_nearby()`
+- `parse_oms_taxonomy.py`：xlsx → `config/oms_label_taxonomy.yaml`
+
+## chunks.jsonl（`parsed_data/{bag_stem}/audio/chunks.jsonl`）
+- 字段：`chunk_idx`（从 0）、`timestamp_ns`（record_time_ns）、`byte_offset`、`byte_length`、`sample_count`、`duration_ns`、`pcm_bytes`
+- 保留合并 `audio.wav`
+
+## timeline.db（`data/timeline.db`）
+- 表前缀：`aig_rosbag__`（`dim_clip`、`fact_message_timeline`、`fact_frame`、`fact_audio_chunk`、`fact_event`、`clip_parse_summary`）
+- 解析时同步写入；无 pipeline run 时 `run_id=local`
+- 帧图路径存 `images/camera{N}/` 相对 bag 输出目录
+
+## CLI 约定
+- `--clip` 仍用**目录名**（如 `2026-06-05_13-27-07`）；库内 `clip_id` 为 sha256
+- `run_pipeline.py` 内联步骤须传 `run_id` 给 `process_clip`
+
+## 上云对照
+- DataWorks Job1 节点：`pipeline/dataworks/job1_parse_node.py` + `job1_mc_write_node.py`（见 `dataworks-cloud.mdc`）
+
+## 来源
+沉淀自 session 2026-06-08（P1 实现；P4 DataWorks）

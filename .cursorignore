@@ -1,0 +1,33 @@
+﻿# Cursor 索引/Agent 忽略规则
+# 原则：保留 clips/**/rosbag/** 与元数据可见；只忽略解析后的大体积产物
+
+# Python 环境
+.venv/
+__pycache__/
+*.pyc
+
+# 解析图像帧（体积大，Agent 一般只需 metadata / timeline）
+clips/**/parsed_data/**/images/**
+
+# 合并音频 WAV（保留 chunks.jsonl 与 audio_info.json）
+clips/**/parsed_data/**/audio/audio.wav
+
+# 运行时 SQLite（可由脚本重建）
+data/*.db
+
+# Session 临时笔记
+.cursor/session-data/
+
+# 显式放行 rosbag 源（覆盖默认对大文件/二进制的忽略倾向）
+!clips/
+!clips/**/
+!clips/**/rosbag/
+!clips/**/rosbag/**
+!clips/**/rosbag/**
+!**/*.bag
+
+# 以下元数据路径同样应保持可见：
+#   clips/**/parsed_data/summary.json
+#   clips/**/parsed_data/**/metadata.json
+#   clips/**/parsed_data/**/audio/chunks.jsonl
+#   clips/**/parsed_data/**/labels/*.jsonl
