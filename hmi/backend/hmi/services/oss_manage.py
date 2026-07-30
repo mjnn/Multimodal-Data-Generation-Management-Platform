@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import mimetypes
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import oss2
 
 from hmi.config import get_settings
+from hmi.data_source import is_local_mode
 from hmi.oss_layout import OSS_LAYOUT_PREFIXES
 from hmi.oss_signer import _bucket, sign_key
 
@@ -28,6 +30,10 @@ def _normalize_prefix(prefix: str) -> str:
 
 
 def get_oss_info() -> dict[str, Any]:
+    if is_local_mode():
+        from hmi.local.oss_publish import get_local_oss_info
+
+        return get_local_oss_info()
     settings = get_settings()
     return {
         "bucket": settings["oss_bucket"],
@@ -37,6 +43,10 @@ def get_oss_info() -> dict[str, Any]:
 
 
 def list_objects(prefix: str = "", delimiter: str = "/", max_keys: int = 500) -> dict[str, Any]:
+    if is_local_mode():
+        from hmi.local.oss_publish import list_local_objects
+
+        return list_local_objects(prefix=prefix, delimiter=delimiter, max_keys=max_keys)
     prefix = _normalize_prefix(prefix)
     if prefix and not prefix.endswith("/"):
         prefix += "/"
@@ -91,6 +101,10 @@ def list_objects(prefix: str = "", delimiter: str = "/", max_keys: int = 500) ->
 
 
 def upload_bytes(key: str, data: bytes, *, content_type: str | None = None) -> dict[str, Any]:
+    if is_local_mode():
+        from hmi.local.oss_publish import upload_local_bytes
+
+        return upload_local_bytes(key, data, content_type=content_type)
     key = _normalize_key(key)
     ct = content_type or mimetypes.guess_type(key)[0] or "application/octet-stream"
     bucket = _bucket()
@@ -157,4 +171,19 @@ def mkdir(prefix: str) -> dict[str, Any]:
 
 def download_url(key: str, expires: int = 3600) -> dict[str, str]:
     key = _normalize_key(key)
+    if is_local_mode():
+        from urllib.parse import quote
+
+        q = quote(key, safe="")
+        return {"key": key, "url": f"/api/oss/file?key={q}"}
     return {"key": key, "url": sign_key(key, expires=expires)}
+
+
+def local_file_path(key: str) -> Path:
+    from hmi.data_source import oss_key_path
+
+    key = _normalize_key(key)
+    path = oss_key_path(key)
+    if not path.is_file():
+        raise FileNotFoundError(key)
+    return path

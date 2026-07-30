@@ -1,30 +1,30 @@
-# Rosbag HMI — 单容器：FastAPI + 预构建 SPA
+# Monorepo context: docker build -f hmi/deploy/Dockerfile .
 FROM m.daocloud.io/docker.io/library/python:3.12-slim
 
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt /app/backend/requirements.txt
+COPY piplinesdk /app/piplinesdk
+COPY hmi/backend/requirements.txt /tmp/hmi-requirements.txt
 RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    -r /app/backend/requirements.txt
+    -r /app/piplinesdk/requirements.txt \
+    -r /tmp/hmi-requirements.txt \
+    && pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --no-deps -e /app/piplinesdk
 
-COPY backend /app/backend
-COPY config /app/config
-COPY config.yaml /app/config.yaml
-COPY clip_id.py cloud_config.py /app/
-COPY scripts/sync_hmi_local.py /app/scripts/sync_hmi_local.py
-COPY scripts/seed_demo_clip_data.py scripts/import_real_data_clips.py scripts/mock_pipeline_artifacts.py scripts/mock_pipeline_run.py /app/scripts/
-COPY dataworks/label_merge.py /app/dataworks/label_merge.py
-COPY frontend/dist /app/frontend/dist
+COPY shared /app/shared
+COPY hmi/backend /app/hmi/backend
+COPY hmi/scripts /app/hmi/scripts
+COPY hmi/frontend/dist /app/hmi/frontend/dist
 
-ENV FRONTEND_DIST=/app/frontend/dist
+ENV FRONTEND_DIST=/app/hmi/frontend/dist
 ENV PORT=8000
-ENV PYTHONPATH=/app/backend:/app
+ENV PYTHONPATH=/app/piplinesdk:/app/hmi/backend:/app/shared
 
-WORKDIR /app/backend
+WORKDIR /app/hmi/backend
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1

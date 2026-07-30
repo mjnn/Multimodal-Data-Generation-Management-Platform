@@ -8,14 +8,21 @@ services:
     env_file:
       - .env.runtime
     environment:
-      FRONTEND_DIST: /app/frontend/dist
+      FRONTEND_DIST: /app/hmi/frontend/dist
       PORT: "8000"
+      HMI_RUNTIME_ROOT: /app/data/hmi_runtime
       HMI_DATA_SOURCE: ${HMI_DATA_SOURCE:-local}
       HMI_PUBLIC_API_BASE: ${HMI_PUBLIC_API_BASE:-/tools/rosbag-labels/api}
+      HMI_LOCAL_SDK_POLL_ENABLED: ${HMI_LOCAL_SDK_POLL_ENABLED:-1}
+      HMI_LOCAL_SDK_POLL_INTERVAL_SEC: ${HMI_LOCAL_SDK_POLL_INTERVAL_SEC:-20}
+      HMI_LOCAL_SDK_PARALLEL: ${HMI_LOCAL_SDK_PARALLEL:-1}
+      HMI_MIRROR_ARTIFACTS_TO_OSS: ${HMI_MIRROR_ARTIFACTS_TO_OSS:-0}
+      HMI_OSS_SYNC_POLL_ENABLED: ${HMI_OSS_SYNC_POLL_ENABLED:-0}
       HMI_OSS_SYNC_POLL_INTERVAL_SEC: ${HMI_OSS_SYNC_POLL_INTERVAL_SEC:-30}
       HMI_OSS_SYNC_AUTO_LOCAL: ${HMI_OSS_SYNC_AUTO_LOCAL:-1}
     volumes:
-      - ./data/hmi_local:/app/data/hmi_local
+      - ./data/hmi_runtime:/app/data/hmi_runtime
+      - ./data/app_meta:/app/hmi/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
       interval: 30s

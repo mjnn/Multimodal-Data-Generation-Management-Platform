@@ -32,6 +32,7 @@ SDK_STEP_LABELS = {
     "sdk_dispatch": "调度发布",
 }
 
+# Cloud DataWorks: infer → upload OSS → MC facts → dispatch
 SDK_PIPELINE_STEP_ORDER = (
     "sdk_discover",
     "sdk_infer",
@@ -39,6 +40,20 @@ SDK_PIPELINE_STEP_ORDER = (
     "sdk_mc_write",
     "sdk_dispatch",
 )
+
+# Local worker: infer → import SQLite + artifacts → mirror local oss/ → dispatch
+SDK_PIPELINE_STEP_ORDER_LOCAL = (
+    "sdk_discover",
+    "sdk_infer",
+    "sdk_mc_write",
+    "sdk_upload",
+    "sdk_dispatch",
+)
+
+
+def sdk_pipeline_step_order(*, local: bool = False) -> tuple[str, ...]:
+    return SDK_PIPELINE_STEP_ORDER_LOCAL if local else SDK_PIPELINE_STEP_ORDER
+
 
 STEP_LABELS = {
     "job0_discover": "OSS 发现",
@@ -56,6 +71,13 @@ STEP_LABELS = {
     "job4_embed": "向量化",
     **SDK_STEP_LABELS,
 }
+
+
+def pipeline_step_label(step_id: str, *, local: bool = False) -> str:
+    if local and step_id == "sdk_mc_write":
+        return "SQLite 写入"
+    return STEP_LABELS.get(step_id, step_id)
+
 
 PIPELINE_VERSION = "clip_omni_v2"
 
@@ -82,6 +104,16 @@ LEGACY_PIPELINE_STEP_ORDER = (
 @lru_cache
 def get_settings() -> dict[str, str]:
     load_cloud_env(ENV_PATH)
+    try:
+        from dotenv import load_dotenv
+
+        from hmi.system_env import resolve_system_env_path
+
+        extra = resolve_system_env_path()
+        if extra.is_file() and extra.resolve() != ENV_PATH.resolve():
+            load_dotenv(extra, override=True)
+    except Exception:
+        pass
     with CONFIG_PATH.open(encoding="utf-8") as f:
         config = yaml.safe_load(f)
     settings = require_odps_settings(resolve_cloud_settings(config))

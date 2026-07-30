@@ -7,13 +7,14 @@
 ## 安装
 
 ```powershell
-# 发布 wheel（DataWorks / 无源码环境）
-pip install D:\cursor_project\rosbag_to_labels_pipline\piplinesdk\oms_multimodal_sdk-0.3.0-py3-none-any.whl
+cd piplinesdk
+pip install ./oms_multimodal_sdk-0.3.0-py3-none-any.whl
 
-# 开发（改 SDK 与 HMI 联调）
-pip install -e D:\cursor_project\rosbag_to_labels_pipline\piplinesdk
-# 或 HMI 目录：
-pip install -r requirements-dev.txt
+# 开发（改 SDK 与 HMI 联调，仓库根）
+cd pipeline
+pip install -e ../piplinesdk
+# 或
+cd hmi && pip install -r requirements-dev.txt
 ```
 
 ## 文档
@@ -36,7 +37,7 @@ Copy-Item dist\oms_multimodal_sdk-0.3.0-py3-none-any.whl . -Force
 
 ## 能力一览
 
-| 阶段 | 本地 | 云端（`MODEL_BACKEND=api`） |
+| 阶段 | 本地（`STORAGE_BACKEND=local`） | 云端（`MODEL_BACKEND=api` / `STORAGE_BACKEND=cloud`） |
 |------|------|------------------------------|
 | Rosbag 解析 + clip | `RosbagExtractor` | — |
 | 预览 MP4 + WAV | ffmpeg | — |
@@ -62,7 +63,3 @@ HMI local + aig_sdk__ MC
 ```
 
 设计：`docs/sdk-first-pipeline-design.md`
-
-## 历史
-
-源码自 `labeling_and_embedding_test/oms_multimodal` 迁入（2026-07）；旧仓仅保留 redirect README。

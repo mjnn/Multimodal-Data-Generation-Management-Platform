@@ -234,6 +234,24 @@ def _build_clip_card(clip_id: str, run_id: str, view: dict[str, Any]) -> dict[st
 
         card["clip_review_updated_at"] = review.get("updated_at")
 
+    try:
+
+        from hmi.router import clips_svc
+
+        segments = clips_svc().get_audio_segments(clip_id, run_id)
+
+        parts = [str(s.get("asr_text") or "").strip() for s in segments]
+
+        asr_text = "\n".join(p for p in parts if p)
+
+        if asr_text:
+
+            card["asr_text"] = asr_text
+
+    except Exception:
+
+        pass
+
     return card
 
 

@@ -24,7 +24,7 @@
 
 | 推荐下一个工单 | **M6.6** — E2E + acceptance |
 
-> **仓库目录（2026-07 monorepo）**：代码在 `hmi/`、`pipeline/`、`shared/`、`piplinesdk/`；路径对照见 [`MONOREPO_PATHS.md`](./MONOREPO_PATHS.md) · [`docs/REPO_LAYOUT.md`](../docs/REPO_LAYOUT.md)。
+> **仓库目录**：`hmi/`、`pipeline/`、`shared/`、`piplinesdk/` — 见 [`docs/REPO_LAYOUT.md`](../docs/REPO_LAYOUT.md)。
 
 | 禁止抢跑 | 全面 E2E 须本地/ECS 有 demo 校核数据 |
 

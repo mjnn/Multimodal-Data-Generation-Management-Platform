@@ -14,6 +14,8 @@ def nodes_to_label_taxonomy(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]
     """Build LabelSearchPage-compatible grouped tree (children only id+name)."""
     by_level: dict[str, dict[str, Any]] = {}
     for node in nodes:
+        if node.get("is_active") is False:
+            continue
         level_code = str(node.get("level_code") or "other")
         level_name = str(node.get("level_name") or level_code)
         if level_code not in by_level:
@@ -63,12 +65,11 @@ def get_label_taxonomy(version_id: str | None = None) -> list[dict[str, Any]]:
         if version is None:
             raise ValueError(f"taxonomy version not found: {version_id}")
         nodes = list_nodes(version_id)
-        return nodes_to_label_taxonomy(nodes) if nodes else []
+        return nodes_to_label_taxonomy(nodes)
 
     published = get_published_version()
     if published is not None:
         nodes = list_nodes(published["id"])
-        if nodes:
-            return nodes_to_label_taxonomy(nodes)
+        return nodes_to_label_taxonomy(nodes)
 
     return get_label_taxonomy_from_yaml()

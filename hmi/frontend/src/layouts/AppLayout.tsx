@@ -3,13 +3,14 @@ import {
   CheckCircleOutlined,
   CloudServerOutlined,
   DatabaseOutlined,
+  DeploymentUnitOutlined,
   FolderOpenOutlined,
-  LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  SettingOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
-import { Breadcrumb, Button, Layout, Menu, Typography } from 'antd'
+import { Breadcrumb, Button, Dropdown, Layout, Menu, Typography } from 'antd'
 import type { MenuProps } from 'antd'
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -17,19 +18,24 @@ import { useAuth } from '../auth/AuthContext'
 import {
   canAccessDatasets,
   canAccessOss,
+  canAccessPipeline,
   canAccessReview,
   canManageTaxonomy,
   canManageUsers,
+  canSwitchDataSource,
 } from '../auth/roles'
 import { APP_NAME, APP_NAME_SHORT, APP_TAGLINE } from '../config/app'
-import { DemoModeControls } from '../components/DemoModeControls'
-import { useDemoMode } from '../context/DemoModeContext'
+import { LocalModeControls } from '../components/LocalModeControls'
+import { ThemeToggle } from '../components/ThemeToggle'
+import { UserAccountModal } from '../components/UserAccountModal'
+import { useThemeMode } from '../context/ThemeContext'
 import { parseReviewV2OpenMode } from '../utils/reviewConfidence'
 
 const { Header, Sider, Content } = Layout
 
 const ROUTE_LABELS: Record<string, string> = {
   '/': '数据总览',
+  '/pipeline': '管线管理',
   '/oss': 'OSS 管理',
   '/review': '校核任务',
   '/review/confidence': '置信度校核',
@@ -40,6 +46,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/datasets': '数据集',
   '/taxonomy': '标签树',
   '/admin/users': '用户管理',
+  '/admin/system-env': '系统参数管理',
 }
 
 function buildBreadcrumbs(pathname: string, search: string): { title: ReactNode }[] {
@@ -93,14 +100,18 @@ export function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout } = useAuth()
-  const { demoMode } = useDemoMode()
+  const { mode: themeMode } = useThemeMode()
   const [collapsed, setCollapsed] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
 
   const navItems: MenuProps['items'] = useMemo(() => {
     const roles = user?.roles
     const browse: MenuProps['items'] = [{ key: '/', icon: <DatabaseOutlined />, label: '数据总览' }]
 
     const workflow: MenuProps['items'] = []
+    if (canAccessPipeline(roles)) {
+      workflow.push({ key: '/pipeline', icon: <DeploymentUnitOutlined />, label: '管线管理' })
+    }
     if (canAccessOss(roles)) {
       workflow.push({ key: '/oss', icon: <CloudServerOutlined />, label: 'OSS 管理' })
     }
@@ -117,6 +128,7 @@ export function AppLayout() {
     }
     if (canManageUsers(roles)) {
       admin.push({ key: '/admin/users', icon: <TeamOutlined />, label: '用户管理' })
+      admin.push({ key: '/admin/system-env', icon: <SettingOutlined />, label: '系统参数管理' })
     }
 
     const groups: MenuProps['items'] = [
@@ -145,7 +157,7 @@ export function AppLayout() {
 
   const selected =
     flatKeys.find((k) => k !== '/' && location.pathname.startsWith(k)) ??
-    (location.pathname.startsWith('/upload') && flatKeys.includes('/oss') ? '/oss' : undefined) ??
+    (location.pathname.startsWith('/upload') && flatKeys.includes('/pipeline') ? '/pipeline' : undefined) ??
     (location.pathname.startsWith('/clips') ? '/' : undefined) ??
     (location.pathname.startsWith('/review') ? '/review/confidence' : '/')
 
@@ -157,7 +169,7 @@ export function AppLayout() {
       <Sider
         className="app-shell__sider"
         width={240}
-        theme="dark"
+        theme={themeMode === 'dark' ? 'dark' : 'light'}
         breakpoint="lg"
         collapsedWidth={64}
         collapsible
@@ -172,20 +184,20 @@ export function AppLayout() {
                 {APP_NAME}
               </Typography.Title>
               <Typography.Text className="app-shell__brand-sub">{APP_TAGLINE}</Typography.Text>
-              <DemoModeControls />
+              {canSwitchDataSource(user?.roles) ? <LocalModeControls /> : null}
             </>
           ) : (
             <>
               <Typography.Title level={4} className="app-shell__brand-title" style={{ fontSize: 14 }}>
                 {APP_NAME_SHORT}
               </Typography.Title>
-              <DemoModeControls collapsed />
+              {canSwitchDataSource(user?.roles) ? <LocalModeControls collapsed /> : null}
             </>
           )}
         </div>
         <Menu
           className="app-shell__menu"
-          theme="dark"
+          theme={themeMode === 'dark' ? 'dark' : 'light'}
           mode="inline"
           selectedKeys={[selected]}
           items={navItems}
@@ -203,29 +215,37 @@ export function AppLayout() {
               aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
             />
             <Breadcrumb items={breadcrumbs} />
-            {demoMode ? (
-              <span className="app-shell__demo-badge">演示模式</span>
-            ) : null}
             <span className="app-shell__header-meta">Clip 级校核 · MP4 预览</span>
           </div>
           <div className="app-shell__user">
-            <span className="app-shell__avatar" aria-hidden>
-              {userInitial}
-            </span>
-            <Typography.Text>{user?.display_name ?? user?.username}</Typography.Text>
-            <Button
-              type="text"
-              icon={<LogoutOutlined />}
-              onClick={() => void logout()}
-              aria-label="退出登录"
+            <ThemeToggle />
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'profile', label: '账号信息' },
+                  { type: 'divider' },
+                  { key: 'logout', label: '退出登录', danger: true },
+                ],
+                onClick: ({ key }) => {
+                  if (key === 'profile') setAccountOpen(true)
+                  if (key === 'logout') void logout()
+                },
+              }}
+              trigger={['click']}
             >
-              退出
-            </Button>
+              <button type="button" className="app-shell__avatar-btn" aria-label="用户菜单">
+                <span className="app-shell__avatar" aria-hidden>
+                  {userInitial}
+                </span>
+                <Typography.Text>{user?.display_name ?? user?.username}</Typography.Text>
+              </button>
+            </Dropdown>
           </div>
         </Header>
         <Content className="app-shell__content">
           <Outlet />
         </Content>
+        <UserAccountModal open={accountOpen} onClose={() => setAccountOpen(false)} />
       </Layout>
     </Layout>
   )

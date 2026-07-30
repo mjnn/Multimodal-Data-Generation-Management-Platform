@@ -16,6 +16,24 @@ ACCESS_COOKIE = "hmi_access_token"
 REFRESH_COOKIE = "hmi_refresh_token"
 
 
+def auth_cookie_paths() -> tuple[str, str]:
+    """
+    Cookie Path attributes for reverse-proxy subpaths (e.g. /tools/rosbag-labels).
+
+    HMI_PUBLIC_API_BASE=/tools/rosbag-labels/api → access on /tools/rosbag-labels,
+    refresh on /tools/rosbag-labels/api/auth. Local dev defaults to / and /api/auth.
+    """
+    api_base = os.environ.get("HMI_PUBLIC_API_BASE", "/api").strip().rstrip("/")
+    if not api_base.startswith("/"):
+        api_base = f"/{api_base}"
+    refresh_path = f"{api_base}/auth"
+    if api_base.endswith("/api"):
+        access_path = api_base[: -len("/api")] or "/"
+    else:
+        access_path = "/"
+    return access_path, refresh_path
+
+
 def _jwt_secret() -> str:
     secret = os.environ.get("HMI_JWT_SECRET", "").strip()
     if not secret:

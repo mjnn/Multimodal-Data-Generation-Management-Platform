@@ -29,14 +29,13 @@ rosbag_to_labels_pipline/
 │   ├── backend/              # `python run.py` 入口
 │   ├── frontend/
 │   ├── deploy/               # Docker / nginx
-│   ├── data/                 # hmi_local、real_data、app.db
+│   ├── data/                 # hmi_local、hmi_runtime、real_data、app.db
 │   └── scripts/              # sync_hmi_local、import_real_data_clips 等
 ├── archive/                  # 不再维护的脚本与历史参考
 │   ├── legacy-scripts/       # mock Job2–4、uniform_sync 测试等
 │   ├── ref/                  # 旧 spec / notebook
 │   └── workspace-scratch/    # 根目录临时 py、reset-cloud-env
 ├── project-management/       # 工单与 CURRENT.md（见 AGENTS.md）
-├── tools/                    # 一次性维护脚本（路径迁移等）
 └── .cursor/rules/            # Cursor 项目规则
 ```
 
@@ -86,19 +85,17 @@ cd pipeline
 py -3 parse_rosbag.py --config ..\shared\config.yaml
 ```
 
-## 维护脚本
-
-`tools/patch_dataworks_docs.py`、`tools/patch_cursor_rules.py`：monorepo 迁路径时的一次性批量替换（可保留作参考）。
+## 相关说明
 
 - **SDK 主路径**：`piplinesdk` + `pipeline/dataworks/sdk_infer_node.py` + `aig_sdk__`
 - **Legacy Job1–4 / clip-omni v2**：节点仍在 `pipeline/dataworks/`，新数据勿写 `parsed/aligned/ai`；mock 脚本在 `archive/legacy-scripts/`
-- **旧嵌套目录** `rosbag_to_labels_pipline/rosbag_to_labels_pipline/`：若仍存在空壳，见该目录下 `README.md` 后手动删除。
 
 ## 文档索引
 
 | 主题 | 路径 |
 |------|------|
 | 总览 | `docs/WIKI.md` |
+| 目录 | `docs/REPO_LAYOUT.md` |
 | SDK-first | `docs/sdk-first-pipeline-design.md` |
 | DataWorks | `pipeline/dataworks/WORKFLOW.md` |
 | HMI 后端 | `hmi/backend/README.md` |

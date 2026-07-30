@@ -121,6 +121,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable clip preview MP4 (frames + WAV)",
     )
+    run_parser.add_argument(
+        "--storage-backend",
+        choices=("local", "cloud"),
+        default=None,
+        help="local: HMI_RUNTIME oss mirror; cloud: upload to OSS (STORAGE_BACKEND env)",
+    )
+    run_parser.add_argument(
+        "--model-backend",
+        choices=("api", "mc"),
+        default=None,
+        help="Model API backend (default: env MODEL_BACKEND or api)",
+    )
     return parser
 
 
@@ -154,6 +166,8 @@ def main(argv: list[str] | None = None) -> None:
         asr_config=asr_config,
         clip_video_config=clip_video_config,
         load_dotenv=False,
+        model_backend=args.model_backend,
+        storage_backend=args.storage_backend,
     )
     clip_config = ClipConfig(
         min_sec=args.clip_min_sec,

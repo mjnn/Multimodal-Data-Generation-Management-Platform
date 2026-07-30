@@ -1,4 +1,4 @@
-import { formatTimestampNs } from '../utils/format'
+import { formatDateTime, formatTimestampNs } from '../utils/format'
 import { fetchJson, http } from './http'
 import type { AuthUser } from '../auth/types'
 import type {
@@ -35,11 +35,18 @@ import type {
   DatasetListResponse,
   DatasetDownloadResponse,
   DatasetFilterJson,
+  SystemEnvVariable,
+  PipelineRunSettings,
+  PipelineExecutionListResponse,
+  RegisterResponse,
+  PipelineSettingsResponse,
   TimelineMeta,
   TimelineSnapshot,
   UploadTask,
   OssBagPipeline,
   OssInfo,
+  OssShortcut,
+  OssShortcutsResponse,
   OssListResponse,
   OssSyncPollerStatus,
 } from './types'
@@ -69,12 +76,22 @@ export type HealthResponse = {
   project?: string
   data_source?: DataSourceMode
   local_db?: boolean
+  local_runtime_root?: string
   last_sync_clip?: string | null
   error?: string
 }
 
 export const api = {
   health: () => fetchJson<HealthResponse>('/health'),
+
+  updateMe: (body: { display_name: string }): Promise<{ user: AuthUser }> =>
+    fetchJson('/auth/me', { method: 'PATCH', body: JSON.stringify(body) }),
+
+  changePassword: (current_password: string, new_password: string): Promise<{ ok: boolean }> =>
+    fetchJson('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password, new_password }),
+    }),
 
   getDataSource: (): Promise<{ data_source: DataSourceMode }> =>
     fetchJson('/config/data-source'),
@@ -95,8 +112,11 @@ export const api = {
 
   getDemoClips: (): Promise<ClipOverview[]> => fetchJson('/clips/demo'),
 
-  resetDemoData: (): Promise<{ ok: boolean; message?: string }> =>
-    fetchJson('/demo/reset', { method: 'POST' }),
+  resetHmiArtifacts: (): Promise<{
+    ok: boolean
+    message?: string
+    baseline_taxonomy?: { version_code: string; node_count: number }
+  }> => fetchJson('/hmi/reset-artifacts', { method: 'POST' }),
 
   getBatchClipStats: (opts?: { refresh?: boolean }): Promise<
     Record<
@@ -214,6 +234,11 @@ export const api = {
 
   getOssInfo: (): Promise<OssInfo> => fetchJson('/oss/info'),
 
+  getOssShortcuts: (): Promise<OssShortcutsResponse> => fetchJson('/oss/shortcuts'),
+
+  saveOssShortcuts: (items: OssShortcut[]): Promise<OssShortcutsResponse> =>
+    fetchJson('/oss/shortcuts', { method: 'PUT', body: JSON.stringify({ items }) }),
+
   getSyncPollerStatus: (): Promise<OssSyncPollerStatus> => fetchJson('/sync/poller'),
 
   setSyncPollerEnabled: (enabled: boolean): Promise<OssSyncPollerStatus> =>
@@ -254,8 +279,25 @@ export const api = {
     ),
 
   formatTimestampNs,
+  formatDateTime,
 
   listAdminUsers: (): Promise<AuthUser[]> => fetchJson('/admin/users'),
+
+  getSystemEnv: (): Promise<{
+    path: string
+    writable: boolean
+    catalog_keys: string[]
+    variables: SystemEnvVariable[]
+    restart_required_hint?: string
+  }> => fetchJson('/admin/system-env'),
+
+  saveSystemEnv: (body: { env: Record<string, string | null> }): Promise<{
+    path: string
+    writable: boolean
+    variables: SystemEnvVariable[]
+    restart_required_hint?: string
+  }> =>
+    fetchJson('/admin/system-env', { method: 'PUT', body: JSON.stringify(body) }),
 
   createAdminUser: (body: {
     username: string
@@ -286,6 +328,15 @@ export const api = {
     import_yaml?: boolean
   }): Promise<TaxonomyVersion> =>
     fetchJson('/taxonomy/versions', { method: 'POST', body: JSON.stringify(body) }),
+
+  importTaxonomyYamlVersion: (body: {
+    version_code: string
+    yaml_content: string
+  }): Promise<TaxonomyVersion> =>
+    fetchJson('/taxonomy/versions/import-yaml', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   cloneTaxonomyVersion: (
     versionId: string,
@@ -486,19 +537,38 @@ export const api = {
   getReviewAssignmentBatch: (batchId: string): Promise<ReviewAssignmentBatch> =>
     fetchJson(`/review/assignments/batches/${encodeURIComponent(batchId)}`),
 
+  listReviewAssignmentBatchItems: (
+    batchId: string,
+  ): Promise<{ items: ReviewAssignmentItem[]; total: number }> =>
+    fetchJson(`/review/assignments/batches/${encodeURIComponent(batchId)}/items`),
+
   closeReviewAssignmentBatch: (batchId: string): Promise<ReviewAssignmentBatch> =>
     fetchJson(`/review/assignments/batches/${encodeURIComponent(batchId)}/close`, {
       method: 'POST',
     }),
 
-  listMyReviewAssignments: (): Promise<{ items: ReviewAssignmentBatch[]; total: number }> =>
-    fetchJson('/review/assignments/mine'),
+  listMyReviewAssignments: (opts?: {
+    view?: 'active' | 'completed' | 'all'
+  }): Promise<{ items: ReviewAssignmentBatch[]; total: number }> => {
+    const params = new URLSearchParams()
+    if (opts?.view) params.set('view', opts.view)
+    const q = params.toString()
+    return fetchJson(`/review/assignments/mine${q ? `?${q}` : ''}`)
+  },
 
   claimReviewAssignment: (body: {
     batch_id: string
     limit?: number
   }): Promise<{ items: ReviewAssignmentItem[]; count: number }> =>
     fetchJson('/review/assignments/claim', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  claimLowConfidenceReviewBatch: (body: {
+    limit: number
+  }): Promise<ReviewAssignmentBatch> =>
+    fetchJson('/review/assignments/claim-low-confidence', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -561,4 +631,75 @@ export const api = {
 
   deleteDataset: (snapshotId: string): Promise<DatasetSnapshot> =>
     fetchJson(`/datasets/${encodeURIComponent(snapshotId)}`, { method: 'DELETE' }),
+
+  getPipelineSettings: (): Promise<PipelineSettingsResponse> =>
+    fetchJson('/pipeline/settings'),
+
+  savePipelineSettings: (body: Partial<PipelineRunSettings>): Promise<{ settings: PipelineRunSettings }> =>
+    fetchJson('/pipeline/settings', { method: 'PUT', body: JSON.stringify(body) }),
+
+  retryPipelineRun: (body: {
+    clip_id: string
+    run_id?: string
+  }): Promise<{
+    ok: boolean
+    clip_id: string
+    run_id: string
+    pipeline_status?: string
+  }> => fetchJson('/pipeline/runs/retry', { method: 'POST', body: JSON.stringify(body) }),
+
+  listPipelineExecutions: (opts?: {
+    page?: number
+    page_size?: number
+  }): Promise<PipelineExecutionListResponse> => {
+    const params = new URLSearchParams()
+    if (opts?.page != null) params.set('page', String(opts.page))
+    if (opts?.page_size != null) params.set('page_size', String(opts.page_size))
+    const q = params.toString()
+    return fetchJson(`/pipeline/executions${q ? `?${q}` : ''}`)
+  },
+
+  createPipelineExecution: async (
+    files: File[],
+    opts?: {
+      onUploadProgress?: (ev: { loaded: number; total: number; percent: number }) => void
+    },
+  ): Promise<{
+    run_id: string
+    label: string
+    started_at: string
+    ds: string
+    clips: { clip_id: string; oss_key: string }[]
+  }> => {
+    const form = new FormData()
+    for (const file of files) {
+      form.append('files', file)
+    }
+    const res = await http.post('/pipeline/executions', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+      onUploadProgress: (event) => {
+        if (!opts?.onUploadProgress) return
+        const loaded = event.loaded ?? 0
+        const total = event.total && event.total > 0 ? event.total : loaded
+        const percent = total > 0 ? Math.min(100, Math.round((loaded * 100) / total)) : 0
+        opts.onUploadProgress({ loaded, total, percent })
+      },
+    })
+    return res.data
+  },
+
+  cancelPipelineExecution: (runId: string): Promise<{
+    run_id: string
+    cancelled_clips: number
+    unchanged_clips: number
+  }> =>
+    fetchJson(`/pipeline/executions/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
+
+  register: (body: {
+    username: string
+    password: string
+    display_name?: string
+  }): Promise<RegisterResponse> =>
+    fetchJson('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
 }

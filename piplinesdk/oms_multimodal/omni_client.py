@@ -16,7 +16,7 @@ from typing import Any
 from openai import OpenAI
 
 from .rosbag_parser import Clip
-from .taxonomy import parse_label_json, taxonomy_prompt_block
+from .taxonomy import parse_label_json, taxonomy_prompt_block, normalize_model_labels
 
 
 class OmniLabelClient:
@@ -29,8 +29,10 @@ class OmniLabelClient:
         api_key: str | None = None,
         workspace_id: str | None = None,
         region: str = "cn-beijing",
+        omni_label_prompt: dict[str, Any] | None = None,
     ):
         self.model = model
+        self.omni_label_prompt = omni_label_prompt
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
         self.workspace_id = workspace_id or os.getenv("DASHSCOPE_WORKSPACE_ID", "")
         self.region = region or os.getenv("DASHSCOPE_REGION", "cn-beijing")
@@ -40,7 +42,8 @@ class OmniLabelClient:
             raise RuntimeError("DASHSCOPE_WORKSPACE_ID is not configured")
 
         base_url = f"https://{self.workspace_id}.{self.region}.maas.aliyuncs.com/compatible-mode/v1"
-        self.client = OpenAI(api_key=self.api_key, base_url=base_url)
+        timeout_sec = float(os.getenv("OMNI_REQUEST_TIMEOUT_SEC", "900"))
+        self.client = OpenAI(api_key=self.api_key, base_url=base_url, timeout=timeout_sec)
 
     def _frame_data_uri(self, image_path: str) -> str:
         """将本地图片转为 Base64 Data URI。"""
@@ -89,18 +92,16 @@ class OmniLabelClient:
 
         event_text = clip.fusion_text()
         speech_context = clip.speech_context_text()
-        prompt = taxonomy_prompt_block(taxonomy)
-        user_text = (
-            f"Analyze this complete in-cabin rosbag clip ({clip.duration_sec:.1f}s). "
-            "The video field is a time-ordered multi-camera frame sequence. "
-            "The audio covers the full clip. Produce taxonomy labels for the entire scene. "
-            "When ASR transcript is provided, treat it as ground-truth speech content "
-            "and cross-check with audio and video."
+        from .label_prompt import build_omni_user_text, merge_omni_label_prompt
+
+        prompt_params = merge_omni_label_prompt(self.omni_label_prompt)
+        prompt = taxonomy_prompt_block(taxonomy, prompt_params)
+        user_text = build_omni_user_text(
+            duration_sec=clip.duration_sec,
+            speech_context=speech_context,
+            event_text=event_text,
+            params=prompt_params,
         )
-        if speech_context:
-            user_text += f"\n\nMultimodal text context:\n{speech_context}"
-        elif event_text:
-            user_text += f"\n\nEvent texts:\n{event_text}"
         content.append({"type": "text", "text": f"{user_text}\n\n{prompt}"})
 
         completion = self.client.chat.completions.create(
@@ -123,6 +124,9 @@ class OmniLabelClient:
 
         raw_text = "".join(chunks)
         parsed = parse_label_json(raw_text)
+        raw_labels = parsed.get("labels", {}) or {}
+        if isinstance(raw_labels, dict):
+            parsed = {**parsed, "labels": normalize_model_labels(taxonomy, raw_labels)}
         return {
             "clip_id": clip.clip_id,
             "bag_name": clip.bag_name,

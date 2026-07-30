@@ -738,7 +738,7 @@ ODPS 每次 SQL 提交有秒级 instance 开销，数据基本静态（已完成
 
 ```bash
 # 后端
-cd backend
+cd hmi/backend
 cp .env.example .env          # 填入真实 AK/SK
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -760,7 +760,7 @@ npm run build                 # 输出到 dist/
 ### 11.3 连通性验证
 
 ```bash
-cd backend
+cd hmi/backend
 source .venv/bin/activate
 python probe.py               # 检查 ODPS 连通性和三表数据
 ```

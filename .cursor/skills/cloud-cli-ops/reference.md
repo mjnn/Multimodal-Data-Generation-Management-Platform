@@ -10,7 +10,7 @@ Last verified: 2026-06-11 (ossutil 2.3.0)
 Single source: repo root `.env`. Sync to CLI configs:
 
 ```powershell
-cd D:\cursor_project\rosbag_to_labels_pipline\pipeline
+cd pipeline
 py -3 scripts\sync_cloud_cli_config.py
 ```
 

@@ -6,6 +6,8 @@ type ListQueryOptions = {
   defaultStatus?: string
   pageKey?: string
   defaultPage?: number
+  pageSizeKey?: string
+  defaultPageSize?: number
 }
 
 /**
@@ -17,12 +19,16 @@ export function useListQueryState(options: ListQueryOptions = {}) {
     defaultStatus = 'all',
     pageKey = 'page',
     defaultPage = 1,
+    pageSizeKey = 'pageSize',
+    defaultPageSize = 10,
   } = options
 
   const [searchParams, setSearchParams] = useSearchParams()
 
   const status = searchParams.get(statusKey) ?? defaultStatus
   const page = Math.max(1, Number(searchParams.get(pageKey) ?? defaultPage) || defaultPage)
+  const rawPageSize = Number(searchParams.get(pageSizeKey) ?? defaultPageSize) || defaultPageSize
+  const pageSize = [10, 20, 50, 100].includes(rawPageSize) ? rawPageSize : defaultPageSize
 
   const patchParams = useCallback(
     (patch: Record<string, string | null>) => {
@@ -63,9 +69,19 @@ export function useListQueryState(options: ListQueryOptions = {}) {
     [pageKey, patchParams],
   )
 
+  const setPageSize = useCallback(
+    (value: number) => {
+      patchParams({
+        [pageSizeKey]: value === defaultPageSize ? null : String(value),
+        [pageKey]: null,
+      })
+    },
+    [defaultPageSize, pageKey, pageSizeKey, patchParams],
+  )
+
   return useMemo(
-    () => ({ status, page, setStatus, setPage }),
-    [page, setPage, setStatus, status],
+    () => ({ status, page, pageSize, setStatus, setPage, setPageSize }),
+    [page, pageSize, setPage, setPageSize, setStatus, status],
   )
 }
 

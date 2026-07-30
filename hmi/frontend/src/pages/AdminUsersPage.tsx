@@ -103,11 +103,15 @@ export function AdminUsersPage() {
       dataIndex: 'roles',
       key: 'roles',
       render: (roles: AppRole[]) =>
-        roles.map((r) => (
-          <Tag key={r} color={r === 'admin' ? 'red' : 'blue'}>
-            {ROLE_LABELS[r] ?? r}
-          </Tag>
-        )),
+        roles.length ? (
+          roles.map((r) => (
+            <Tag key={r} color={r === 'admin' ? 'red' : r === 'anonymous' ? 'default' : 'blue'}>
+              {ROLE_LABELS[r] ?? r}
+            </Tag>
+          ))
+        ) : (
+          <Tag color="default">匿名（待分配）</Tag>
+        ),
     },
     {
       title: '状态',
@@ -131,7 +135,7 @@ export function AdminUsersPage() {
     <PageStack>
       <PageHeader
         title="用户与角色管理"
-        description="管理系统用户账号、角色权限与启用状态。"
+        description="自助注册默认为匿名用户（仅数据总览）；请在此为用户分配业务角色（如 reviewer、pipeline_manager）。"
         icon={<TeamOutlined />}
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>

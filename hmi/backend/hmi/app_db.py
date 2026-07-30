@@ -15,9 +15,22 @@ from hmi.config import PROJECT_ROOT
 
 APP_DB_PATH = PROJECT_ROOT / "data" / "app.db"
 
-VALID_ROLES = frozenset({"admin", "reviewer", "dataset_manager", "model_trainer"})
+VALID_ROLES = frozenset(
+    {
+        "admin",
+        "reviewer",
+        "dataset_manager",
+        "model_trainer",
+        "pipeline_manager",
+        "anonymous",
+    }
+)
 
-_SCHEMA = """
+_ROLE_CHECK = (
+    "'admin','reviewer','dataset_manager','model_trainer','pipeline_manager','anonymous'"
+)
+
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS app_user (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,
@@ -30,9 +43,20 @@ CREATE TABLE IF NOT EXISTS app_user (
 
 CREATE TABLE IF NOT EXISTS app_user_role (
   user_id TEXT NOT NULL REFERENCES app_user(id),
-  role TEXT NOT NULL CHECK (role IN ('admin','reviewer','dataset_manager','model_trainer')),
+  role TEXT NOT NULL CHECK (role IN ({_ROLE_CHECK})),
   PRIMARY KEY (user_id, role)
 );
+
+CREATE TABLE IF NOT EXISTS app_user_oss_shortcut (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES app_user(id),
+  label TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_user_oss_shortcut_user ON app_user_oss_shortcut(user_id);
 """
 
 
@@ -51,10 +75,35 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
+def _migrate_app_user_role_enum(conn: sqlite3.Connection) -> None:
+    """Expand app_user_role CHECK when new roles are added (pipeline_manager, anonymous, …)."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='app_user_role'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    ddl = row[0]
+    if "pipeline_manager" in ddl and "anonymous" in ddl:
+        return
+    conn.executescript(
+        f"""
+        CREATE TABLE app_user_role_new (
+          user_id TEXT NOT NULL REFERENCES app_user(id),
+          role TEXT NOT NULL CHECK (role IN ({_ROLE_CHECK})),
+          PRIMARY KEY (user_id, role)
+        );
+        INSERT INTO app_user_role_new SELECT user_id, role FROM app_user_role;
+        DROP TABLE app_user_role;
+        ALTER TABLE app_user_role_new RENAME TO app_user_role;
+        """
+    )
+
+
 def ensure_schema() -> None:
     APP_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(APP_DB_PATH) as conn:
         conn.executescript(_SCHEMA)
+        _migrate_app_user_role_enum(conn)
         conn.commit()
     from hmi.taxonomy_db import ensure_taxonomy_schema
 
@@ -255,3 +304,56 @@ def update_user(
     updated = get_user_by_id(user_id)
     assert updated is not None
     return updated
+
+
+def list_user_oss_shortcuts(user_id: str) -> list[dict[str, Any]]:
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, label, prefix, sort_order
+            FROM app_user_oss_shortcut
+            WHERE user_id = ?
+            ORDER BY sort_order ASC, created_at ASC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [{"id": r["id"], "label": r["label"], "prefix": r["prefix"]} for r in rows]
+
+
+def replace_user_oss_shortcuts(
+    user_id: str,
+    items: list[dict[str, str]],
+    *,
+    max_items: int = 50,
+) -> list[dict[str, Any]]:
+    if len(items) > max_items:
+        raise ValueError(f"at most {max_items} shortcuts allowed")
+    now = _utc_now_iso()
+    normalized: list[tuple[str, str, str, int]] = []
+    seen_prefixes: set[str] = set()
+    for idx, item in enumerate(items):
+        label = (item.get("label") or "").strip()
+        prefix = (item.get("prefix") or "").strip().replace("\\", "/").lstrip("/")
+        if not label or not prefix:
+            raise ValueError("label and prefix required")
+        if ".." in prefix.split("/"):
+            raise ValueError(f"invalid prefix: {prefix}")
+        if not prefix.endswith("/"):
+            prefix += "/"
+        if prefix in seen_prefixes:
+            continue
+        seen_prefixes.add(prefix)
+        sid = (item.get("id") or "").strip() or str(uuid.uuid4())
+        normalized.append((sid, label, prefix, idx))
+
+    with db_conn() as conn:
+        conn.execute("DELETE FROM app_user_oss_shortcut WHERE user_id = ?", (user_id,))
+        for sid, label, prefix, sort_order in normalized:
+            conn.execute(
+                """
+                INSERT INTO app_user_oss_shortcut (id, user_id, label, prefix, sort_order, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (sid, user_id, label, prefix, sort_order, now),
+            )
+    return list_user_oss_shortcuts(user_id)

@@ -1,7 +1,7 @@
 import { DatabaseOutlined, LockOutlined, UserOutlined } from '@ant-design/icons'
 import { Alert, Button, Form, Input, Spin, Typography } from 'antd'
 import { useEffect, useState } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { APP_NAME, APP_TAGLINE } from '../config/app'
 
@@ -96,6 +96,9 @@ export function LoginPage() {
               登录
             </Button>
           </Form.Item>
+          <Typography.Paragraph type="secondary" style={{ textAlign: 'center', marginTop: 12, marginBottom: 0 }}>
+            没有账号？ <Link to="/register">注册</Link>
+          </Typography.Paragraph>
         </Form>
       </div>
     </div>

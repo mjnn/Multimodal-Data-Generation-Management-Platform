@@ -13,7 +13,14 @@ from hmi.clip_context import (
     list_ds_partitions,
     resolve_ds_for_run,
 )
-from hmi.config import PIPELINE_STEP_ORDER, STEP_LABELS, get_settings, table_name
+from hmi.config import (
+    PIPELINE_STEP_ORDER,
+    SDK_PIPELINE_STEP_ORDER,
+    STEP_LABELS,
+    pipeline_step_label,
+    sdk_pipeline_step_order,
+)
+from hmi.data_source import is_local_mode
 from hmi.db import normalize_pipeline_status, query, sql_quote
 from hmi.oss_signer import _bucket
 
@@ -32,6 +39,14 @@ def bag_pipeline_cache_clear() -> None:
 def _read_dispatch_manifest() -> dict[str, Any] | None:
     if "manifest" in _dispatch_manifest_cache:
         return _dispatch_manifest_cache["manifest"]
+    from hmi.data_source import is_local_mode
+
+    if is_local_mode():
+        from hmi.local.oss_publish import read_local_dispatch_manifest
+
+        manifest = read_local_dispatch_manifest()
+        _dispatch_manifest_cache["manifest"] = manifest
+        return manifest
     try:
         raw = _bucket().get_object(DISPATCH_MANIFEST_KEY).read()
         loaded = json.loads(raw.decode("utf-8"))
@@ -193,8 +208,115 @@ def compute_overall_status(
     return "idle"
 
 
+def _get_bag_pipeline_local(bag_oss_key: str) -> dict[str, Any]:
+    from hmi.local import store
+
+    out: dict[str, Any] = {
+        "oss_key": bag_oss_key,
+        "clip_id": None,
+        "run_id": None,
+        "active_run_id": None,
+        "is_active_run": True,
+        "ds": None,
+        "run_status": None,
+        "pipeline_status": "not_discovered",
+        "pipeline_steps": _pending_steps(include_job0=False),
+        "message": "尚未登记 dim_clip",
+    }
+    row = store.query_one(
+        "SELECT clip_id, active_run_id FROM dim_clip WHERE bag_oss_key=? LIMIT 1",
+        (bag_oss_key.strip(),),
+    )
+    if not row:
+        alt = bag_oss_key.strip()
+        if alt.startswith("local://"):
+            alt = alt[len("local://") :]
+        row = store.query_one(
+            "SELECT clip_id, active_run_id FROM dim_clip WHERE bag_oss_key=? LIMIT 1",
+            (f"local://{alt}",),
+        )
+    if not row:
+        return out
+
+    clip_id = str(row["clip_id"])
+    run_id = str(row.get("active_run_id") or "")
+    out["clip_id"] = clip_id
+    out["active_run_id"] = run_id or None
+    if not run_id:
+        out.update(
+            {
+                "pipeline_status": "idle",
+                "message": "已登记 clip，尚无 active_run",
+            }
+        )
+        return out
+
+    run_row = store.query_one(
+        "SELECT ds, status FROM pipeline_run WHERE clip_id=? AND run_id=? ORDER BY ds DESC LIMIT 1",
+        (clip_id, run_id),
+    )
+    if not run_row:
+        out.update(
+            {
+                "pipeline_status": "pending",
+                "message": "等待本地 SDK 轮询",
+            }
+        )
+        return out
+
+    ds = str(run_row["ds"])
+    run_status = str(run_row.get("status") or "pending")
+    step_rows = store.query(
+        "SELECT step_id, status FROM pipeline_step WHERE run_id=? AND clip_id=? AND ds=?",
+        (run_id, clip_id, ds),
+    )
+    step_map = {
+        str(r["step_id"]): normalize_pipeline_status(str(r["status"])) for r in step_rows
+    }
+    order = (
+        sdk_pipeline_step_order(local=True)
+        if step_map.keys() & set(SDK_PIPELINE_STEP_ORDER)
+        else PIPELINE_STEP_ORDER
+    )
+    steps = [
+        {
+            "step_id": sid,
+            "label": pipeline_step_label(sid, local=True),
+            "status": step_map.get(sid, "pending"),
+        }
+        for sid in order
+        if sid not in ("job0_discover",)
+    ]
+    pipeline_status = compute_overall_status(steps, run_status=run_status)
+    if run_status == "completed" and pipeline_status == "running":
+        pipeline_status = "completed"
+    if run_status == "failed":
+        pipeline_status = "failed"
+    if run_status == "pending" and pipeline_status == "idle":
+        pipeline_status = "pending"
+
+    out.update(
+        {
+            "run_id": run_id,
+            "ds": ds,
+            "run_status": run_status,
+            "pipeline_status": pipeline_status,
+            "pipeline_steps": steps,
+            "message": None,
+        }
+    )
+    return out
+
+
 def get_bag_pipeline(oss_key: str, *, refresh: bool = False) -> dict[str, Any]:
     cache_key = oss_key.strip()
+    if is_local_mode():
+        if not refresh and cache_key in _bag_pipeline_cache:
+            return _bag_pipeline_cache[cache_key]
+        out = _get_bag_pipeline_local(cache_key)
+        _bag_pipeline_cache[cache_key] = out
+        return out
+
     if not refresh and cache_key in _bag_pipeline_cache:
         return _bag_pipeline_cache[cache_key]
 

@@ -5,7 +5,7 @@
 ## 启动
 
 ```bash
-cd frontend
+cd hmi/frontend
 npm install
 npm run dev   # http://localhost:5173
 ```
@@ -39,10 +39,11 @@ npm run dev   # http://localhost:5173
 ## 联调
 
 ```bash
-# 终端 1：后端
-cd backend && pip install -r requirements.txt && python run.py
+# 终端 1：后端（仓库根）
+cd hmi/backend && pip install -r requirements.txt && python run.py
 
 # 终端 2：前端（/api 代理到 :8000）
+cd hmi/frontend && npm run dev
 cd frontend && npm run dev
 ```
 

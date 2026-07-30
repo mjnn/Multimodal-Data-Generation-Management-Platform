@@ -1,9 +1,10 @@
-import { AudioOutlined, EditOutlined, InfoCircleOutlined, TagOutlined } from '@ant-design/icons'
-import { Button, Collapse, Descriptions, Empty, Space, Tag, Typography } from 'antd'
+import { AudioOutlined, InfoCircleOutlined, TagOutlined } from '@ant-design/icons'
+import { Collapse, Descriptions, Empty, Space, Tag, Typography } from 'antd'
 import type { AxiosError } from 'axios'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import type {
+  AiLabelHint,
   AudioSegment,
   ClipLabelReview,
   ClipLabelView,
@@ -15,13 +16,14 @@ import { useAuth } from '../auth/AuthContext'
 import { canAccessReview } from '../auth/roles'
 import { ContentCard } from './ui'
 import { ClipLabelTreeView } from './ClipLabelTreeView'
-import { ClipQuickReviewModal } from './ClipQuickReviewModal'
+import { extractAiHintsFromLabels } from '../utils/labelDisplay'
 
 interface Props {
   clip: ClipOverview
   runId: string
   cursorNs: number
   clipLabel?: ClipLabelView | null
+  sceneDescription?: string | null
   asrSegments?: AudioSegment[]
   events?: EventLabel[]
 }
@@ -36,12 +38,12 @@ export function MomentDetailPanel({
   runId,
   cursorNs,
   clipLabel,
+  sceneDescription,
   asrSegments = [],
   events = [],
 }: Props) {
   const { user } = useAuth()
-  const canReview = canAccessReview(user?.roles)
-  const [reviewOpen, setReviewOpen] = useState(false)
+  const canQuickReview = canAccessReview(user?.roles)
   const [review, setReview] = useState<ClipLabelReview | null>(null)
   const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
   const [reviewLoading, setReviewLoading] = useState(false)
@@ -52,6 +54,11 @@ export function MomentDetailPanel({
 
   const asrText = useMemo(() => mergeAsrText(asrSegments), [asrSegments])
   const labelsForTree = review?.labels_json ?? label?.labels_json ?? {}
+  const aiLabelHints = useMemo((): Record<string, AiLabelHint> => {
+    const fromReview = review?.ai_label_hints ?? {}
+    if (Object.keys(fromReview).length > 0) return fromReview
+    return extractAiHintsFromLabels((label?.labels_json ?? {}) as Record<string, unknown>)
+  }, [review?.ai_label_hints, label?.labels_json])
 
   const loadReviewMeta = useCallback(async () => {
     if (!clip.clip_id || !runId) return
@@ -98,7 +105,6 @@ export function MomentDetailPanel({
 
   const handleReviewSaved = (updated: ClipLabelReview) => {
     setReview(updated)
-    void loadReviewMeta()
   }
 
   const collapseItems = [
@@ -133,24 +139,9 @@ export function MomentDetailPanel({
     {
       key: 'labels',
       label: (
-        <div className="clip-detail-panel__collapse-label">
-          <Typography.Text strong>
-            <TagOutlined /> Clip 标签
-          </Typography.Text>
-          {canReview && label?.clip_label_ready ? (
-            <Button
-              type="primary"
-              size="small"
-              icon={<EditOutlined />}
-              onClick={(e) => {
-                e.stopPropagation()
-                setReviewOpen(true)
-              }}
-            >
-              快速校核
-            </Button>
-          ) : null}
-        </div>
+        <Typography.Text strong>
+          <TagOutlined /> Clip 标签
+        </Typography.Text>
       ),
       children: label?.clip_label_ready ? (
         reviewLoading ? (
@@ -160,7 +151,11 @@ export function MomentDetailPanel({
             taxonomyNodes={taxonomyNodes}
             labelsJson={labelsForTree as Record<string, unknown>}
             fieldReviewedLabelIds={review?.field_reviewed_label_ids ?? []}
-            clipReviewed={review?.review_status === 'reviewed'}
+            aiLabelHints={aiLabelHints}
+            canQuickReview={canQuickReview && Boolean(label?.clip_label_ready)}
+            clipId={clip.clip_id}
+            runId={runId}
+            onReviewSaved={handleReviewSaved}
           />
         )
       ) : (
@@ -208,6 +203,14 @@ export function MomentDetailPanel({
   return (
     <>
       <ContentCard title="Clip 详情" className="clip-detail-panel" noPadding>
+        {sceneDescription ? (
+          <Typography.Paragraph
+            type="secondary"
+            style={{ fontSize: 13, margin: '0 16px 12px', paddingTop: 12 }}
+          >
+            {sceneDescription}
+          </Typography.Paragraph>
+        ) : null}
         <Collapse
           className="clip-detail-panel__collapse"
           bordered={false}
@@ -215,16 +218,6 @@ export function MomentDetailPanel({
           items={collapseItems}
         />
       </ContentCard>
-
-      {canReview ? (
-        <ClipQuickReviewModal
-          open={reviewOpen}
-          clipId={clip.clip_id}
-          runId={runId}
-          onClose={() => setReviewOpen(false)}
-          onSaved={handleReviewSaved}
-        />
-      ) : null}
     </>
   )
 }

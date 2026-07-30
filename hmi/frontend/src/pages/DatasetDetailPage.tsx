@@ -34,16 +34,11 @@ const STATUS_LABEL: Record<DatasetStatus, string> = {
   building: '构建中',
   ready: '就绪',
   failed: '失败',
-  archived: '已归档',
+  archived: '已删除',
 }
 
 function formatFilterJson(filter: DatasetSnapshot['filter_json']): string {
-  const parts: string[] = []
-  if (filter.include_pending_review) {
-    parts.push('含待校核')
-  } else {
-    parts.push('仅已校核')
-  }
+  const parts: string[] = ['仅已校核 clip']
   if (filter.sample_size) {
     parts.push(`随机取样 ${filter.sample_size} 条`)
   }
@@ -144,7 +139,7 @@ export function DatasetDetailPage() {
     if (!id) return
     try {
       await api.deleteDataset(id)
-      message.success('数据集已归档')
+      message.success('数据集已删除')
       navigate('/datasets')
     } catch {
       message.error('删除失败')
@@ -203,9 +198,9 @@ export function DatasetDetailPage() {
               </Button>
             )}
             {canManage && snapshot.status !== 'archived' && (
-              <Popconfirm title="确认归档此数据集？" onConfirm={() => void handleDelete()}>
+              <Popconfirm title="确认删除此数据集？" onConfirm={() => void handleDelete()}>
                 <Button danger icon={<DeleteOutlined />}>
-                  归档
+                  删除
                 </Button>
               </Popconfirm>
             )}
@@ -234,9 +229,9 @@ export function DatasetDetailPage() {
               </Typography.Text>
             </Space>
           </Descriptions.Item>
-          <Descriptions.Item label="创建时间">{snapshot.created_at}</Descriptions.Item>
-          <Descriptions.Item label="就绪时间">{snapshot.ready_at ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label="更新时间">{snapshot.updated_at}</Descriptions.Item>
+          <Descriptions.Item label="创建时间">{api.formatDateTime(snapshot.created_at)}</Descriptions.Item>
+          <Descriptions.Item label="就绪时间">{api.formatDateTime(snapshot.ready_at)}</Descriptions.Item>
+          <Descriptions.Item label="更新时间">{api.formatDateTime(snapshot.updated_at)}</Descriptions.Item>
         </Descriptions>
       </ContentCard>
     </PageStack>

@@ -148,6 +148,17 @@ def get_poller_status() -> dict[str, Any]:
 
 
 def _run_sync_subprocess(clip_id: str, run_id: str) -> tuple[bool, str]:
+    from hmi.data_source import is_local_mode
+
+    if is_local_mode():
+        try:
+            from hmi.local.sync_from_oss import sync_runtime_from_local_oss
+
+            result = sync_runtime_from_local_oss(clip_id, run_id)
+            return True, f"local OSS sync: {result}"
+        except Exception as exc:
+            return False, str(exc)
+
     script = HMI_ROOT / "scripts" / "sync_hmi_local.py"
     if not script.is_file():
         return False, f"sync script missing: {script}"

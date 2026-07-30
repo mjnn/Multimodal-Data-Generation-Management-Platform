@@ -9,12 +9,14 @@ from fastapi import Depends, HTTPException, Request
 
 from hmi.app_db import get_user_by_id
 from hmi.auth.jwt_utils import ACCESS_COOKIE, decode_token
+from hmi.auth.roles import ROLE_ANONYMOUS, has_standard_role, normalized_roles
 
 PUBLIC_API_PATHS = frozenset(
     {
         "/api/health",
         "/api/auth/login",
         "/api/auth/refresh",
+        "/api/auth/register",
     }
 )
 
@@ -88,6 +90,23 @@ def require_oss_access(user: dict[str, Any] = Depends(get_current_user)) -> dict
     return user
 
 
+def require_pipeline_access(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    roles = user.get("roles") or []
+    if not any(r in roles for r in ("admin", "dataset_manager", "pipeline_manager")):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "403_FORBIDDEN",
+                "message": "pipeline access requires admin, dataset_manager, or pipeline_manager",
+            },
+        )
+    return user
+
+
+def require_pipeline_write(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    return require_pipeline_access(user)
+
+
 def require_oss_write(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     return require_oss_access(user)
 
@@ -123,6 +142,45 @@ def require_dataset_manager(user: dict[str, Any] = Depends(get_current_user)) ->
             detail={
                 "code": "403_FORBIDDEN",
                 "message": "dataset write requires admin or dataset_manager",
+            },
+        )
+    return user
+
+
+def require_overview_access(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """数据总览：匿名或任意标准角色。"""
+    roles = normalized_roles(user.get("roles"))
+    if ROLE_ANONYMOUS in roles or has_standard_role(roles):
+        return user
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "403_FORBIDDEN",
+            "message": "overview access denied",
+        },
+    )
+
+
+def require_clip_explorer_access(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Clip 时间轴 / 检索：须具备除 anonymous 外的业务角色。"""
+    if not has_standard_role(user.get("roles")):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "403_FORBIDDEN",
+                "message": "Clip 详情与检索需要管理员分配的业务角色（匿名账号仅可查看数据总览）",
+            },
+        )
+    return user
+
+
+def require_non_anonymous(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    if not has_standard_role(user.get("roles")):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "403_FORBIDDEN",
+                "message": "此操作需要除匿名外的业务角色",
             },
         )
     return user

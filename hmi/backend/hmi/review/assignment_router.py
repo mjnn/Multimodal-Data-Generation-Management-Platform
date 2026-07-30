@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from hmi.app_db import get_user_by_id, list_users
@@ -21,6 +21,7 @@ from hmi.review.assignment_db import (
     save_workbench_session,
 )
 from hmi.review.assignment_service import (
+    claim_low_confidence_batch,
     dispatch_assignment_batch,
     filter_tasks_for_batch,
     list_all_batches,
@@ -46,6 +47,10 @@ class PreviewBatchBody(BaseModel):
 class ClaimBody(BaseModel):
     batch_id: str = Field(min_length=1)
     limit: int = Field(default=50, ge=1, le=500)
+
+
+class ClaimLowConfidenceBody(BaseModel):
+    limit: int = Field(default=20, ge=1, le=500)
 
 
 class SaveWorkbenchSessionBody(BaseModel):
@@ -154,9 +159,17 @@ def api_list_batch_items(
     batch_id: str,
     _admin: dict = Depends(require_admin),
 ) -> dict[str, Any]:
+    from hmi.app_db import get_user_by_id
+
     if not get_batch(batch_id):
         raise _not_found("任务不存在")
     items = list_batch_items(batch_id)
+    for item in items:
+        aid = item.get("assignee_id")
+        if aid:
+            user = get_user_by_id(str(aid))
+            item["assignee_username"] = user["username"] if user else None
+            item["assignee_display_name"] = user["display_name"] if user else str(aid)[:8]
     return {"items": items, "total": len(items)}
 
 
@@ -179,8 +192,11 @@ def api_close_batch(
 
 
 @router.get("/mine")
-def api_my_assignments(user: dict = Depends(require_reviewer)) -> dict[str, Any]:
-    batches = list_reviewer_batches(user["id"])
+def api_my_assignments(
+    user: dict = Depends(require_reviewer),
+    view: str = Query("all", pattern="^(active|completed|all)$"),
+) -> dict[str, Any]:
+    batches = list_reviewer_batches(user["id"], view=view)
     return {"items": batches, "total": len(batches)}
 
 
@@ -207,6 +223,29 @@ def api_claim_batch(
         detail={"count": len(claimed)},
     )
     return {"items": claimed, "count": len(claimed)}
+
+
+@router.post("/claim-low-confidence", status_code=201)
+def api_claim_low_confidence(
+    body: ClaimLowConfidenceBody,
+    user: dict = Depends(require_reviewer),
+) -> dict[str, Any]:
+    try:
+        batch = claim_low_confidence_batch(
+            assignee_id=user["id"],
+            limit=body.limit,
+            created_by=user["id"],
+        )
+    except ValueError as exc:
+        raise _validation_error(str(exc)) from exc
+    append_audit_log(
+        actor_id=user["id"],
+        action="review.assignment.claim_low_confidence",
+        resource_type="review_assignment_batch",
+        resource_id=batch["id"],
+        detail={"limit": body.limit, "item_total": batch.get("item_total")},
+    )
+    return batch
 
 
 @router.get("/batches/{batch_id}/work-queue")

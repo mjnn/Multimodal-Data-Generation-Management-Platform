@@ -1,6 +1,6 @@
 [
   {
-    "bag": "D:\\cursor_project\\labeling_and_embedding_test\\testdata\\2026-07-23_14-02-57\\output.bag",
+    "bag": "fixtures/bags/2026-07-23_14-02-57/output.bag",
     "topics": [
       {
         "name": "/audio",
@@ -33,19 +33,19 @@
         "message_count": 399
       }
     ],
-    "embeddings_out": "output\\pipeline_latest\\2026-07-23_14-02-57\\fusion_embeddings.jsonl",
-    "labels_out": "output\\pipeline_latest\\2026-07-23_14-02-57\\labels.jsonl",
+    "embeddings_out": "2026-07-23_14-02-57/fusion_embeddings.jsonl",
+    "labels_out": "2026-07-23_14-02-57/labels.jsonl",
     "clips_out": null,
-    "videos_out": "output\\pipeline_latest\\2026-07-23_14-02-57\\clip_videos.jsonl",
+    "videos_out": "2026-07-23_14-02-57/clip_videos.jsonl",
     "embedding_rows": 1,
     "label_rows": 1,
     "clip_rows": 0,
     "video_rows": 1,
     "errors": [],
-    "scene_dir": "output\\pipeline_latest\\2026-07-23_14-02-57"
+    "scene_dir": "2026-07-23_14-02-57"
   },
   {
-    "bag": "D:\\cursor_project\\labeling_and_embedding_test\\testdata\\2026-07-23_14-11-24\\output.bag",
+    "bag": "fixtures/bags/2026-07-23_14-11-24/output.bag",
     "topics": [
       {
         "name": "/audio",
@@ -78,19 +78,19 @@
         "message_count": 347
       }
     ],
-    "embeddings_out": "output\\pipeline_latest\\2026-07-23_14-11-24\\fusion_embeddings.jsonl",
-    "labels_out": "output\\pipeline_latest\\2026-07-23_14-11-24\\labels.jsonl",
+    "embeddings_out": "2026-07-23_14-11-24/fusion_embeddings.jsonl",
+    "labels_out": "2026-07-23_14-11-24/labels.jsonl",
     "clips_out": null,
-    "videos_out": "output\\pipeline_latest\\2026-07-23_14-11-24\\clip_videos.jsonl",
+    "videos_out": "2026-07-23_14-11-24/clip_videos.jsonl",
     "embedding_rows": 1,
     "label_rows": 1,
     "clip_rows": 0,
     "video_rows": 1,
     "errors": [],
-    "scene_dir": "output\\pipeline_latest\\2026-07-23_14-11-24"
+    "scene_dir": "2026-07-23_14-11-24"
   },
   {
-    "bag": "D:\\cursor_project\\labeling_and_embedding_test\\testdata\\2026-07-23_14-12-31\\output.bag",
+    "bag": "fixtures/bags/2026-07-23_14-12-31/output.bag",
     "topics": [
       {
         "name": "/audio",
@@ -123,10 +123,10 @@
         "message_count": 339
       }
     ],
-    "embeddings_out": "output\\pipeline_latest\\2026-07-23_14-12-31\\fusion_embeddings.jsonl",
-    "labels_out": "output\\pipeline_latest\\2026-07-23_14-12-31\\labels.jsonl",
+    "embeddings_out": "2026-07-23_14-12-31/fusion_embeddings.jsonl",
+    "labels_out": "2026-07-23_14-12-31/labels.jsonl",
     "clips_out": null,
-    "videos_out": "output\\pipeline_latest\\2026-07-23_14-12-31\\clip_videos.jsonl",
+    "videos_out": "2026-07-23_14-12-31/clip_videos.jsonl",
     "embedding_rows": 1,
     "label_rows": 1,
     "clip_rows": 0,

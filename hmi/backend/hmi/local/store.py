@@ -78,6 +78,51 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "multi_ai_meta_json" not in clip_label_cols:
         conn.execute("ALTER TABLE fact_clip_label ADD COLUMN multi_ai_meta_json TEXT")
 
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS pipeline_execution (
+          run_id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+    from hmi.local.pipeline_execution import backfill_executions_from_runs
+
+    backfill_executions_from_runs(conn)
+
+    step_cols = {row[1] for row in conn.execute("PRAGMA table_info(pipeline_step)")}
+    if step_cols and "clip_id" not in step_cols:
+        conn.executescript(
+            """
+            CREATE TABLE pipeline_step_new (
+              run_id TEXT NOT NULL,
+              clip_id TEXT NOT NULL DEFAULT '',
+              ds TEXT NOT NULL,
+              step_id TEXT NOT NULL,
+              status TEXT,
+              started_at TEXT,
+              finished_at TEXT,
+              error_message TEXT,
+              PRIMARY KEY (run_id, clip_id, ds, step_id)
+            );
+            INSERT INTO pipeline_step_new (
+              run_id, clip_id, ds, step_id, status, started_at, finished_at, error_message
+            )
+            SELECT s.run_id,
+              COALESCE(
+                (SELECT r.clip_id FROM pipeline_run r
+                 WHERE r.run_id = s.run_id AND r.ds = s.ds LIMIT 1),
+                ''
+              ),
+              s.ds, s.step_id, s.status, s.started_at, s.finished_at, s.error_message
+            FROM pipeline_step s;
+            DROP TABLE pipeline_step;
+            ALTER TABLE pipeline_step_new RENAME TO pipeline_step;
+            """
+        )
+
 
 def ensure_db() -> Path:
     LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
@@ -126,6 +171,16 @@ def execute(sql: str, params: tuple[Any, ...] | list[Any] = ()) -> None:
         conn.close()
 
 
+def execute_rowcount(sql: str, params: tuple[Any, ...] | list[Any] = ()) -> int:
+    conn = _connect()
+    try:
+        cur = conn.execute(sql, params)
+        conn.commit()
+        return int(cur.rowcount)
+    finally:
+        conn.close()
+
+
 def executemany(sql: str, rows: list[tuple[Any, ...]]) -> None:
     if not rows:
         return
@@ -154,7 +209,8 @@ def clear_clip_data(clip_id: str, run_id: str, ds: str) -> None:
     conn = _connect()
     try:
         conn.execute(
-            "DELETE FROM pipeline_step WHERE run_id=? AND ds=?", (run_id, ds)
+            "DELETE FROM pipeline_step WHERE run_id=? AND clip_id=? AND ds=?",
+            (run_id, clip_id, ds),
         )
         for tbl in (
             "pipeline_run",

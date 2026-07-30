@@ -1,8 +1,18 @@
-import { CheckCircleOutlined, ClockCircleOutlined } from '@ant-design/icons'
-import { Collapse, Space, Tag, Typography } from 'antd'
-import { useMemo } from 'react'
-import type { TaxonomyNodeDetail } from '../api/types'
+import { CheckCircleOutlined, ClockCircleOutlined, EditOutlined } from '@ant-design/icons'
+import { Button, Collapse, Space, Tag, Typography } from 'antd'
+import { useMemo, useState } from 'react'
+import type { AiLabelHint, ClipLabelReview, TaxonomyNodeDetail } from '../api/types'
+import { AiLabelHintReference } from './AiLabelHintReference'
+import { LabelQuickReviewModal } from './LabelQuickReviewModal'
 import { clipLabelsFlat, formatLabelValue } from '../utils/labelDisplay'
+
+function hasClipLabelValue(flat: Record<string, unknown>, labelId: string): boolean {
+  if (!(labelId in flat)) return false
+  const v = flat[labelId]
+  if (v === null || v === undefined) return false
+  if (typeof v === 'string' && v.trim() === '') return false
+  return true
+}
 
 type LevelGroup = {
   key: string
@@ -34,26 +44,39 @@ type ClipLabelTreeViewProps = {
   taxonomyNodes: TaxonomyNodeDetail[]
   labelsJson: Record<string, unknown>
   fieldReviewedLabelIds?: string[]
-  clipReviewed?: boolean
+  aiLabelHints?: Record<string, AiLabelHint>
+  canQuickReview?: boolean
+  clipId?: string
+  runId?: string
+  onReviewSaved?: (review: ClipLabelReview) => void
 }
 
 export function ClipLabelTreeView({
   taxonomyNodes,
   labelsJson,
   fieldReviewedLabelIds = [],
-  clipReviewed = false,
+  aiLabelHints = {},
+  canQuickReview = false,
+  clipId,
+  runId,
+  onReviewSaved,
 }: ClipLabelTreeViewProps) {
+  const [activeLabelId, setActiveLabelId] = useState<string | null>(null)
+  const [activeLabelName, setActiveLabelName] = useState('')
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<string[]>([])
   const flat = useMemo(() => clipLabelsFlat(labelsJson), [labelsJson])
   const reviewedSet = useMemo(() => new Set(fieldReviewedLabelIds), [fieldReviewedLabelIds])
-  const groups = useMemo(() => groupActiveNodes(taxonomyNodes), [taxonomyNodes])
+  const groups = useMemo(() => {
+    const active = groupActiveNodes(taxonomyNodes)
+    return active
+      .map((group) => ({
+        ...group,
+        nodes: group.nodes.filter((node) => hasClipLabelValue(flat, node.label_id)),
+      }))
+      .filter((group) => group.nodes.length > 0)
+  }, [taxonomyNodes, flat])
 
-  const labelIdsInTaxonomy = useMemo(() => new Set(taxonomyNodes.map((n) => n.label_id)), [taxonomyNodes])
-
-  const orphanEntries = useMemo(() => {
-    return Object.entries(flat).filter(([id]) => !labelIdsInTaxonomy.has(id))
-  }, [flat, labelIdsInTaxonomy])
-
-  if (!groups.length && !orphanEntries.length) {
+  if (!groups.length) {
     return (
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         暂无结构化标签
@@ -61,8 +84,9 @@ export function ClipLabelTreeView({
     )
   }
 
-  const renderRow = (labelId: string, name: string) => {
-    const reviewed = clipReviewed || reviewedSet.has(labelId)
+  const renderRow = (labelId: string, name: string, taxonomyNode: TaxonomyNodeDetail) => {
+    const reviewed = reviewedSet.has(labelId)
+    const hint = aiLabelHints[labelId]
     return (
       <div
         key={labelId}
@@ -83,16 +107,35 @@ export function ClipLabelTreeView({
             {labelId}
           </Typography.Text>
           <Typography.Text style={{ fontSize: 13, display: 'block', marginTop: 4, wordBreak: 'break-word' }}>
-            {formatLabelValue(flat[labelId])}
+            {formatLabelValue(flat[labelId], taxonomyNode)}
           </Typography.Text>
+          <div style={{ marginTop: 6 }}>
+            <AiLabelHintReference confidence={hint?.confidence} evidence={hint?.evidence} />
+          </div>
         </div>
-        <Tag
-          icon={reviewed ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
-          color={reviewed ? 'success' : 'default'}
-          style={{ margin: 0, flexShrink: 0 }}
-        >
-          {reviewed ? '已校核' : '待校核'}
-        </Tag>
+        <Space direction="vertical" size={6} align="end" style={{ flexShrink: 0 }}>
+          <Tag
+            icon={reviewed ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
+            color={reviewed ? 'success' : 'default'}
+            style={{ margin: 0 }}
+          >
+            {reviewed ? '已校核' : '待校核'}
+          </Tag>
+          {canQuickReview && clipId && runId ? (
+            <Button
+              type="link"
+              size="small"
+              icon={<EditOutlined />}
+              style={{ paddingInline: 0, height: 'auto' }}
+              onClick={() => {
+                setActiveLabelId(labelId)
+                setActiveLabelName(name)
+              }}
+            >
+              快速校核
+            </Button>
+          ) : null}
+        </Space>
       </div>
     )
   }
@@ -101,7 +144,10 @@ export function ClipLabelTreeView({
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Collapse
         size="small"
-        defaultActiveKey={[]}
+        activeKey={expandedGroupKeys}
+        onChange={(keys) => {
+          setExpandedGroupKeys(Array.isArray(keys) ? keys : keys ? [keys] : [])
+        }}
         items={groups.map((group) => ({
           key: group.key,
           label: (
@@ -112,16 +158,23 @@ export function ClipLabelTreeView({
               </Typography.Text>
             </Typography.Text>
           ),
-          children: <div>{group.nodes.map((node) => renderRow(node.label_id, node.name))}</div>,
+          children: (
+            <div>
+              {group.nodes.map((n) => renderRow(n.label_id, n.name, n))}
+            </div>
+          ),
         }))}
       />
-      {orphanEntries.length > 0 ? (
-        <div>
-          <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 8 }}>
-            未在标签树中登记
-          </Typography.Text>
-          {orphanEntries.map(([id]) => renderRow(id, id))}
-        </div>
+      {canQuickReview && clipId && runId && activeLabelId ? (
+        <LabelQuickReviewModal
+          open
+          clipId={clipId}
+          runId={runId}
+          labelId={activeLabelId}
+          labelName={activeLabelName}
+          onClose={() => setActiveLabelId(null)}
+          onSaved={onReviewSaved}
+        />
       ) : null}
     </Space>
   )

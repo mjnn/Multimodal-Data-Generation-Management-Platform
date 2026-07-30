@@ -33,6 +33,7 @@ import type {
 } from '../api/types'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useReviewTaskQueryState } from '../hooks/useListQueryState'
+import { schemaEnumValues } from '../utils/labelDisplay'
 
 const SCOPE_LABEL: Record<ReviewTaskScope, string> = {
   unreviewed: '未校核',
@@ -45,6 +46,19 @@ const STATUS_COLOR = {
   pending_review: 'orange',
   reviewed: 'success',
 } as const
+
+function taxonomyNodesToSidebarTree(nodes: TaxonomyNodeDetail[]): LabelTaxonomyNode[] {
+  const groups = new Map<string, LabelTaxonomyNode>()
+  for (const n of nodes) {
+    if (n.is_active === false) continue
+    const code = n.level_code || 'other'
+    if (!groups.has(code)) {
+      groups.set(code, { id: code, name: n.level_name || code, children: [] })
+    }
+    groups.get(code)!.children!.push({ id: n.label_id, name: n.name })
+  }
+  return [...groups.values()].sort((a, b) => a.id.localeCompare(b.id))
+}
 
 function toTreeData(nodes: LabelTaxonomyNode[]): DataNode[] {
   return nodes.map((n) => ({
@@ -64,13 +78,6 @@ function findLabelTitle(tree: LabelTaxonomyNode[], labelId: string): string {
     }
   }
   return labelId
-}
-
-function schemaEnumValues(node: TaxonomyNodeDetail | undefined): string[] {
-  if (!node) return []
-  const schema = node.value_schema as { values?: unknown[] } | null
-  if (!schema?.values?.length) return []
-  return schema.values.map(String)
 }
 
 export function ReviewQueuePage() {
@@ -94,7 +101,6 @@ export function ReviewQueuePage() {
 
   const [inputValue, setInputValue] = useState(filterValue)
   const [suggestions, setSuggestions] = useState<string[]>([])
-  const [taxonomy, setTaxonomy] = useState<LabelTaxonomyNode[]>([])
   const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<ReviewTaskCandidate[]>([])
@@ -107,14 +113,15 @@ export function ReviewQueuePage() {
 
   useEffect(() => {
     void api.getLabelSuggestions().then(setSuggestions).catch(() => setSuggestions([]))
-    void api.getLabelTaxonomy().then(setTaxonomy).catch(() => setTaxonomy([]))
     void (async () => {
       try {
         const versions = await api.listTaxonomyVersions()
         const published = versions.find((v) => v.status === 'published')
         if (published) {
           const tree = await api.getTaxonomyTree(published.id)
-          setTaxonomyNodes(tree.nodes)
+          setTaxonomyNodes(tree.nodes.filter((n) => n.is_active !== false))
+        } else {
+          setTaxonomyNodes([])
         }
       } catch {
         setTaxonomyNodes([])
@@ -122,6 +129,7 @@ export function ReviewQueuePage() {
     })()
   }, [])
 
+  const taxonomy = useMemo(() => taxonomyNodesToSidebarTree(taxonomyNodes), [taxonomyNodes])
   const treeData = useMemo(() => toTreeData(taxonomy), [taxonomy])
   const nodeById = useMemo(
     () => new Map(taxonomyNodes.map((n) => [n.label_id, n])),

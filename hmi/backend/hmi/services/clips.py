@@ -187,6 +187,7 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
     summary_by: dict[tuple[str, str], dict[str, Any]] = {}
     run_status_by: dict[tuple[str, str], str] = {}
     steps_by: dict[tuple[str, str, str], dict[str, str]] = {}
+    taxonomy_id_by: dict[tuple[str, str], str] = {}
 
     if contexts:
         triple_where = _or_triples(contexts)
@@ -200,12 +201,23 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
             f"WHERE {triple_where}"
         ):
             run_status_by[(str(r["clip_id"]), str(r["run_id"]))] = str(r["status"])
+        for lab in query(
+            f"SELECT clip_id, run_id, taxonomy_version_id FROM "
+            f"{table_name(settings, 'fact_clip_label')} WHERE {triple_where}"
+        ):
+            tid = str(lab.get("taxonomy_version_id") or "").strip()
+            if tid:
+                taxonomy_id_by[(str(lab["clip_id"]), str(lab["run_id"]))] = tid
         run_ds_where = _or_run_ds(contexts)
         for st in query(
             f"SELECT run_id, ds, step_id, status FROM "
             f"{table_name(settings, 'pipeline_step')} WHERE {run_ds_where}"
         ):
             steps_by[(str(st["run_id"]), str(st["ds"]), str(st["step_id"]))] = str(st["status"])
+
+    from hmi.taxonomy_db import version_codes_by_ids
+
+    code_by_id = version_codes_by_ids(set(taxonomy_id_by.values()))
 
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -226,8 +238,14 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
             "labeled_count": 0,
             "asr_segment_count": 0,
             "event_count": 0,
+            "taxonomy_version_id": None,
+            "taxonomy_version_code": None,
         }
         if run_id:
+            tid = taxonomy_id_by.get((clip_id, run_id))
+            if tid:
+                item["taxonomy_version_id"] = tid
+                item["taxonomy_version_code"] = code_by_id.get(tid)
             summary = summary_by.get((clip_id, run_id))
             if summary:
                 item["start_time_ns"] = int(summary["start_time_ns"])

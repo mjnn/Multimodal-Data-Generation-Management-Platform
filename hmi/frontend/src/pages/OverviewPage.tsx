@@ -10,11 +10,14 @@ import { Alert, Button, Progress, Space, Table, Tag, Typography, message } from 
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { clipRunOssPrefix, ossManageHref } from '../utils/ossPaths'
+import { useAuth } from '../auth/AuthContext'
+import { canAccessOss, canBrowseClips, isAnonymousOnly } from '../auth/roles'
 import { api } from '../api'
 import type { ClipOverview } from '../api/types'
 import { PipelineStatus } from '../components/PipelineStatus'
 import { ContentCard, FilterBar, PageHeader, PageStack, StatCard } from '../components/ui'
-import { useDemoMode } from '../context/DemoModeContext'
+import { useDataSourceMode } from '../context/DataSourceModeContext'
 import { useListQueryState } from '../hooks/useListQueryState'
 import { clearOverviewSnapshot, getOverviewSnapshot, setOverviewSnapshot } from '../utils/overviewCache'
 import { clipDisplayName } from '../utils/clipDisplay'
@@ -30,71 +33,93 @@ function mergeClipStats(
 }
 
 export function OverviewPage() {
-  const { demoMode, demoDataVersion } = useDemoMode()
-  const [realClips, setRealClips] = useState<ClipOverview[]>([])
-  const [demoClips, setDemoClips] = useState<ClipOverview[]>([])
+  const { user } = useAuth()
+  const browseClips = canBrowseClips(user?.roles)
+  const showOssLinks = canAccessOss(user?.roles)
+  const { dataSource, dataRevision } = useDataSourceMode()
+  const cacheKey = `${dataSource}-${dataRevision}`
+  const [clips, setClips] = useState<ClipOverview[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const navigate = useNavigate()
-  const { status, setStatus } = useListQueryState({
+  const { status, page, pageSize, setStatus, setPage, setPageSize } = useListQueryState({
     statusKey: 'pipeline',
     defaultStatus: 'all',
     pageKey: 'p',
+    pageSizeKey: 'ps',
+    defaultPageSize: 10,
   })
   const pipelineFilter = status as PipelineFilter
 
   useEffect(() => {
     setLoadError(null)
+    let cancelled = false
 
-    const load = async (refresh = false) => {
-      const cached = !refresh ? getOverviewSnapshot(demoDataVersion) : null
-      if (cached) {
-        setRealClips(cached.realClips)
-        setDemoClips(cached.demoClips)
-        setLoading(false)
-        return
-      }
-
-      setLoading(true)
+    const fetchFresh = async () => {
       try {
         const [rows, statsMapRaw] = await Promise.all([
-          api.getClips({ light: true, refresh }),
-          api.getBatchClipStats({ refresh }).catch(
+          api.getClips({ light: true, refresh: true }),
+          api.getBatchClipStats({ refresh: true }).catch(
             () => ({} as Record<string, Partial<ClipOverview>>),
           ),
         ])
-        const statsMap = statsMapRaw
-
-        const merged = rows.map((c) => mergeClipStats(c, statsMap))
-        const fromList = merged.filter(isDemoClip)
-
-        let demoRows: ClipOverview[] = fromList
-        if (demoMode) {
-          try {
-            const remoteDemo = await api.getDemoClips()
-            if (remoteDemo.length > 0) {
-              demoRows = remoteDemo.map((c) => mergeClipStats(c, statsMap))
-            }
-          } catch {
-            // Fallback when /clips/demo is unavailable (older backend).
-          }
-        }
-
-        const real = merged.filter((c) => !isDemoClip(c))
-        setDemoClips(demoRows)
-        setRealClips(real)
-        setOverviewSnapshot(demoDataVersion, real, demoRows)
+        if (cancelled) return
+        const merged = rows.map((c) => mergeClipStats(c, statsMapRaw))
+        setClips(merged)
+        setOverviewSnapshot(cacheKey, merged)
       } catch (e: unknown) {
+        if (cancelled) return
         const msg = e instanceof Error ? e.message : '加载 Clip 列表失败'
         setLoadError(msg)
         message.error(msg)
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
-    void load(false)
-  }, [demoDataVersion, demoMode])
+    const cached = getOverviewSnapshot(cacheKey)
+    if (cached) {
+      setClips(cached.clips)
+      setLoading(false)
+    } else {
+      setLoading(true)
+    }
+    void fetchFresh()
+
+    return () => {
+      cancelled = true
+    }
+  }, [cacheKey, dataSource])
+
+  const needsPipelinePoll = useMemo(
+    () =>
+      dataSource === 'local' &&
+      clips.some((c) => c.pipeline_status === 'running' || c.pipeline_status === 'pending'),
+    [clips, dataSource],
+  )
+
+  useEffect(() => {
+    if (!needsPipelinePoll) return
+    const timer = window.setInterval(() => {
+      clearOverviewSnapshot()
+      void (async () => {
+        try {
+          const [rows, statsMapRaw] = await Promise.all([
+            api.getClips({ light: true, refresh: true }),
+            api.getBatchClipStats({ refresh: true }).catch(
+              () => ({} as Record<string, Partial<ClipOverview>>),
+            ),
+          ])
+          const merged = rows.map((c) => mergeClipStats(c, statsMapRaw))
+          setClips(merged)
+          setOverviewSnapshot(cacheKey, merged)
+        } catch {
+          /* keep last snapshot on poll errors */
+        }
+      })()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [needsPipelinePoll, cacheKey])
 
   const handleRefreshOverview = () => {
     clearOverviewSnapshot()
@@ -108,24 +133,9 @@ export function OverviewPage() {
             () => ({} as Record<string, Partial<ClipOverview>>),
           ),
         ])
-        const statsMap = statsMapRaw
-        const merged = rows.map((c) => mergeClipStats(c, statsMap))
-        const fromList = merged.filter(isDemoClip)
-        let demoRows: ClipOverview[] = fromList
-        if (demoMode) {
-          try {
-            const remoteDemo = await api.getDemoClips()
-            if (remoteDemo.length > 0) {
-              demoRows = remoteDemo.map((c) => mergeClipStats(c, statsMap))
-            }
-          } catch {
-            /* ignore */
-          }
-        }
-        const real = merged.filter((c) => !isDemoClip(c))
-        setDemoClips(demoRows)
-        setRealClips(real)
-        setOverviewSnapshot(demoDataVersion, real, demoRows)
+        const merged = rows.map((c) => mergeClipStats(c, statsMapRaw))
+        setClips(merged)
+        setOverviewSnapshot(cacheKey, merged)
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : '加载 Clip 列表失败'
         setLoadError(msg)
@@ -135,8 +145,6 @@ export function OverviewPage() {
       }
     })()
   }
-
-  const clips = demoMode ? demoClips : realClips
 
   const labeledCount = clips.filter((c) => c.clip_label_ready).length
   const datasetReadyCount = clips.filter((c) => c.dataset_ready).length
@@ -159,12 +167,13 @@ export function OverviewPage() {
   }, [clips, pipelineFilter])
 
   const openClip = (clipId: string) => {
+    if (!browseClips) return
     navigate(`/clips/${encodeURIComponent(clipId)}`)
   }
 
   const renderClipName = (r: ClipOverview) => (
     <Space size={6}>
-      {demoMode ? (
+      {isDemoClip(r) ? (
         <Tag color="purple" style={{ margin: 0 }}>
           演示
         </Tag>
@@ -280,33 +289,46 @@ export function OverviewPage() {
       title: '操作',
       key: 'action',
       fixed: 'right',
-      width: 80,
-      render: (_, r) => (
-        <Space size={12} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-          <span className="text-link" role="button" tabIndex={0} onClick={() => openClip(r.clip_id)}>
-            预览
-          </span>
-        </Space>
-      ),
+      width: 160,
+      render: (_, r) =>
+        browseClips || showOssLinks ? (
+          <Space size={12} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            {browseClips ? (
+              <span className="text-link" role="button" tabIndex={0} onClick={() => openClip(r.clip_id)}>
+                预览
+              </span>
+            ) : null}
+            {showOssLinks && r.active_run_id ? (
+              <span
+                className="text-link"
+                role="button"
+                tabIndex={0}
+                onClick={() => navigate(ossManageHref(clipRunOssPrefix(r.clip_id, r.active_run_id)))}
+              >
+                产物路径
+              </span>
+            ) : null}
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
     },
   ]
+
+  const modeLabel = dataSource === 'local' ? '本地 SQLite + 磁盘' : '在线 OSS + MaxCompute'
 
   return (
     <PageStack>
       <PageHeader
         title="数据总览"
         description={
-          demoMode
-            ? '演示模式：仅展示 mock 演示 Clip，可用于 walkthrough 与功能验证。'
-            : '以 Clip 为单位查看管线状态与校核进度；全部标签校核完成后方可纳入数据集构建。'
+          isAnonymousOnly(user?.roles)
+            ? `当前为匿名账号，仅可查看总览列表与统计。当前数据源：${modeLabel}。`
+            : `当前数据源：${modeLabel}。以 Clip 为单位查看管线状态与校核进度。`
         }
         icon={<DatabaseOutlined />}
         extra={
-          <Button
-            icon={<ReloadOutlined />}
-            loading={loading}
-            onClick={handleRefreshOverview}
-          >
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={handleRefreshOverview}>
             刷新
           </Button>
         }
@@ -341,12 +363,8 @@ export function OverviewPage() {
       </div>
 
       <ContentCard
-        title={demoMode ? '演示 Clip' : '全部 Clip'}
-        extra={
-          demoMode
-            ? '覆盖 AI 打标各场景（空值/低置信/已校核/未打标等）；可在左上角重置'
-            : '点击行进入 Clip 预览'
-        }
+        title="全部 Clip"
+        extra={browseClips ? '点击行进入 Clip 预览' : undefined}
         noPadding
         toolbar={
           <FilterBar
@@ -370,16 +388,30 @@ export function OverviewPage() {
           loading={loading}
           columns={columns}
           dataSource={filteredClips}
-          pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'] }}
+          pagination={{
+            current: page,
+            pageSize,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50'],
+            onChange: (p, ps) => {
+              setPage(p)
+              if (ps !== pageSize) setPageSize(ps)
+            },
+          }}
           scroll={{ x: 1100 }}
           tableLayout="fixed"
           locale={{
-            emptyText: demoMode
-              ? '暂无演示数据，请打开演示模式后点击「重置演示数据」'
-              : '暂无 Clip 数据',
+            emptyText:
+              dataSource === 'local'
+                ? '暂无 Clip；可运行 init_local_runtime.py、seed_demo 或 import_real_data_clips'
+                : '暂无 Clip；请确认 OSS/MC 凭证与云端数据',
           }}
-          rowClassName={() => 'clickable-row'}
-          onRow={(r) => ({ onClick: () => openClip(r.clip_id) })}
+          rowClassName={browseClips ? () => 'clickable-row' : undefined}
+          onRow={
+            browseClips
+              ? (r) => ({ onClick: () => openClip(r.clip_id) })
+              : undefined
+          }
         />
       </ContentCard>
     </PageStack>

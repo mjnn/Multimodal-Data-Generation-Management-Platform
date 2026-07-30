@@ -45,26 +45,68 @@ CREATE INDEX IF NOT EXISTS idx_taxonomy_node_version
 """
 
 
+def _migrate_taxonomy_archive_reason(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(label_taxonomy_version)")}
+    if "archive_reason" in cols:
+        return
+    conn.execute(
+        "ALTER TABLE label_taxonomy_version ADD COLUMN archive_reason TEXT"
+    )
+    conn.execute(
+        """
+        UPDATE label_taxonomy_version
+        SET archive_reason = 'superseded'
+        WHERE status = 'archived'
+          AND published_at IS NOT NULL
+          AND archive_reason IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE label_taxonomy_version
+        SET archive_reason = 'user'
+        WHERE status = 'archived'
+          AND published_at IS NULL
+          AND archive_reason IS NULL
+        """
+    )
+
+
 def ensure_taxonomy_schema() -> None:
     from hmi.app_db import APP_DB_PATH
 
     APP_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(APP_DB_PATH) as conn:
         conn.executescript(_TAXONOMY_SCHEMA)
+        _migrate_taxonomy_archive_reason(conn)
         conn.commit()
 
 
 def _version_row(row: sqlite3.Row) -> dict[str, Any]:
+    keys = row.keys()
+    archive_reason = row["archive_reason"] if "archive_reason" in keys else None
     return {
         "id": row["id"],
         "version_code": row["version_code"],
         "status": row["status"],
         "published_at": row["published_at"],
+        "archive_reason": archive_reason,
         "created_by": row["created_by"],
         "source_import": row["source_import"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def _enrich_node_value_schema(value_schema: Any) -> Any:
+    if not isinstance(value_schema, dict):
+        return value_schema
+    try:
+        from shared.taxonomy_i18n import enrich_value_schema
+
+        return enrich_value_schema(value_schema)
+    except ImportError:
+        return value_schema
 
 
 def _node_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -75,6 +117,7 @@ def _node_row(row: sqlite3.Row) -> dict[str, Any]:
             value_schema = json.loads(raw)
         except json.JSONDecodeError:
             value_schema = raw
+    value_schema = _enrich_node_value_schema(value_schema)
     return {
         "id": row["id"],
         "taxonomy_version_id": row["taxonomy_version_id"],
@@ -147,7 +190,25 @@ def get_version_by_code(version_code: str) -> dict[str, Any] | None:
         return _version_row(row) if row else None
 
 
-def list_versions(*, status: str | None = None) -> list[dict[str, Any]]:
+def version_codes_by_ids(version_ids: set[str] | list[str]) -> dict[str, str]:
+    """Map taxonomy version UUID -> version_code (batch, app.db)."""
+    ids = sorted({str(i).strip() for i in version_ids if i and str(i).strip()})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    with db_conn() as conn:
+        rows = conn.execute(
+            f"SELECT id, version_code FROM label_taxonomy_version WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    return {str(r["id"]): str(r["version_code"]) for r in rows}
+
+
+def list_versions(
+    *,
+    status: str | None = None,
+    include_archived: bool = False,
+) -> list[dict[str, Any]]:
     with db_conn() as conn:
         if status:
             rows = conn.execute(
@@ -158,16 +219,58 @@ def list_versions(*, status: str | None = None) -> list[dict[str, Any]]:
                 """,
                 (status,),
             ).fetchall()
-        else:
+        elif include_archived:
             rows = conn.execute(
                 "SELECT * FROM label_taxonomy_version ORDER BY created_at DESC"
             ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM label_taxonomy_version
+                WHERE status != 'archived'
+                   OR archive_reason = 'superseded'
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
         return [_version_row(r) for r in rows]
+
+
+def list_pipeline_taxonomy_versions() -> list[dict[str, Any]]:
+    """Versions selectable for pipeline Job3 (draft, current published, historical published)."""
+    return list_versions()
 
 
 def get_published_version() -> dict[str, Any] | None:
     versions = list_versions(status="published")
     return versions[0] if versions else None
+
+
+def taxonomy_version_display_label(version: dict[str, Any]) -> str:
+    """Human-readable label for UI (version_code + status hint)."""
+    code = str(version.get("version_code") or "").strip() or "—"
+    status = str(version.get("status") or "")
+    reason = version.get("archive_reason")
+    if status == "published" or (status == "archived" and reason == "superseded"):
+        return f"{code}（已发布）"
+    if status == "draft":
+        return f"{code}（草稿）"
+    if status == "archived":
+        return f"{code}（已归档）"
+    return code
+
+
+def resolve_taxonomy_display_for_version_id(version_id: str | None) -> str | None:
+    if not version_id or not str(version_id).strip():
+        return None
+    tid = str(version_id).strip()
+    version = get_version(tid)
+    if version:
+        return taxonomy_version_display_label(version)
+    codes = version_codes_by_ids([tid])
+    code = codes.get(tid)
+    if code:
+        return code
+    return None
 
 
 def require_draft_version(version_id: str, conn: sqlite3.Connection) -> sqlite3.Row:
@@ -312,7 +415,7 @@ def publish_version(version_id: str) -> dict[str, Any]:
         conn.execute(
             """
             UPDATE label_taxonomy_version
-            SET status = 'archived', updated_at = ?
+            SET status = 'archived', archive_reason = 'superseded', updated_at = ?
             WHERE status = 'published'
             """,
             (now,),
@@ -358,7 +461,7 @@ def archive_version(version_id: str) -> dict[str, Any]:
         conn.execute(
             """
             UPDATE label_taxonomy_version
-            SET status = 'archived', updated_at = ?
+            SET status = 'archived', archive_reason = 'user', updated_at = ?
             WHERE id = ?
             """,
             (now, version_id),

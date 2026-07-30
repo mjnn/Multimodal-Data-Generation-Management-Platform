@@ -2,49 +2,30 @@ import {
   CloudServerOutlined,
   DeleteOutlined,
   DownloadOutlined,
-  FolderAddOutlined,
   FolderOpenOutlined,
   ReloadOutlined,
-  UploadOutlined,
 } from '@ant-design/icons'
 import {
-  Alert,
   Breadcrumb,
   Button,
-  Input,
-  Modal,
   Popconfirm,
   Space,
-  Skeleton,
   Spin,
-  Switch,
   Table,
-  Tag,
-  Tooltip,
   Typography,
-  Upload,
   message,
 } from 'antd'
-import type { UploadProps } from 'antd'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
-import type { BagPipelineStatus, OssBagPipeline, OssInfo, OssListItem, OssSyncPollerStatus } from '../api/types'
+import type { OssBagPipeline, OssInfo, OssListItem } from '../api/types'
 import { UploadPipelineProgress } from '../components/UploadPipelineProgress'
+import { OssShortcutBar } from '../components/oss/OssShortcutBar'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
+import { useDataSourceMode } from '../context/DataSourceModeContext'
+import { downloadOssObject } from '../utils/ossDownload'
 
 const PIPELINE_SESSION_PREFIX = 'hmi:oss-bag-pipeline:'
-
-const BAG_PIPELINE_STATUS: Record<
-  BagPipelineStatus,
-  { color: string; text: string }
-> = {
-  not_discovered: { color: 'default', text: '未发现' },
-  idle: { color: 'warning', text: '待启动' },
-  running: { color: 'processing', text: '进行中' },
-  completed: { color: 'success', text: '已完成' },
-  failed: { color: 'error', text: '失败' },
-}
 
 function formatSize(bytes: number): string {
   if (bytes <= 0) return '—'
@@ -60,6 +41,8 @@ function formatSize(bytes: number): string {
 
 export function OssManagePage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const { dataSource, dataRevision } = useDataSourceMode()
   const [info, setInfo] = useState<OssInfo | null>(null)
   const [prefix, setPrefix] = useState('')
   const [parentPrefix, setParentPrefix] = useState('')
@@ -69,46 +52,27 @@ export function OssManagePage() {
   const [pipelineLoading, setPipelineLoading] = useState(false)
   const [pipelineKey, setPipelineKey] = useState('')
   const [pipeline, setPipeline] = useState<OssBagPipeline | null>(null)
-  const [mkdirOpen, setMkdirOpen] = useState(false)
-  const [syncStatus, setSyncStatus] = useState<OssSyncPollerStatus | null>(null)
-  const [syncSaving, setSyncSaving] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const [newDirName, setNewDirName] = useState('')
+  const initialPrefix = searchParams.get('prefix') ?? ''
 
-  const loadList = useCallback(
-    (p = prefix) => {
-      setLoading(true)
-      api
-        .listOss(p)
-        .then((res) => {
-          setPrefix(res.prefix)
-          setParentPrefix(res.parent_prefix)
-          setItems(res.items)
-        })
-        .catch((e: Error) => message.error(e.message))
-        .finally(() => setLoading(false))
-    },
-    [prefix],
-  )
+  const loadList = useCallback((p = prefix) => {
+    setLoading(true)
+    api
+      .listOss(p)
+      .then((res) => {
+        setPrefix(res.prefix)
+        setParentPrefix(res.parent_prefix)
+        setItems(res.items)
+      })
+      .catch((e: Error) => message.error(e.message))
+      .finally(() => setLoading(false))
+  }, [prefix])
 
   useEffect(() => {
     api.getOssInfo().then(setInfo).catch(() => {})
-    api.getSyncPollerStatus().then(setSyncStatus).catch(() => {})
-    loadList('')
-  }, [])
-
-  const onToggleAutoSync = async (checked: boolean) => {
-    setSyncSaving(true)
-    try {
-      const status = await api.setSyncPollerEnabled(checked)
-      setSyncStatus(status)
-      message.success(checked ? '已开启 OSS 自动同步' : '已关闭 OSS 自动同步')
-    } catch (e) {
-      message.error((e as Error).message)
-    } finally {
-      setSyncSaving(false)
-    }
-  }
+    loadList(initialPrefix)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh OSS view when local/cloud toggles
+  }, [dataSource, dataRevision, initialPrefix])
 
   const enterDir = (key: string) => loadList(key)
 
@@ -126,23 +90,9 @@ export function OssManagePage() {
     return crumbs
   }
 
-  const onUpload: UploadProps['customRequest'] = async ({ file, onSuccess, onError }) => {
+  const onDownload = async (key: string, name: string) => {
     try {
-      const f = file as File
-      const res = await api.uploadOssFile(prefix, f)
-      message.success(`已上传 ${res.key}`)
-      onSuccess?.(res)
-      loadList(prefix)
-    } catch (e) {
-      message.error('上传失败')
-      onError?.(e as Error)
-    }
-  }
-
-  const onDownload = async (key: string) => {
-    try {
-      const { url } = await api.getOssDownloadUrl(key)
-      window.open(url, '_blank', 'noopener,noreferrer')
+      await downloadOssObject(key, name)
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -156,23 +106,6 @@ export function OssManagePage() {
         await api.deleteOssObject(record.key)
       }
       message.success('已删除')
-      loadList(prefix)
-    } catch (e) {
-      message.error((e as Error).message)
-    }
-  }
-
-  const onMkdir = async () => {
-    const name = newDirName.trim().replace(/[/\\]/g, '')
-    if (!name) {
-      message.warning('请输入目录名')
-      return
-    }
-    try {
-      await api.mkdirOss(`${prefix}${name}/`)
-      message.success('目录已创建')
-      setMkdirOpen(false)
-      setNewDirName('')
       loadList(prefix)
     } catch (e) {
       message.error((e as Error).message)
@@ -226,63 +159,18 @@ export function OssManagePage() {
     <PageStack>
       <PageHeader
         title="OSS 管理"
-        description="浏览与管理桶内文件；上传 .bag 到 rosbags/ 后由 Job0 discover 发现。DataWorks 管线调整期间 OSS 产物可能不可信，自动同步默认关闭。"
+        description="浏览本地磁盘或云端桶内产物；上传 rosbag 与自动同步请前往「管线管理」。"
         icon={<CloudServerOutlined />}
       />
 
-      <ContentCard title="OSS 自动同步">
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          <Alert
-            type="warning"
-            showIcon
-            message="管线迁移提示"
-            description="当前 DataWorks 正在调整为以 clip 为中心；在 manifest 验证通过前，请保持自动同步关闭，HMI 以本地 demo / 校核数据为准。"
-          />
-          <Space wrap align="center">
-            <Switch
-              checked={syncStatus?.auto_sync_enabled ?? false}
-              loading={syncSaving}
-              onChange={onToggleAutoSync}
-              checkedChildren="开"
-              unCheckedChildren="关"
-            />
-            <Typography.Text>
-              自动同步 OSS 产物到本地（轮询 pipeline/dispatch/latest.json）
-            </Typography.Text>
-            {syncStatus?.running_sync && <Tag color="processing">同步进行中</Tag>}
-            {syncStatus?.last_sync_status && (
-              <Tag color={syncStatus.last_sync_status === 'success' ? 'success' : 'default'}>
-                上次：{syncStatus.last_sync_status}
-              </Tag>
-            )}
-            {syncStatus?.last_sync_at && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {syncStatus.last_sync_at.replace('T', ' ').slice(0, 19)} UTC
-              </Typography.Text>
-            )}
-          </Space>
-          {syncStatus?.last_sync_error ? (
-            <Typography.Text type="danger" style={{ fontSize: 12 }}>
-              {syncStatus.last_sync_error.slice(0, 300)}
-            </Typography.Text>
-          ) : null}
-        </Space>
-      </ContentCard>
-
       {info && (
         <ContentCard title={info.bucket}>
-          <Space wrap>
-            {info.root_prefixes.map((z) => (
-              <Tooltip key={z.prefix} title={z.hint}>
-                <Button onClick={() => loadList(z.prefix)}>
-                  {z.label}
-                  <Typography.Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
-                    {z.prefix}
-                  </Typography.Text>
-                </Button>
-              </Tooltip>
-            ))}
-          </Space>
+          {info.simulated ? (
+            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
+              模拟 OSS 根目录：<Typography.Text code>{info.endpoint}</Typography.Text>
+            </Typography.Text>
+          ) : null}
+          <OssShortcutBar presets={info.root_prefixes} onNavigate={(p) => loadList(p)} />
         </ContentCard>
       )}
 
@@ -296,25 +184,12 @@ export function OssManagePage() {
             <Button disabled={!parentPrefix && !prefix} onClick={() => loadList(parentPrefix)}>
               上级
             </Button>
-            <Button icon={<FolderAddOutlined />} onClick={() => setMkdirOpen(true)}>
-              新建目录
-            </Button>
-            <Upload customRequest={onUpload} showUploadList={false} multiple>
-              <Button type="primary" icon={<UploadOutlined />}>
-                上传文件
-              </Button>
-            </Upload>
           </Space>
         }
       >
         <Breadcrumb items={breadcrumbItems()} style={{ marginBottom: 12 }} />
         <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
           当前路径：<Typography.Text code>{prefix || '/'}</Typography.Text>
-          {prefix.startsWith('rosbags/') && (
-            <span style={{ marginLeft: 8 }}>
-              · 在 rosbags/ 根目录上传 .bag 会自动创建同名子目录
-            </span>
-          )}
         </Typography.Text>
 
         <Table
@@ -346,7 +221,7 @@ export function OssManagePage() {
               title: '修改时间',
               dataIndex: 'last_modified',
               width: 180,
-              render: (v: string | null) => (v ? v.replace('T', ' ').slice(0, 19) : '—'),
+              render: (v: string | null) => (v ? api.formatDateTime(v) : '—'),
             },
             {
               title: '操作',
@@ -354,7 +229,12 @@ export function OssManagePage() {
               render: (_, r) => (
                 <Space size={4}>
                   {r.type === 'file' && (
-                    <Button type="link" size="small" icon={<DownloadOutlined />} onClick={() => onDownload(r.key)}>
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => void onDownload(r.key, r.name)}
+                    >
                       下载
                     </Button>
                   )}
@@ -375,109 +255,44 @@ export function OssManagePage() {
         />
       </ContentCard>
 
-      <Modal
-        title="新建目录"
-        open={mkdirOpen}
-        onOk={onMkdir}
-        onCancel={() => setMkdirOpen(false)}
-        okText="创建"
-      >
-        <Input
-          placeholder="目录名称"
-          value={newDirName}
-          onChange={(e) => setNewDirName(e.target.value)}
-          onPressEnter={onMkdir}
-          addonBefore={prefix || '/'}
-        />
-      </Modal>
-
-      <Modal
-        title="Bag 管线状态"
-        open={pipelineOpen}
-        onCancel={() => {
-          setPipelineOpen(false)
-          setPipelineKey('')
-        }}
-        footer={
-          <Space>
-            <Button
-              icon={<ReloadOutlined />}
-              loading={pipelineLoading}
-              onClick={() => pipelineKey && loadPipeline(pipelineKey, true)}
-            >
-              刷新
-            </Button>
-            {pipeline?.clip_id && pipeline.pipeline_status === 'completed' ? (
+      {pipelineOpen && (
+        <ContentCard
+          title="Bag 管线状态"
+          extra={
+            <Space>
               <Button
-                type="primary"
-                onClick={() => navigate(`/clips/${encodeURIComponent(pipeline.clip_id!)}`)}
+                icon={<ReloadOutlined />}
+                loading={pipelineLoading}
+                onClick={() => pipelineKey && loadPipeline(pipelineKey, true)}
               >
-                进入时间轴
+                刷新
               </Button>
-            ) : null}
-          </Space>
-        }
-        width={600}
-      >
-        <Spin spinning={pipelineLoading} tip="正在查询 MaxCompute 管线状态（首次约 30–60 秒）…">
-          <Space direction="vertical" style={{ width: '100%', minHeight: 120 }} size={12}>
+              <Button onClick={() => { setPipelineOpen(false); setPipelineKey('') }}>关闭</Button>
+              {pipeline?.clip_id && pipeline.pipeline_status === 'completed' ? (
+                <Button
+                  type="primary"
+                  onClick={() => navigate(`/clips/${encodeURIComponent(pipeline.clip_id!)}`)}
+                >
+                  进入时间轴
+                </Button>
+              ) : null}
+            </Space>
+          }
+        >
+          <Spin spinning={pipelineLoading}>
             <Typography.Text code>{pipeline?.oss_key ?? pipelineKey}</Typography.Text>
-            {pipelineLoading && !pipeline && (
-              <>
-                <Tag color="processing">查询中</Tag>
-                <Skeleton active paragraph={{ rows: 4 }} />
-              </>
+            {pipeline?.pipeline_steps?.length ? (
+              <UploadPipelineProgress
+                steps={pipeline.pipeline_steps}
+                clipId={pipeline.clip_id ?? undefined}
+                runId={pipeline.run_id ?? undefined}
+              />
+            ) : (
+              <Typography.Text type="secondary">暂无步骤数据</Typography.Text>
             )}
-            {pipeline && (
-              <>
-                <Space wrap>
-                  <Tag color={BAG_PIPELINE_STATUS[pipeline.pipeline_status].color}>
-                    {BAG_PIPELINE_STATUS[pipeline.pipeline_status].text}
-                  </Tag>
-                  {pipeline.run_status && (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      run 状态：{pipeline.run_status}
-                    </Typography.Text>
-                  )}
-                  {pipeline.ds && (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      ds={pipeline.ds}
-                    </Typography.Text>
-                  )}
-                  {pipeline.is_active_run === false && (
-                    <Tag color="orange">非当前 active run</Tag>
-                  )}
-                </Space>
-                {pipeline.message && (
-                  <Alert type="info" showIcon message={pipeline.message} />
-                )}
-                {pipeline.pipeline_steps?.length ? (
-                  <UploadPipelineProgress
-                    steps={pipeline.pipeline_steps}
-                    clipId={pipeline.clip_id ?? undefined}
-                    runId={pipeline.run_id ?? undefined}
-                  />
-                ) : (
-                  <Typography.Text type="secondary">暂无步骤数据</Typography.Text>
-                )}
-                {pipelineLoading && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    后台刷新中…
-                  </Typography.Text>
-                )}
-                {pipeline.pipeline_status === 'running' && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    每 8 秒自动刷新
-                  </Typography.Text>
-                )}
-              </>
-            )}
-            {!pipeline && !pipelineLoading && (
-              <Typography.Text type="secondary">加载失败，请点刷新重试</Typography.Text>
-            )}
-          </Space>
-        </Spin>
-      </Modal>
+          </Spin>
+        </ContentCard>
+      )}
     </PageStack>
   )
 }

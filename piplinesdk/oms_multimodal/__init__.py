@@ -30,6 +30,11 @@ from .rosbag_parser import (
     TopicInfo,
     inspect_bag,
 )
+from .label_prompt import (
+    OMNI_LABEL_PROMPT_FIELD_META,
+    default_omni_label_prompt,
+    merge_omni_label_prompt,
+)
 from .taxonomy import load_taxonomy, parse_label_json, taxonomy_prompt_block
 
 __all__ = [
@@ -63,6 +68,9 @@ __all__ = [
     "TopicInfo",
     "inspect_bag",
     "load_taxonomy",
+    "merge_omni_label_prompt",
+    "default_omni_label_prompt",
+    "OMNI_LABEL_PROMPT_FIELD_META",
     "parse_label_json",
     "render_acoustic_panel",
     "render_clip_preview_video",

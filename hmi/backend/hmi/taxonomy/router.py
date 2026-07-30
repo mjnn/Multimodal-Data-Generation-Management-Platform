@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from hmi.auth.deps import get_current_user, require_admin
+from hmi.auth.deps import require_admin, require_clip_explorer_access
 from hmi.taxonomy_db import (
     archive_version,
     clone_version,
@@ -20,7 +20,7 @@ from hmi.taxonomy_db import (
     replace_nodes,
 )
 from hmi.taxonomy.export import export_published_taxonomy
-from hmi.taxonomy_import import import_taxonomy_from_yaml
+from hmi.taxonomy_import import import_taxonomy_from_yaml, import_taxonomy_from_yaml_content
 
 router = APIRouter(prefix="/api/taxonomy", tags=["taxonomy"])
 
@@ -28,6 +28,11 @@ router = APIRouter(prefix="/api/taxonomy", tags=["taxonomy"])
 class CreateVersionBody(BaseModel):
     version_code: str | None = Field(default=None, min_length=1)
     import_yaml: bool = False
+
+
+class ImportYamlVersionBody(BaseModel):
+    version_code: str = Field(min_length=1)
+    yaml_content: str = Field(min_length=1)
 
 
 class CloneVersionBody(BaseModel):
@@ -78,6 +83,8 @@ def _version_payload(version: dict[str, Any]) -> dict[str, Any]:
 def _nodes_to_tree(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_level: dict[str, dict[str, Any]] = {}
     for node in nodes:
+        if node.get("is_active") is False:
+            continue
         level_code = str(node.get("level_code") or "other")
         level_name = str(node.get("level_name") or level_code)
         if level_code not in by_level:
@@ -110,9 +117,13 @@ def _get_version_or_404(version_id: str) -> dict[str, Any]:
 
 @router.get("/versions")
 def api_list_taxonomy_versions(
-    _user: dict = Depends(get_current_user),
+    include_archived: bool = False,
+    _user: dict = Depends(require_clip_explorer_access),
 ) -> list[dict[str, Any]]:
-    return [_version_payload(v) for v in list_versions()]
+    return [
+        _version_payload(v)
+        for v in list_versions(include_archived=include_archived)
+    ]
 
 
 @router.post("/versions", status_code=201)
@@ -154,6 +165,24 @@ def api_create_taxonomy_version(
     return _version_payload(version)
 
 
+@router.post("/versions/import-yaml", status_code=201)
+def api_import_taxonomy_yaml(
+    body: ImportYamlVersionBody,
+    user: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        result = import_taxonomy_from_yaml_content(
+            body.yaml_content,
+            version_code=body.version_code.strip(),
+            created_by=user["id"],
+        )
+    except ValueError as exc:
+        raise _taxonomy_error(exc) from exc
+    version = get_version(result.version_id)
+    assert version is not None
+    return _version_payload(version)
+
+
 @router.post("/versions/{version_id}/clone", status_code=201)
 def api_clone_taxonomy_version(
     version_id: str,
@@ -170,7 +199,7 @@ def api_clone_taxonomy_version(
 @router.get("/versions/{version_id}/tree")
 def api_get_taxonomy_tree(
     version_id: str,
-    _user: dict = Depends(get_current_user),
+    _user: dict = Depends(require_clip_explorer_access),
 ) -> dict[str, Any]:
     version = _get_version_or_404(version_id)
     nodes = list_nodes(version_id)

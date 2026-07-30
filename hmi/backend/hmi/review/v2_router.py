@@ -212,6 +212,13 @@ def api_review_v2_submit(
     except ValueError as exc:
         raise _review_error(exc) from exc
 
+    try:
+        from hmi.services.clips_local import label_map_cache_clear
+
+        label_map_cache_clear()
+    except Exception:
+        pass
+
     field_review = result["field_review"]
     clip_review = result["clip_review"]
     rolled_up = bool(result.get("rolled_up_to_reviewed"))

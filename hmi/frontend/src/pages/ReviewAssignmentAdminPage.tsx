@@ -16,14 +16,19 @@ import type { ColumnsType } from 'antd/es/table'
 import type { DataNode } from 'antd/es/tree'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import type { LabelTaxonomyNode, ReviewAssignmentBatch, ReviewAssignmentReviewer } from '../api/types'
+import type {
+  LabelTaxonomyNode,
+  ReviewAssignmentAssigneeSummary,
+  ReviewAssignmentBatch,
+  ReviewAssignmentItem,
+  ReviewAssignmentReviewer,
+} from '../api/types'
 import { ContentCard } from '../components/ui'
 
 function buildCheckableTree(nodes: LabelTaxonomyNode[]): DataNode[] {
   return nodes.map((group) => ({
     key: `level:${group.id}`,
     title: group.name,
-    disableCheckbox: true,
     selectable: false,
     children: (group.children ?? []).map((leaf) => ({
       key: leaf.id,
@@ -37,6 +42,30 @@ function collectLeafKeys(checked: string[]): string[] {
   return checked.filter((k) => !k.startsWith('level:'))
 }
 
+const ITEM_STATUS_LABEL: Record<string, string> = {
+  pending: '待领取',
+  claimed: '进行中',
+  done: '已完成',
+}
+
+function AssigneeSummaryCell({ summaries }: { summaries: ReviewAssignmentAssigneeSummary[] }) {
+  if (!summaries.length) {
+    return <Typography.Text type="secondary">暂无人领取</Typography.Text>
+  }
+  return (
+    <Space direction="vertical" size={4}>
+      {summaries.map((s) => (
+        <Typography.Text key={s.assignee_id} style={{ fontSize: 12 }}>
+          {s.display_name ?? s.username ?? s.assignee_id.slice(0, 8)}
+          {' · '}
+          完成 {s.done}
+          {s.in_progress > 0 ? ` · 进行中 ${s.in_progress}` : ''}
+        </Typography.Text>
+      ))}
+    </Space>
+  )
+}
+
 export function ReviewAssignmentAdminPage() {
   const [taxonomy, setTaxonomy] = useState<LabelTaxonomyNode[]>([])
   const [reviewers, setReviewers] = useState<ReviewAssignmentReviewer[]>([])
@@ -44,6 +73,8 @@ export function ReviewAssignmentAdminPage() {
   const [loading, setLoading] = useState(false)
   const [previewCount, setPreviewCount] = useState<number | null>(null)
   const [checkedKeys, setCheckedKeys] = useState<string[]>([])
+  const [itemCache, setItemCache] = useState<Record<string, ReviewAssignmentItem[]>>({})
+  const [itemsLoading, setItemsLoading] = useState<string | null>(null)
   const [form] = Form.useForm<{
     name: string
     queue_limit: number
@@ -126,23 +157,38 @@ export function ReviewAssignmentAdminPage() {
     }
   }
 
+  const loadItems = async (batchId: string) => {
+    if (itemCache[batchId]) return
+    setItemsLoading(batchId)
+    try {
+      const res = await api.listReviewAssignmentBatchItems(batchId)
+      setItemCache((prev) => ({ ...prev, [batchId]: res.items }))
+    } catch {
+      message.error('加载条目明细失败')
+    } finally {
+      setItemsLoading(null)
+    }
+  }
+
   const columns: ColumnsType<ReviewAssignmentBatch> = [
-    { title: '任务名称', dataIndex: 'name', width: 200 },
+    { title: '任务名称', dataIndex: 'name', width: 180 },
     {
       title: '标签范围',
       key: 'labels',
+      width: 200,
       render: (_, r) => (
         <Space size={4} wrap>
-          {r.label_ids.map((id) => (
+          {r.label_ids.slice(0, 4).map((id) => (
             <Tag key={id}>{id}</Tag>
           ))}
+          {r.label_ids.length > 4 ? <Tag>+{r.label_ids.length - 4}</Tag> : null}
         </Space>
       ),
     },
     {
-      title: '进度',
+      title: '整体进度',
       key: 'progress',
-      width: 160,
+      width: 150,
       render: (_, r) => (
         <Typography.Text type="secondary">
           完成 {r.item_done ?? 0} / {r.item_total ?? 0} · 待领 {r.item_pending ?? 0}
@@ -158,6 +204,12 @@ export function ReviewAssignmentAdminPage() {
         const rev = reviewers.find((x) => x.id === r.assignee_id)
         return rev?.display_name ?? r.assignee_id.slice(0, 8)
       },
+    },
+    {
+      title: '领取与完成',
+      key: 'claimants',
+      width: 220,
+      render: (_, r) => <AssigneeSummaryCell summaries={r.assignee_summaries ?? []} />,
     },
     {
       title: '状态',
@@ -182,6 +234,35 @@ export function ReviewAssignmentAdminPage() {
             关闭
           </Button>
         ) : null,
+    },
+  ]
+
+  const itemColumns: ColumnsType<ReviewAssignmentItem> = [
+    {
+      title: 'Clip',
+      dataIndex: 'clip_id',
+      ellipsis: true,
+      render: (v: string) => <Typography.Text code style={{ fontSize: 11 }}>{v}</Typography.Text>,
+    },
+    { title: '标签', dataIndex: 'label_id', width: 120 },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 90,
+      render: (v: string) => ITEM_STATUS_LABEL[v] ?? v,
+    },
+    {
+      title: '校核员',
+      key: 'assignee',
+      width: 120,
+      render: (_, r) =>
+        r.assignee_display_name ?? r.assignee_username ?? (r.assignee_id ? r.assignee_id.slice(0, 8) : '—'),
+    },
+    {
+      title: '领取时间',
+      dataIndex: 'claimed_at',
+      width: 160,
+      render: (v: string | null) => v ?? '—',
     },
   ]
 
@@ -248,6 +329,22 @@ export function ReviewAssignmentAdminPage() {
           columns={columns}
           dataSource={batches}
           pagination={{ pageSize: 10 }}
+          expandable={{
+            expandedRowRender: (record) => (
+              <Table
+                rowKey="id"
+                size="small"
+                columns={itemColumns}
+                dataSource={itemCache[record.id] ?? []}
+                loading={itemsLoading === record.id}
+                pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                locale={{ emptyText: '展开后加载条目明细…' }}
+              />
+            ),
+            onExpand: (expanded, record) => {
+              if (expanded) void loadItems(record.id)
+            },
+          }}
         />
       </ContentCard>
     </div>

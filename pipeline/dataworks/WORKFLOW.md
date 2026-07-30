@@ -148,7 +148,7 @@ flowchart TD
 | **≥ threshold**（默认 0.7） | 合并为最终标签；单字段不一致时 **以 job2（primary）为准** |
 | **< threshold** | 不一致字段 **留空**；`consensus_meta.json` 写入争议列表；校核页高亮 |
 
-配置：`shared/shared/config.yaml` → `cloud.job4_label_merge_and_compare.agreement_threshold`
+配置：`shared/config.yaml` → `cloud.job4_label_merge_and_compare.agreement_threshold`
 
 ---
 

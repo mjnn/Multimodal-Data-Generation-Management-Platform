@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hmi.clip_facts import upsert_clip_embedding, upsert_clip_label
-from hmi.config import SDK_PIPELINE_STEP_ORDER
+from hmi.config import sdk_pipeline_step_order
 from hmi.data_source import artifact_path
 from hmi.labels_util import labels_to_clip_dict
 from hmi.local import store
@@ -133,14 +133,19 @@ def seed_sqlite_from_sdk_parsed(
         """,
         (run_id, clip_id, ds),
     )
-    store.execute("DELETE FROM pipeline_step WHERE run_id=? AND ds=?", (run_id, ds))
-    for step_id in SDK_PIPELINE_STEP_ORDER:
+    store.execute(
+        "DELETE FROM pipeline_step WHERE run_id=? AND clip_id=? AND ds=?",
+        (run_id, clip_id, ds),
+    )
+    for step_id in sdk_pipeline_step_order(local=True):
         store.execute(
             """
-            INSERT OR REPLACE INTO pipeline_step (run_id, ds, step_id, status, started_at, finished_at)
-            VALUES (?, ?, ?, 'success', datetime('now'), datetime('now'))
+            INSERT OR REPLACE INTO pipeline_step (
+              run_id, clip_id, ds, step_id, status, started_at, finished_at
+            )
+            VALUES (?, ?, ?, ?, 'success', datetime('now'), datetime('now'))
             """,
-            (run_id, ds, step_id),
+            (run_id, clip_id, ds, step_id),
         )
 
     store.execute(

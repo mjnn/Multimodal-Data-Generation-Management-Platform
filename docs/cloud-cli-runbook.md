@@ -59,7 +59,7 @@ java -version   # 必须成功
 CLI 配置文件含明文 AK/SK，**禁止提交 Git**。改 `.env` 后执行：
 
 ```powershell
-cd D:\cursor_project\rosbag_to_labels_pipline\pipeline
+cd pipeline
 py -3 scripts\sync_cloud_cli_config.py
 ```
 

@@ -29,6 +29,43 @@ def _row_has_clip_labels(raw: str | None) -> bool:
     return has_label_content(parse_labels_json(raw))
 
 
+def _try_scene_summary(clip_id: str, run_id: str) -> str | None:
+    try:
+        from hmi.ai_artifacts import load_ai_labels_local
+
+        doc = load_ai_labels_local(clip_id, run_id)
+        if doc:
+            raw = doc.get("scene_summary")
+            if raw is not None and str(raw).strip():
+                return str(raw).strip()
+    except Exception:
+        pass
+
+    try:
+        from hmi.data_source import artifact_path
+        from hmi.oss_layout import SDK_LABELS_JSONL
+        from hmi.sdk_ingest import read_jsonl_first
+
+        labels_path = artifact_path(clip_id, run_id, SDK_LABELS_JSONL)
+        if labels_path.is_file():
+            row = read_jsonl_first(labels_path)
+            raw = row.get("scene_summary")
+            if raw is not None and str(raw).strip():
+                return str(raw).strip()
+    except Exception:
+        pass
+    return None
+
+
+def _with_scene_summary(view: dict[str, Any], clip_id: str, run_id: str) -> dict[str, Any]:
+    summary = _try_scene_summary(clip_id, run_id)
+    if not summary:
+        return view
+    out = dict(view)
+    out["scene_summary"] = summary
+    return out
+
+
 def get_clip_label_row(
     clip_id: str,
     run_id: str,
@@ -76,16 +113,16 @@ def detect_label_granularity(clip_id: str, run_id: str, *, ds: str | None = None
     return "frame"
 
 
-def _step_succeeded(run_id: str, ds: str, step_ids: tuple[str, ...]) -> bool:
+def _step_succeeded(clip_id: str, run_id: str, ds: str, step_ids: tuple[str, ...]) -> bool:
     placeholders = ",".join("?" for _ in step_ids)
     row = store.query_one(
         f"""
         SELECT status FROM pipeline_step
-        WHERE run_id=? AND ds=? AND step_id IN ({placeholders})
+        WHERE run_id=? AND clip_id=? AND ds=? AND step_id IN ({placeholders})
         ORDER BY finished_at DESC
         LIMIT 1
         """,
-        (run_id, ds, *step_ids),
+        (run_id, clip_id, ds, *step_ids),
     )
     if not row:
         return False
@@ -98,7 +135,7 @@ def is_clip_label_ready(clip_id: str, run_id: str, *, ds: str | None = None) -> 
     row = get_clip_label_row(clip_id, run_id, ds=resolved_ds)
     if row and _row_has_clip_labels(str(row.get("labels_json") or "")):
         return True
-    if _step_succeeded(run_id, resolved_ds, CLIP_LABEL_STEP_IDS):
+    if _step_succeeded(clip_id, run_id, resolved_ds, CLIP_LABEL_STEP_IDS):
         return True
     labeled = store.query_one(
         """
@@ -146,7 +183,7 @@ def get_clip_label_view(clip_id: str, run_id: str, *, ds: str | None = None) -> 
             "source": "fact_clip_label",
             "aggregation": "clip_native",
         }
-        return attach_consensus_fields(view, row)
+        return _with_scene_summary(attach_consensus_fields(view, row), clip_id, run_id)
 
     granularity = detect_label_granularity(clip_id, run_id, ds=resolved_ds)
     try:

@@ -4,8 +4,10 @@ FastAPI 服务；HMI 浏览固定 **local**（`data/hmi_local/`：SQLite + 本�
 
 ## 安装
 
+在仓库根目录：
+
 ```bash
-cd backend
+cd hmi/backend
 pip install -r requirements.txt
 ```
 
@@ -51,7 +53,7 @@ HMI_OSS_SYNC_AUTO_LOCAL=1           # sync 成功后切 local+real（默认开�
 
 ```bash
 # 项目根目录已配置 .env 时
-cd backend
+cd hmi/backend
 python run.py
 # → http://127.0.0.1:8000/api/health
 ```
@@ -59,11 +61,11 @@ python run.py
 ## 前端联调
 
 ```bash
-# 终端 1
-cd backend && python run.py
+# 终端 1（仓库根）
+cd hmi/backend && python run.py
 
-# 终端 2（默认已对接 /api，Vite 代理到 8000）
-cd frontend && npm run dev
+# 终端 2
+cd hmi/frontend && npm run dev
 ```
 
 ## API 与 MC 表映射

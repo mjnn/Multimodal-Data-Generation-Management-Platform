@@ -11,6 +11,7 @@ from .asr_client import AsrConfig
 from .clip_video import ClipVideoConfig
 
 ModelBackend = Literal["api", "mc"]
+StorageBackend = Literal["local", "cloud"]
 
 
 @dataclass
@@ -25,6 +26,7 @@ class ClientConfig:
     omni_model: str = "qwen3.5-omni-plus"
     embedding_model: str = "qwen3-vl-embedding"
     embedding_dimension: int = 1024
+    omni_label_prompt: dict[str, Any] | None = None
     acoustic_panel_config: AcousticPanelConfig | None = None
     asr_config: AsrConfig | None = None
     clip_video_config: ClipVideoConfig | None = None
@@ -32,11 +34,15 @@ class ClientConfig:
     # api: DashScope / MaaS 直连（当前默认；Omni 在 MC bigdata_modelset 未上架前必须用 api）
     # mc: MaxCompute MaxFrame AI / 模型集（待 SDK 实现）
     model_backend: ModelBackend = "api"
+    # local: 写入 HMI_RUNTIME_ROOT/oss 镜像；cloud: 处理后上传 OSS
+    storage_backend: StorageBackend = "local"
 
     @classmethod
     def from_env(cls, *, taxonomy_path: Path | None = None) -> ClientConfig:
         backend_raw = os.getenv("MODEL_BACKEND", "api").strip().lower()
         model_backend: ModelBackend = "mc" if backend_raw == "mc" else "api"
+        storage_raw = os.getenv("STORAGE_BACKEND", "local").strip().lower()
+        storage_backend: StorageBackend = "cloud" if storage_raw == "cloud" else "local"
         return cls(
             api_key=os.getenv("DASHSCOPE_API_KEY") or None,
             workspace_id=os.getenv("DASHSCOPE_WORKSPACE_ID") or None,
@@ -49,6 +55,7 @@ class ClientConfig:
             asr_config=AsrConfig.from_env(),
             clip_video_config=ClipVideoConfig.from_env(),
             model_backend=model_backend,
+            storage_backend=storage_backend,
         )
 
 

@@ -11,8 +11,7 @@ import type { AiLabelHint, TaxonomyNodeDetail } from '../api/types'
 import { AiLabelHintReference } from './AiLabelHintReference'
 
 import { isLowConfidence } from '../utils/reviewConfidence'
-
-
+import { schemaEnumValues } from '../utils/labelDisplay'
 
 type LevelGroup = {
 
@@ -21,18 +20,6 @@ type LevelGroup = {
   title: string
 
   nodes: TaxonomyNodeDetail[]
-
-}
-
-
-
-function schemaEnumValues(node: TaxonomyNodeDetail): string[] {
-
-  const schema = node.value_schema as { values?: unknown[] } | null
-
-  if (!schema?.values?.length) return []
-
-  return schema.values.map(String)
 
 }
 

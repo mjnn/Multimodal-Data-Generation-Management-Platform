@@ -8,7 +8,12 @@ from typing import Any
 from cachetools import TTLCache
 
 from hmi.clip_facts import clip_label_stats, get_clip_label_view
-from hmi.config import PIPELINE_STEP_ORDER, SDK_PIPELINE_STEP_ORDER, STEP_LABELS
+from hmi.config import (
+    PIPELINE_STEP_ORDER,
+    SDK_PIPELINE_STEP_ORDER,
+    pipeline_step_label,
+    sdk_pipeline_step_order,
+)
 from hmi.db import normalize_pipeline_status
 from hmi.labels_sync import (
     build_sampled_timestamps_ns,
@@ -45,14 +50,14 @@ def _w_params(ctx: LocalClipContext) -> tuple[str, str, str]:
 
 def _step_order_for_ids(step_ids: set[str]) -> tuple[str, ...]:
     if step_ids & set(SDK_PIPELINE_STEP_ORDER):
-        return SDK_PIPELINE_STEP_ORDER
+        return sdk_pipeline_step_order(local=True)
     return PIPELINE_STEP_ORDER
 
 
 def _pending_steps(step_ids: set[str] | None = None) -> list[dict[str, Any]]:
     order = _step_order_for_ids(step_ids or set())
     return [
-        {"step_id": sid, "label": STEP_LABELS.get(sid, sid), "status": "pending"}
+        {"step_id": sid, "label": pipeline_step_label(sid, local=True), "status": "pending"}
         for sid in order
         if sid != "job0_discover" and sid != "sdk_discover"
     ]
@@ -147,20 +152,29 @@ def _latest_run_ds_map(pairs: list[tuple[str, str]]) -> dict[tuple[str, str], st
     return out
 
 
-def _batch_steps_by_run(run_ids: list[str]) -> dict[str, dict[str, str]]:
-    if not run_ids:
+def _batch_steps_by_run_clip(
+    pairs: list[tuple[str, str]],
+) -> dict[tuple[str, str], dict[str, dict[str, Any]]]:
+    if not pairs:
         return {}
+    run_ids = sorted({rid for _, rid in pairs})
     placeholders = ",".join("?" for _ in run_ids)
     rows = store.query(
-        f"SELECT run_id, ds, step_id, status FROM pipeline_step WHERE run_id IN ({placeholders})",
+        f"SELECT run_id, clip_id, ds, step_id, status, error_message FROM pipeline_step "
+        f"WHERE run_id IN ({placeholders})",
         tuple(run_ids),
     )
-    by_run: dict[str, dict[str, str]] = {}
+    by_key: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
     for r in rows:
         rid = str(r["run_id"])
+        cid = str(r.get("clip_id") or "")
         sid = str(r["step_id"])
-        by_run.setdefault(rid, {})[sid] = normalize_pipeline_status(str(r["status"]))
-    return by_run
+        err = str(r.get("error_message") or "").strip() or None
+        by_key.setdefault((rid, cid), {})[sid] = {
+            "status": normalize_pipeline_status(str(r["status"])),
+            "error_message": err,
+        }
+    return by_key
 
 
 def _light_label_fields(labels_json_raw: str | None) -> tuple[bool, str, str]:
@@ -168,6 +182,14 @@ def _light_label_fields(labels_json_raw: str | None) -> tuple[bool, str, str]:
         return False, "", "frame"
     parsed = parse_labels_json(labels_json_raw)
     return True, labels_preview(parsed), "clip"
+
+
+def _light_label_row(lab: dict[str, Any] | None) -> tuple[bool, str, str, str | None]:
+    raw = str(lab["labels_json"]) if lab and lab.get("labels_json") else None
+    ready, preview, gran = _light_label_fields(raw)
+    tid = lab.get("taxonomy_version_id") if lab else None
+    taxonomy_version_id = str(tid).strip() if tid else None
+    return ready, preview, gran, taxonomy_version_id or None
 
 
 def list_clips_light(*, refresh: bool = False) -> list[dict[str, Any]]:
@@ -178,7 +200,8 @@ def list_clips_light(*, refresh: bool = False) -> list[dict[str, Any]]:
 
 def _list_clips_light_impl() -> list[dict[str, Any]]:
     rows = store.query(
-        "SELECT clip_id, clip_dir_name, bag_oss_key, active_run_id FROM dim_clip "
+        "SELECT clip_id, clip_dir_name, bag_oss_key, active_run_id, created_at, updated_at "
+        "FROM dim_clip "
         "ORDER BY CASE WHEN clip_dir_name LIKE 'demo_%' OR clip_dir_name LIKE '[演示]%' "
         "OR clip_dir_name LIKE '[真实]%' THEN 0 ELSE 1 END, clip_dir_name ASC"
     )
@@ -189,8 +212,7 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
             pairs.append((str(row["clip_id"]), rid))
 
     ds_map = _latest_run_ds_map(pairs)
-    run_ids = sorted({rid for _, rid in pairs})
-    step_map = _batch_steps_by_run(run_ids)
+    step_map = _batch_steps_by_run_clip(pairs)
 
     parse_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     for clip_id, run_id in pairs:
@@ -227,7 +249,7 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
             "event_count": int(row["event_count"]) if row else 0,
         }
 
-    label_cache: dict[tuple[str, str, str], tuple[bool, str, str]] = {}
+    label_cache: dict[tuple[str, str, str], tuple[bool, str, str, str | None]] = {}
     for clip_id, run_id in pairs:
         ds = ds_map.get((clip_id, run_id))
         if not ds:
@@ -236,13 +258,14 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
         if key in label_cache:
             continue
         lab = store.query_one(
-            "SELECT labels_json FROM fact_clip_label WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
+            "SELECT labels_json, taxonomy_version_id FROM fact_clip_label "
+            "WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
             (clip_id, run_id, ds),
         )
-        raw = str(lab["labels_json"]) if lab and lab.get("labels_json") else None
-        label_cache[key] = _light_label_fields(raw)
+        label_cache[key] = _light_label_row(dict(lab) if lab else None)
 
     status_cache: dict[tuple[str, str, str], str] = {}
+    run_times_cache: dict[tuple[str, str, str], tuple[str | None, str | None]] = {}
     for clip_id, run_id in pairs:
         ds = ds_map.get((clip_id, run_id))
         if not ds:
@@ -251,10 +274,32 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
         if key in status_cache:
             continue
         run_row = store.query_one(
-            "SELECT status FROM pipeline_run WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
+            "SELECT status, started_at, updated_at FROM pipeline_run "
+            "WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
             (clip_id, run_id, ds),
         )
         status_cache[key] = str(run_row["status"]) if run_row else "pending"
+        if run_row:
+            run_times_cache[key] = (
+                str(run_row["started_at"]) if run_row.get("started_at") else None,
+                str(run_row["updated_at"]) if run_row.get("updated_at") else None,
+            )
+        else:
+            run_times_cache[key] = (None, None)
+
+    from hmi.local.pipeline_settings import get_pipeline_settings
+    from hmi.taxonomy_db import version_codes_by_ids
+
+    settings_version_id = get_pipeline_settings().get("taxonomy_version_id")
+    settings_version_id = str(settings_version_id).strip() if settings_version_id else None
+    taxonomy_ids: set[str] = set()
+    if settings_version_id:
+        taxonomy_ids.add(settings_version_id)
+    for _ready, _prev, _gran, tid in label_cache.values():
+        if tid:
+            taxonomy_ids.add(tid)
+    code_by_id = version_codes_by_ids(taxonomy_ids)
+    settings_version_code = code_by_id.get(settings_version_id) if settings_version_id else None
 
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -278,6 +323,10 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
             "label_granularity": "frame",
             "clip_label_ready": False,
             "clip_label_preview": "",
+            "pipeline_created_at": None,
+            "pipeline_updated_at": str(row.get("updated_at") or "") or None,
+            "taxonomy_version_id": None,
+            "taxonomy_version_code": None,
         }
         if not run_id:
             out.append(item)
@@ -293,13 +342,19 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
             item["end_time_ns"] = int(summary.get("end_time_ns") or 0)
             item["duration_sec"] = float(summary.get("duration_sec") or 0.0)
         item["pipeline_status"] = status_cache.get(key, "pending")
-        steps_for_run = step_map.get(run_id, {})
+        started_at, updated_at = run_times_cache.get(key, (None, None))
+        if started_at:
+            item["pipeline_created_at"] = started_at
+        if updated_at:
+            item["pipeline_updated_at"] = updated_at
+        steps_for_run = step_map.get((run_id, clip_id), {})
         step_order = _step_order_for_ids(set(steps_for_run.keys()))
         item["steps"] = [
             {
                 "step_id": sid,
-                "label": STEP_LABELS.get(sid, sid),
-                "status": steps_for_run.get(sid, "pending"),
+                "label": pipeline_step_label(sid, local=True),
+                "status": (steps_for_run.get(sid) or {}).get("status", "pending"),
+                "error_message": (steps_for_run.get(sid) or {}).get("error_message"),
             }
             for sid in step_order
             if sid not in ("job0_discover", "sdk_discover")
@@ -308,11 +363,17 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
         item["frame_count"] = counts.get("frame_count", 0)
         item["asr_segment_count"] = counts.get("asr_segment_count", 0)
         item["event_count"] = counts.get("event_count", 0)
-        ready, preview, gran = label_cache.get(key, (False, "", "frame"))
+        ready, preview, gran, taxonomy_version_id = label_cache.get(key, (False, "", "frame", None))
         item["clip_label_ready"] = ready
         item["clip_label_preview"] = preview
         item["label_granularity"] = gran
         item["labeled_count"] = 1 if ready else 0
+        if taxonomy_version_id:
+            item["taxonomy_version_id"] = taxonomy_version_id
+            item["taxonomy_version_code"] = code_by_id.get(taxonomy_version_id)
+        elif settings_version_id:
+            item["taxonomy_version_id"] = settings_version_id
+            item["taxonomy_version_code"] = settings_version_code
         out.append(item)
     return out
 
@@ -335,20 +396,37 @@ def get_clip_overview(
     stats = _clip_counts(ctx)
     cid, rid, ds = _w_params(ctx)
     run_row = store.query_one(
-        "SELECT status FROM pipeline_run WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
+        "SELECT status, started_at, updated_at FROM pipeline_run WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
         (cid, rid, ds),
     )
     pipeline_status = str(run_row["status"]) if run_row else "pending"
+    pipeline_created_at = str(run_row["started_at"]) if run_row and run_row.get("started_at") else None
+    pipeline_updated_at = str(run_row["updated_at"]) if run_row and run_row.get("updated_at") else None
+    if pipeline_updated_at is None:
+        dim_row = store.query_one(
+            "SELECT updated_at FROM dim_clip WHERE clip_id=? LIMIT 1",
+            (cid,),
+        )
+        if dim_row and dim_row.get("updated_at"):
+            pipeline_updated_at = str(dim_row["updated_at"])
     step_rows = store.query(
-        "SELECT step_id, status FROM pipeline_step WHERE run_id=? AND ds=?", (rid, ds)
+        "SELECT step_id, status, error_message FROM pipeline_step WHERE run_id=? AND clip_id=? AND ds=?",
+        (rid, cid, ds),
     )
-    step_map = {str(r["step_id"]): normalize_pipeline_status(str(r["status"])) for r in step_rows}
+    step_map = {
+        str(r["step_id"]): {
+            "status": normalize_pipeline_status(str(r["status"])),
+            "error_message": str(r.get("error_message") or "").strip() or None,
+        }
+        for r in step_rows
+    }
     step_order = _step_order_for_ids(set(step_map.keys()))
     steps = [
         {
             "step_id": sid,
-            "label": STEP_LABELS.get(sid, sid),
-            "status": step_map.get(sid, "pending"),
+            "label": pipeline_step_label(sid, local=True),
+            "status": step_map.get(sid, {}).get("status", "pending"),
+            "error_message": step_map.get(sid, {}).get("error_message"),
         }
         for sid in step_order
         if sid not in ("job0_discover", "sdk_discover")
@@ -362,6 +440,8 @@ def get_clip_overview(
         "start_time_ns": ctx.start_time_ns,
         "end_time_ns": ctx.end_time_ns,
         "pipeline_status": pipeline_status,
+        "pipeline_created_at": pipeline_created_at,
+        "pipeline_updated_at": pipeline_updated_at,
         "steps": steps,
         "frame_count": stats["frame_count"],
         "sampled_count": stats["sampled_count"],

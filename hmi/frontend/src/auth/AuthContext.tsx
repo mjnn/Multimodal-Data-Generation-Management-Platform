@@ -17,6 +17,7 @@ type AuthContextValue = {
   user: AuthUser | null
   loading: boolean
   login: (username: string, password: string) => Promise<void>
+  completeSession: (res: LoginResponse, successMessage?: string) => void
   logout: () => Promise<void>
   refreshMe: () => Promise<AuthUser | null>
 }
@@ -78,14 +79,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshMe])
 
+  const completeSession = useCallback(
+    (res: LoginResponse, successMessage?: string) => {
+      setAccessToken(res.access_token)
+      setUser(res.user)
+      message.success(successMessage ?? `欢迎，${res.user.display_name}`)
+    },
+    [message],
+  )
+
   const login = useCallback(
     async (username: string, password: string) => {
       const res = await http.post<LoginResponse>('/auth/login', { username, password })
-      setAccessToken(res.data.access_token)
-      setUser(res.data.user)
-      message.success(`欢迎，${res.data.user.display_name}`)
+      completeSession(res.data)
     },
-    [message],
+    [completeSession],
   )
 
   const logout = useCallback(async () => {
@@ -100,8 +108,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [navigate])
 
   const value = useMemo(
-    () => ({ user, loading, login, logout, refreshMe }),
-    [user, loading, login, logout, refreshMe],
+    () => ({ user, loading, login, completeSession, logout, refreshMe }),
+    [user, loading, login, completeSession, logout, refreshMe],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -256,6 +256,12 @@ def api_review_save(
         )
     except ValueError as exc:
         raise _review_error(exc) from exc
+    try:
+        from hmi.services.clips_local import label_map_cache_clear
+
+        label_map_cache_clear()
+    except Exception:
+        pass
     if body.review_status == "reviewed":
         try:
             export_review_to_oss(review, reviewer_id=user["id"])

@@ -409,7 +409,7 @@ PyODPS3 **无法**把运行时计算的 `clip_id` 写到「本节点输出参数
 ## 8. 双模型合并逻辑（job4）
 
 **实现**：`pipeline/dataworks/label_merge.py`（HMI 侧镜像：`hmi/backend/hmi/label_merge.py`）  
-**配置**：`shared/shared/config.yaml` → `cloud.job4_label_merge_and_compare.agreement_threshold`（默认 `0.7`）
+**配置**：`shared/config.yaml` → `cloud.job4_label_merge_and_compare.agreement_threshold`（默认 `0.7`）
 
 ### 8.1 规则
 
@@ -607,7 +607,7 @@ py -3 pipeline/scripts/verify_pipeline_run.py --legacy --clip-id sha256:... --ru
 
 ```bash
 # 后端 8002 + 前端 5174
-cd backend && uvicorn hmi.main:app --port 8002 --reload
+cd hmi/backend && uvicorn hmi.main:app --port 8002 --reload
 cd frontend && npm run dev   # VITE_DEV_PORT=5174
 ```
 

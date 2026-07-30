@@ -8,8 +8,8 @@ alwaysApply: false
 
 ## 栈
 
-- **后端** `backend/`：FastAPI · `python run.py` → `:8000`
-- **前端** `hmi/frontend/`：Vite+React+AntD · `npm run dev` → `:5173`（代理 `/api`）
+- **后端** `hmi/backend/`：FastAPI · `python run.py` → `:8000`
+- **前端** `hmi/frontend/`：Vite+React+AntD · `npm run dev` → **`:5174`**（`.env.development` · 代理 `/api` → **`http://127.0.0.1:8000`**）
 - Mock：仅 `VITE_USE_MOCK=true`；默认对接后端
 
 ## 云端性能（MC 慢在作业非 RTT）
@@ -37,17 +37,19 @@ alwaysApply: false
 - `:8000` 若返回旧版 health（无 `data_source`），多为 **C:\Python314\python.exe** 残留 uvicorn，非 `.venv`
 - 清理：`Get-Process python | Stop-Process -Force` 或 `taskkill /F /PID <pid>`，再单实例启动：
   ```powershell
-  cd backend
-  ..\.venv\Scripts\python.exe -m uvicorn hmi.main:app --host 127.0.0.1 --port 8000
+  $env:HMI_RUNTIME_ROOT=".../hmi/data/hmi_runtime"
+  $env:HMI_DATA_SOURCE="local"
+  cd hmi/backend
+  py -3 run.py   # 或 .venv python -m uvicorn hmi.main:app --host 127.0.0.1 --port 8000
   ```
-- 验收新后端：`GET /api/health` 含 `data_source`、`local_db`；`GET /api/config/data-source` 返回 200
-- 前端 `:5173` 已占用则无需再起；否则 `cd frontend; npm run dev`
+- 前端 PowerShell 若拦截 npm：`cmd /c "cd hmi/frontend && npm run dev"`
+- 验收：`GET /api/health` 含 `data_source`、`local_sdk_poller`；本地 OSS 管理 bucket 为 **本地磁盘**
 
 ## 验收
 
 ```bash
 py -3 pipeline/scripts/verify_pipeline_run.py --clip-id sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b
-python backend/scripts/probe_hmi.py   # 云端
+python hmi/backend/scripts/probe_hmi.py   # 云端
 # local 切换后列表/检索应秒级
 ```
 

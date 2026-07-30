@@ -17,6 +17,7 @@ const CONFIG: Record<
   running: { color: 'processing', icon: <SyncOutlined spin />, text: '执行中' },
   pending: { color: 'warning', icon: <ClockCircleOutlined />, text: '待执行' },
   skipped: { color: 'default', icon: <MinusCircleOutlined />, text: '跳过' },
+  cancelled: { color: 'default', icon: <CloseCircleOutlined />, text: '已中止' },
 }
 
 interface Props {

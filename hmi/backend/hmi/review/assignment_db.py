@@ -11,6 +11,7 @@ from hmi.app_db import _utc_now_iso, db_conn
 
 BATCH_STATUSES = frozenset({"open", "closed"})
 ITEM_STATUSES = frozenset({"pending", "claimed", "done"})
+BATCH_KINDS = frozenset({"low_confidence", "assigned", "public_pool"})
 
 _ASSIGNMENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS review_assignment_batch (
@@ -60,12 +61,24 @@ CREATE TABLE IF NOT EXISTS review_workbench_session (
 """
 
 
+def _ensure_batch_kind_column(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(review_assignment_batch)").fetchall()}
+    if "batch_kind" not in cols:
+        conn.execute(
+            """
+            ALTER TABLE review_assignment_batch
+            ADD COLUMN batch_kind TEXT NOT NULL DEFAULT 'public_pool'
+            """
+        )
+
+
 def ensure_assignment_schema() -> None:
     from hmi.app_db import APP_DB_PATH
 
     APP_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(APP_DB_PATH) as conn:
         conn.executescript(_ASSIGNMENT_SCHEMA)
+        _ensure_batch_kind_column(conn)
         conn.commit()
 
 
@@ -88,6 +101,7 @@ def _batch_row(row: sqlite3.Row, *, stats: dict[str, int] | None = None) -> dict
         "label_ids": _parse_label_ids(row["label_ids_json"]),
         "queue_limit": int(row["queue_limit"]),
         "assignee_id": row["assignee_id"],
+        "batch_kind": row["batch_kind"] if "batch_kind" in row.keys() else "public_pool",
         "status": row["status"],
         "created_by": row["created_by"],
         "created_at": row["created_at"],
@@ -106,7 +120,10 @@ def create_batch(
     assignee_id: str | None,
     created_by: str,
     items: list[dict[str, Any]],
+    batch_kind: str = "public_pool",
 ) -> dict[str, Any]:
+    if batch_kind not in BATCH_KINDS:
+        raise ValueError(f"无效任务类型: {batch_kind}")
     if not label_ids:
         raise ValueError("至少选择一个标签")
     if queue_limit < 1:
@@ -122,9 +139,9 @@ def create_batch(
         conn.execute(
             """
             INSERT INTO review_assignment_batch (
-              id, name, label_ids_json, queue_limit, assignee_id, status,
+              id, name, label_ids_json, queue_limit, assignee_id, batch_kind, status,
               created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
             """,
             (
                 batch_id,
@@ -132,6 +149,7 @@ def create_batch(
                 json.dumps(label_ids, ensure_ascii=False),
                 queue_limit,
                 assignee_id,
+                batch_kind,
                 created_by,
                 now,
                 now,
@@ -257,13 +275,16 @@ def claim_items(
     now = _utc_now_iso()
     with db_conn() as conn:
         batch = conn.execute(
-            "SELECT id, status FROM review_assignment_batch WHERE id=?",
+            "SELECT id, status, batch_kind FROM review_assignment_batch WHERE id=?",
             (batch_id,),
         ).fetchone()
         if not batch:
             raise ValueError("任务不存在")
         if batch["status"] != "open":
             raise ValueError("任务已关闭，无法领取")
+        kind = batch["batch_kind"] if "batch_kind" in batch.keys() else "public_pool"
+        if kind != "public_pool":
+            raise ValueError("仅「任务池公开领取」类型可在此领取条目")
 
         rows = conn.execute(
             """
@@ -302,8 +323,45 @@ def claim_items(
         return [_item_row(r) for r in claimed]
 
 
-def list_reviewer_batches(assignee_id: str) -> list[dict[str, Any]]:
-    """Batches visible to reviewer: open pool, pre-assigned to them, or with their items."""
+def list_batch_assignee_summaries(batch_id: str) -> list[dict[str, Any]]:
+    """Per-reviewer claim/done counts for admin reporting (public pool & multi-claim batches)."""
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              assignee_id,
+              SUM(CASE WHEN status='claimed' THEN 1 ELSE 0 END) AS in_progress,
+              SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,
+              MIN(claimed_at) AS first_claimed_at,
+              MAX(updated_at) AS last_activity_at
+            FROM review_assignment_item
+            WHERE batch_id=? AND assignee_id IS NOT NULL
+            GROUP BY assignee_id
+            ORDER BY first_claimed_at ASC
+            """,
+            (batch_id,),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            done = int(row["done"] or 0)
+            in_progress = int(row["in_progress"] or 0)
+            out.append(
+                {
+                    "assignee_id": row["assignee_id"],
+                    "done": done,
+                    "in_progress": in_progress,
+                    "claimed_total": done + in_progress,
+                    "first_claimed_at": row["first_claimed_at"],
+                    "last_activity_at": row["last_activity_at"],
+                }
+            )
+        return out
+
+
+def list_reviewer_batches(assignee_id: str, *, view: str = "all") -> list[dict[str, Any]]:
+    """Batches visible to reviewer: open pool, pre-assigned, or with their claim/done history."""
+    if view not in ("active", "completed", "all"):
+        view = "all"
     with db_conn() as conn:
         batch_ids: set[str] = set()
 
@@ -337,7 +395,7 @@ def list_reviewer_batches(assignee_id: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for batch_id in batch_ids:
             row = conn.execute(
-                "SELECT * FROM review_assignment_batch WHERE id=? AND status='open'",
+                "SELECT * FROM review_assignment_batch WHERE id=?",
                 (batch_id,),
             ).fetchone()
             if not row:
@@ -352,14 +410,34 @@ def list_reviewer_batches(assignee_id: str) -> list[dict[str, Any]]:
                 (batch_id, assignee_id),
             ).fetchall()
             mine_map = {r["status"]: int(r["cnt"]) for r in mine}
+            my_claimed = mine_map.get("claimed", 0)
+            my_done = mine_map.get("done", 0)
             batch = _batch_row(row, stats=stats)
-            batch["my_claimed"] = mine_map.get("claimed", 0)
-            batch["my_done"] = mine_map.get("done", 0)
+            batch["my_claimed"] = my_claimed
+            batch["my_done"] = my_done
             session = get_workbench_session(batch_id, assignee_id)
             batch["my_staged_count"] = len(session.get("staged") or {}) if session else 0
             batch["my_session_updated_at"] = session.get("updated_at") if session else None
+
+            kind = batch.get("batch_kind") or "public_pool"
+            batch_open = batch["status"] == "open"
+            can_claim = (
+                kind == "public_pool"
+                and batch_open
+                and (batch.get("item_pending") or 0) > 0
+            )
+            my_pending = my_claimed
+            has_staged = (batch.get("my_staged_count") or 0) > 0
+            is_active = my_pending > 0 or has_staged or can_claim
+            is_completed = my_done > 0 and my_pending == 0
+
+            if view == "active" and not is_active:
+                continue
+            if view == "completed" and not is_completed:
+                continue
+
             out.append(batch)
-        out.sort(key=lambda b: b["created_at"], reverse=True)
+        out.sort(key=lambda b: b["updated_at"], reverse=True)
         return out
 
 

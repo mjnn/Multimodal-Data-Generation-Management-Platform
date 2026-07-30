@@ -4,6 +4,7 @@ export type PipelineStatus =
   | 'running'
   | 'pending'
   | 'skipped'
+  | 'cancelled'
 
 export type ClipRunStatus = 'pending' | 'running' | 'completed' | 'failed'
 
@@ -21,6 +22,7 @@ export interface ClipLabelView {
   label_granularity: LabelGranularity
   clip_label_ready: boolean
   label_preview?: string
+  scene_summary?: string | null
   labels_json?: Record<string, unknown>
   anchor_timestamp_ns?: number | null
   source?: string | null
@@ -37,6 +39,10 @@ export interface ClipOverview {
   start_time_ns: number
   end_time_ns: number
   pipeline_status: ClipRunStatus
+  /** Active pipeline run started_at (fallback: dim_clip.created_at). */
+  pipeline_created_at?: string | null
+  /** Active pipeline run updated_at (fallback: dim_clip.updated_at). */
+  pipeline_updated_at?: string | null
   steps: PipelineStepSummary[]
   frame_count: number
   /** Clip-centric: always 1 (one label unit per clip). */
@@ -60,18 +66,23 @@ export interface ClipOverview {
   /** All labels reviewed — eligible for dataset build (default policy) */
   dataset_ready?: boolean
   review_status?: ReviewStatus | null
+  /** Label taxonomy version used at infer (or pipeline settings when not labeled yet). */
+  taxonomy_version_id?: string | null
+  taxonomy_version_code?: string | null
 }
 
 export interface UploadPipelineStep {
   step_id: string
   label: string
   status: PipelineStatus
+  error_message?: string | null
 }
 
 export interface PipelineStepSummary {
   step_id: string
   status: PipelineStatus
   label: string
+  error_message?: string | null
 }
 
 export type LabelScope = 'frame' | 'sync_group' | 'clip'
@@ -199,6 +210,17 @@ export interface OssInfo {
   bucket: string
   endpoint: string
   root_prefixes: OssRootPrefix[]
+  simulated?: boolean
+}
+
+export interface OssShortcut {
+  id: string
+  label: string
+  prefix: string
+}
+
+export interface OssShortcutsResponse {
+  items: OssShortcut[]
 }
 
 export interface OssListItem {
@@ -238,11 +260,14 @@ export interface OssBagPipeline {
 
 export type TaxonomyStatus = 'draft' | 'published' | 'archived'
 
+export type TaxonomyArchiveReason = 'superseded' | 'user'
+
 export interface TaxonomyVersion {
   id: string
   version_code: string
   status: TaxonomyStatus
   published_at: string | null
+  archive_reason?: TaxonomyArchiveReason | null
   created_by: string | null
   source_import: string | null
   created_at: string
@@ -381,6 +406,7 @@ export interface ReviewV2ClipCard {
   run_id: string
   clip_dir_name: string
   label_preview?: string
+  asr_text?: string | null
   anchor_timestamp_ns?: number | null
   dispute_count?: number
   multi_ai_gate?: MultiAiGateMeta | null
@@ -463,6 +489,7 @@ export interface ReviewAssignmentBatch {
   label_ids: string[]
   queue_limit: number
   assignee_id: string | null
+  batch_kind?: 'low_confidence' | 'assigned' | 'public_pool'
   status: 'open' | 'closed'
   created_by: string | null
   created_at: string
@@ -475,6 +502,18 @@ export interface ReviewAssignmentBatch {
   my_done?: number
   my_staged_count?: number
   my_session_updated_at?: string | null
+  assignee_summaries?: ReviewAssignmentAssigneeSummary[]
+}
+
+export interface ReviewAssignmentAssigneeSummary {
+  assignee_id: string
+  username?: string | null
+  display_name?: string
+  done: number
+  in_progress: number
+  claimed_total: number
+  first_claimed_at?: string | null
+  last_activity_at?: string | null
 }
 
 export interface ReviewWorkbenchSession {
@@ -494,6 +533,8 @@ export interface ReviewAssignmentItem {
   assignee_id: string | null
   claimed_at: string | null
   sort_order: number
+  assignee_username?: string | null
+  assignee_display_name?: string | null
 }
 
 export interface ReviewAssignmentReviewer {
@@ -501,6 +542,44 @@ export interface ReviewAssignmentReviewer {
   username: string
   display_name: string
   roles: string[]
+}
+
+export interface OmniLabelPromptFieldMeta {
+  key: string
+  label: string
+  description: string
+  multiline: boolean
+}
+
+export interface PipelineRunSettings {
+  omni_model: string
+  embedding_model: string
+  taxonomy_version_id: string | null
+  sample_fps: number
+  min_sec: number
+  max_sec: number
+  max_clips: number
+  /** Local SDK worker parallel clip count (1–8); maps to HMI_LOCAL_SDK_PARALLEL when env unset. */
+  sdk_parallel?: number
+  omni_label_prompt?: Record<string, string>
+  /** Resolved display name (version_code + status); not persisted on save. */
+  taxonomy_version_label?: string
+}
+
+export interface PipelineSettingsResponse {
+  settings: PipelineRunSettings
+  options: {
+    omni_models: string[]
+    embedding_models: string[]
+    taxonomy_versions: {
+      id: string
+      version_code: string
+      status: string
+      archive_reason?: TaxonomyArchiveReason | null
+    }[]
+    omni_label_prompt_defaults?: Record<string, string>
+    omni_label_prompt_fields?: OmniLabelPromptFieldMeta[]
+  }
 }
 
 export type DatasetStatus = 'building' | 'ready' | 'failed' | 'archived'
@@ -514,11 +593,19 @@ export interface DatasetFilterJson {
   sample_size?: number | null
 }
 
+export interface DatasetPoolClipItem {
+  clip_id: string
+  run_id: string
+  clip_dir_name: string
+}
+
 export interface DatasetPreviewResponse {
   pool_count: number
   candidate_count: number
   sample_size?: number | null
   clip_ids: string[]
+  pool_items: DatasetPoolClipItem[]
+  pool_items_truncated?: boolean
   filter_json: DatasetFilterJson
 }
 
@@ -562,4 +649,47 @@ export interface DatasetDownloadResponse {
   y_key?: string
   x_url?: string
   y_url?: string
+}
+
+export interface SystemEnvVariable {
+  key: string
+  value: string
+  sensitive: boolean
+  in_catalog: boolean
+}
+
+export interface PipelineExecutionClip {
+  clip_id: string
+  clip_dir_name: string
+  ds: string
+  pipeline_status: string
+  pipeline_created_at: string
+  pipeline_updated_at?: string | null
+  steps?: UploadPipelineStep[]
+}
+
+export interface PipelineExecution {
+  run_id: string
+  label: string
+  started_at: string
+  created_at: string
+  pipeline_status: string
+  clip_count: number
+  clips: PipelineExecutionClip[]
+}
+
+export interface PipelineExecutionListResponse {
+  items: PipelineExecution[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface RegisterResponse {
+  ok: boolean
+  message: string
+  access_token: string
+  token_type: string
+  expires_in: number
+  user: import('../auth/types').AuthUser
 }

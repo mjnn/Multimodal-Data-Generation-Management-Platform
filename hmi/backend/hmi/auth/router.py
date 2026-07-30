@@ -5,18 +5,29 @@ from __future__ import annotations
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from hmi.app_db import authenticate_user, get_user_by_id
+from hmi.app_db import authenticate_user, create_user, get_user_by_id, update_user
 from hmi.auth.deps import get_current_user
+from hmi.auth.roles import DEFAULT_REGISTRATION_ROLES
 from hmi.auth.jwt_utils import (
     ACCESS_COOKIE,
     ACCESS_TOKEN_MINUTES,
     REFRESH_COOKIE,
     REFRESH_TOKEN_DAYS,
+    auth_cookie_paths,
     create_access_token,
     create_refresh_token,
     decode_token,
 )
-from hmi.auth.models import LoginRequest, LoginResponse, MeResponse, UserPublic
+from hmi.auth.models import (
+    ChangePasswordRequest,
+    LoginRequest,
+    LoginResponse,
+    MeResponse,
+    RegisterRequest,
+    RegisterResponse,
+    UpdateMeRequest,
+    UserPublic,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -32,13 +43,14 @@ def _user_public(user: dict) -> UserPublic:
 
 
 def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    access_path, refresh_path = auth_cookie_paths()
     response.set_cookie(
         key=ACCESS_COOKIE,
         value=access_token,
         httponly=True,
         samesite="lax",
         max_age=ACCESS_TOKEN_MINUTES * 60,
-        path="/",
+        path=access_path,
     )
     response.set_cookie(
         key=REFRESH_COOKIE,
@@ -46,13 +58,51 @@ def _set_auth_cookies(response: Response, access_token: str, refresh_token: str)
         httponly=True,
         samesite="lax",
         max_age=REFRESH_TOKEN_DAYS * 24 * 3600,
-        path="/api/auth",
+        path=refresh_path,
     )
 
 
 def _clear_auth_cookies(response: Response) -> None:
-    response.delete_cookie(ACCESS_COOKIE, path="/")
-    response.delete_cookie(REFRESH_COOKIE, path="/api/auth")
+    access_path, refresh_path = auth_cookie_paths()
+    response.delete_cookie(ACCESS_COOKIE, path=access_path)
+    response.delete_cookie(REFRESH_COOKIE, path=refresh_path)
+
+
+@router.post("/register", response_model=RegisterResponse)
+def register(body: RegisterRequest, response: Response) -> RegisterResponse:
+    import os
+
+    allow = os.getenv("HMI_ALLOW_REGISTRATION", "1").strip().lower()
+    if allow in {"0", "false", "no", "off"}:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "403_FORBIDDEN", "message": "registration is disabled"},
+        )
+    try:
+        user = create_user(
+            body.username.strip(),
+            body.password,
+            display_name=(body.display_name or body.username).strip(),
+            roles=list(DEFAULT_REGISTRATION_ROLES),
+            is_active=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "400_BAD_REQUEST", "message": str(exc)},
+        ) from exc
+
+    access_token = create_access_token(user)
+    refresh_token = create_refresh_token(user)
+    _set_auth_cookies(response, access_token, refresh_token)
+
+    return RegisterResponse(
+        ok=True,
+        message="注册成功，当前为匿名账号，仅可查看数据总览。如需管线、校核等功能请联系管理员分配角色",
+        access_token=access_token,
+        expires_in=ACCESS_TOKEN_MINUTES * 60,
+        user=_user_public(user),
+    )
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -118,3 +168,28 @@ def logout(response: Response) -> dict[str, bool]:
 @router.get("/me", response_model=MeResponse)
 def me(user: dict = Depends(get_current_user)) -> MeResponse:
     return MeResponse(user=_user_public(user))
+
+
+@router.patch("/me", response_model=MeResponse)
+def patch_me(body: UpdateMeRequest, user: dict = Depends(get_current_user)) -> MeResponse:
+    if body.display_name is None:
+        return MeResponse(user=_user_public(user))
+    try:
+        updated = update_user(user["id"], display_name=body.display_name.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MeResponse(user=_user_public(updated))
+
+
+@router.post("/change-password")
+def change_password(body: ChangePasswordRequest, user: dict = Depends(get_current_user)) -> dict[str, bool]:
+    if authenticate_user(user["username"], body.current_password) is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "400_BAD_REQUEST", "message": "current password is incorrect"},
+        )
+    try:
+        update_user(user["id"], password=body.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}

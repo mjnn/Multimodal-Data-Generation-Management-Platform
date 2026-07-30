@@ -3,7 +3,7 @@ import { Space, Spin, Tag, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
-import type { ClipOverview, ClipRun } from '../api/types'
+import type { ClipOverview, ClipRun, ClipLabelView, TaxonomyNodeDetail } from '../api/types'
 import { ClipMediaPanel } from '../components/ClipMediaPanel'
 import type { ClipTimelineState } from '../components/ClipTimelinePanel'
 import { MomentDetailPanel } from '../components/MomentDetailPanel'
@@ -11,6 +11,7 @@ import { RunSelector } from '../components/RunSelector'
 import { SimilarDrawer } from '../components/SimilarDrawer'
 import { BackLink, ContentCard, PageStack } from '../components/ui'
 import { clipDisplayName } from '../utils/clipDisplay'
+import { resolveSceneDescriptionText } from '../utils/labelDisplay'
 
 export function ClipExplorerPage() {
   const { clipId: rawId } = useParams()
@@ -23,6 +24,8 @@ export function ClipExplorerPage() {
   const [loading, setLoading] = useState(true)
   const [timelineState, setTimelineState] = useState<ClipTimelineState | null>(null)
   const [similarCompositeId, setSimilarCompositeId] = useState<string | null>(null)
+  const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
+  const [clipLabelMeta, setClipLabelMeta] = useState<ClipLabelView | null>(null)
 
   const initialTimestampNs = useMemo(() => {
     const tParam = searchParams.get('t')
@@ -45,6 +48,40 @@ export function ClipExplorerPage() {
       .finally(() => setLoading(false))
   }, [clipId, searchParams])
 
+  useEffect(() => {
+    if (!clipId || !runId) {
+      setClipLabelMeta(null)
+      return
+    }
+    void api
+      .getTimelineMeta(clipId, runId)
+      .then((meta) => setClipLabelMeta(meta.clip_label ?? null))
+      .catch(() => setClipLabelMeta(null))
+  }, [clipId, runId])
+
+  useEffect(() => {
+    void api
+      .listTaxonomyVersions()
+      .then((versions) => {
+        const published = versions.find((v) => v.status === 'published')
+        if (!published) {
+          setTaxonomyNodes([])
+          return
+        }
+        return api.getTaxonomyTree(published.id).then((tree) => setTaxonomyNodes(tree.nodes))
+      })
+      .catch(() => setTaxonomyNodes([]))
+  }, [])
+
+  const sceneDescription = useMemo(() => {
+    const clipLabel = timelineState?.meta.clip_label ?? clipLabelMeta
+    if (!clipLabel?.clip_label_ready) return null
+    return resolveSceneDescriptionText(clipLabel.labels_json, {
+      taxonomyNodes,
+      sceneSummary: clipLabel.scene_summary,
+    })
+  }, [timelineState?.meta.clip_label, clipLabelMeta, taxonomyNodes])
+
   const handleTimelineStateChange = useCallback((state: ClipTimelineState) => {
     setTimelineState(state)
   }, [])
@@ -62,11 +99,16 @@ export function ClipExplorerPage() {
       <ContentCard noPadding>
         <div className="clip-explorer__toolbar" style={{ padding: '12px 16px' }}>
           <Space>
-            <BackLink fallback="/" label="返回总览" />
+            <BackLink fallback="/" />
             <div>
               <Typography.Title level={4} style={{ margin: 0 }} className="mono">
                 {clipDisplayName(clip)}
               </Typography.Title>
+              {sceneDescription ? (
+                <Typography.Text type="secondary" style={{ fontSize: 13, display: 'block', marginTop: 4 }}>
+                  {sceneDescription}
+                </Typography.Text>
+              ) : null}
             </div>
           </Space>
           <Space wrap align="center">
@@ -95,6 +137,7 @@ export function ClipExplorerPage() {
           runId={runId}
           cursorNs={timelineState.cursorNs}
           clipLabel={timelineState.meta.clip_label}
+          sceneDescription={sceneDescription}
           asrSegments={timelineState.meta.asr_segments}
           events={timelineState.meta.events}
         />

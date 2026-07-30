@@ -2,7 +2,7 @@
 
 > 权威来源：`web-agent-delivery` skill → `references/acceptance-checklist-format.md`  
 > 模板：同目录 `_TEMPLATE.md`  
-> **Monorepo 路径**（2026-07）：验收命令中的 `backend/`、`scripts/` 见 [`../MONOREPO_PATHS.md`](../MONOREPO_PATHS.md)。
+> **仓库路径**：验收命令默认在仓库根执行；后端 `hmi/backend/`、脚本 `hmi/scripts/`、`pipeline/scripts/`。见 [`docs/REPO_LAYOUT.md`](../../docs/REPO_LAYOUT.md)。
 
 ## 三类验收项
 

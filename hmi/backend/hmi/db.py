@@ -31,6 +31,7 @@ def odps_client() -> ODPS:
 def cache_clear() -> int:
     from hmi.clip_context import context_cache_clear
     from hmi.services import clips, clips_local, pipeline_status, search, search_local
+    from hmi.services.overview_cache import overview_cache_clear
 
     n = len(_query_cache)
     _query_cache.clear()
@@ -40,6 +41,7 @@ def cache_clear() -> int:
     search.labeled_frames_cache_clear()
     search_local.labeled_frames_cache_clear()
     pipeline_status.bag_pipeline_cache_clear()
+    overview_cache_clear()
     return n
 
 
@@ -81,4 +83,6 @@ def normalize_pipeline_status(raw: str | None) -> str:
         return "running"
     if v in {"skipped", "skip"}:
         return "skipped"
+    if v in {"cancelled", "canceled", "aborted", "abort"}:
+        return "cancelled"
     return "pending"

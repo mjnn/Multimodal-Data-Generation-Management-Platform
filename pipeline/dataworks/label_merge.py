@@ -1,6 +1,6 @@
 """Dual-model clip label merge & compare (job4_label_merge_and_compare).
 
-Used by DataWorks job4 node and HMI ingest (via backend/hmi/label_merge.py).
+Used by DataWorks job4 node and HMI ingest (via `hmi/backend/hmi/label_merge.py`).
 """
 
 from __future__ import annotations

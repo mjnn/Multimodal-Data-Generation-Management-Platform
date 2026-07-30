@@ -866,6 +866,7 @@ def _seed_db_rows(
     flat_labels: dict[str, Any],
     frame_rows: list[dict[str, Any]],
     audio_rel: str | None,
+    bag_oss_key: str | None = None,
 ) -> None:
     from hmi.sdk_ingest import seed_sqlite_from_sdk_parsed
 
@@ -875,7 +876,8 @@ def _seed_db_rows(
         run_id=run_id,
         ds=DS,
         clip_dir_name=dir_name,
-        bag_oss_key=f"{REAL_DATA_BAG_OSS_PREFIX}{_slug(dir_name)}/{bag_name}",
+        bag_oss_key=bag_oss_key
+        or f"{REAL_DATA_BAG_OSS_PREFIX}{_slug(dir_name)}/{bag_name}",
         label_row=label_row,
         embed_row=embed_row,
         flat_labels=flat_labels,
@@ -884,8 +886,14 @@ def _seed_db_rows(
     )
 
 
-def list_runs(*, source: str | None = None, all_sources: bool = False) -> list[Path]:
-    if not REAL_DATA_ROOT.is_dir():
+def list_runs(
+    *,
+    source: str | None = None,
+    all_sources: bool = False,
+    data_root: Path | None = None,
+) -> list[Path]:
+    root_base = (data_root or REAL_DATA_ROOT).resolve()
+    if not root_base.is_dir():
         return []
 
     def _collect_under(root: Path) -> list[Path]:
@@ -898,15 +906,20 @@ def list_runs(*, source: str | None = None, all_sources: bool = False) -> list[P
         return out
 
     if source:
-        return _collect_under(REAL_DATA_ROOT / source.strip())
+        return _collect_under(root_base / source.strip())
 
     runs: list[Path] = []
     if not all_sources:
-        batch_runs = _collect_under(REAL_DATA_ROOT / "pipeline_latest")
+        nested = root_base / "pipeline_latest"
+        if nested.is_dir():
+            batch_runs = _collect_under(nested)
+            if batch_runs:
+                return batch_runs
+        batch_runs = _collect_under(root_base)
         if batch_runs:
             return batch_runs
 
-    for child in sorted(REAL_DATA_ROOT.iterdir()):
+    for child in sorted(root_base.iterdir()):
         if not child.is_dir() or child.name in BATCH_CONTAINER_NAMES:
             continue
         if _is_importable_run_dir(child):
@@ -914,7 +927,7 @@ def list_runs(*, source: str | None = None, all_sources: bool = False) -> list[P
     if not all_sources:
         return runs
     for batch in BATCH_CONTAINER_NAMES:
-        runs.extend(_collect_under(REAL_DATA_ROOT / batch))
+        runs.extend(_collect_under(root_base / batch))
     # de-dupe by folder name (prefer top-level)
     seen: set[str] = set()
     unique: list[Path] = []
@@ -933,21 +946,33 @@ def import_run(
     preview_mode: str = DEFAULT_PREVIEW_MODE,
     preview_fps: float | None = None,
     max_frames_per_camera: int = DEFAULT_MAX_FRAMES_PER_CAMERA,
+    fixed_run_id: str | None = None,
+    fixed_clip_id: str | None = None,
+    bag_oss_key: str | None = None,
 ) -> dict[str, Any]:
     labels_path = run_dir / "labels.jsonl"
     embed_path = run_dir / "fusion_embeddings.jsonl"
     if not labels_path.is_file() or not embed_path.is_file():
         raise FileNotFoundError(f"missing labels/embed jsonl under {run_dir}")
 
+    run_dir_name = run_dir.name
     label_row = _read_jsonl_first(labels_path)
     embed_row = _read_jsonl_first(embed_path)
     flat_labels = labels_to_clip_dict(label_row.get("labels") or {})
 
-    run_dir_name = run_dir.name
-    clip_id = clip_id_from_bag(run_dir, label_row)
-    run_id = run_id_for_run(run_dir_name)
+    clip_id = fixed_clip_id or clip_id_from_bag(run_dir, label_row)
+    run_id = fixed_run_id or run_id_for_run(run_dir_name)
     dir_name = display_name(run_dir, label_row)
-    bag_path = _resolve_bag_path(run_dir, label_row)
+    bag_path: Path | None = None
+    if bag_oss_key:
+        try:
+            from hmi.local.bag_upload import resolve_local_bag_path
+
+            bag_path = resolve_local_bag_path(bag_oss_key)
+        except Exception:
+            bag_path = None
+    if bag_path is None or not bag_path.is_file():
+        bag_path = _resolve_bag_path(run_dir, label_row)
     bag_name = bag_path.name
 
     run_root = artifacts_dir(clip_id, run_id)
@@ -979,7 +1004,8 @@ def import_run(
         clip_id=clip_id,
         run_id=run_id,
         source_run_dir=run_dir_name,
-        bag_oss_key=f"{REAL_DATA_BAG_OSS_PREFIX}{_slug(run_dir_name)}/{bag_name}",
+        bag_oss_key=bag_oss_key
+        or f"{REAL_DATA_BAG_OSS_PREFIX}{_slug(run_dir_name)}/{bag_name}",
         ds=DS,
     )
     _seed_db_rows(
@@ -991,6 +1017,8 @@ def import_run(
         flat_labels=flat_labels,
         frame_rows=frame_rows,
         audio_rel=audio_rel,
+        bag_oss_key=bag_oss_key
+        or f"{REAL_DATA_BAG_OSS_PREFIX}{_slug(dir_name)}/{bag_name}",
     )
 
     review_status = "skipped"
@@ -1181,6 +1209,12 @@ def main() -> int:
     parser.add_argument("--reset", action="store_true", help="Clear demo + prior real imports first")
     parser.add_argument("--run", help="Import one run folder (name or pipeline_latest/<name>)")
     parser.add_argument(
+        "--from-path",
+        type=Path,
+        default=None,
+        help="Import from this directory instead of data/real_data (e.g. hmi_runtime/sandbox/pipeline_latest)",
+    )
+    parser.add_argument(
         "--source",
         default=None,
         help="Import runs under data/real_data/<source> (default: pipeline_latest when present)",
@@ -1228,6 +1262,12 @@ def main() -> int:
         default=DEFAULT_MAX_FRAMES_PER_CAMERA,
         help="Cap frames imported per camera (default 900)",
     )
+    parser.add_argument("--run-id", dest="fixed_run_id", help="Use this pipeline run_id (local SDK upload)")
+    parser.add_argument("--clip-id", dest="fixed_clip_id", help="Use this clip_id (local SDK upload)")
+    parser.add_argument(
+        "--bag-oss-key",
+        help="dim_clip bag_oss_key (e.g. local://rosbags/coll/file.bag)",
+    )
     args = parser.parse_args()
 
     if args.purge_test_clips:
@@ -1250,19 +1290,20 @@ def main() -> int:
         print(f"Backfilled label hints on {n} clip(s)")
         return 0 if n else 1
 
-    runs = list_runs(source=args.source, all_sources=args.all_sources)
+    data_root = args.from_path.resolve() if args.from_path else REAL_DATA_ROOT
+    runs = list_runs(source=args.source, all_sources=args.all_sources, data_root=data_root)
     if args.materialize_media:
         if not runs:
-            print(f"error: no importable runs under {REAL_DATA_ROOT}", file=sys.stderr)
+            print(f"error: no importable runs under {data_root}", file=sys.stderr)
             return 1
         copied = 0
         for run_dir in runs:
             result = materialize_run_media(run_dir)
             if result.get("audio.wav") or any(k.startswith("clip_preview_") for k in result):
                 copied += 1
-                print(f"  media OK  {run_dir.relative_to(REAL_DATA_ROOT)}")
+                print(f"  media OK  {run_dir.relative_to(data_root)}")
             else:
-                print(f"  SKIP (no video)  {run_dir.relative_to(REAL_DATA_ROOT)}", file=sys.stderr)
+                print(f"  SKIP (no video)  {run_dir.relative_to(data_root)}", file=sys.stderr)
         print(f"\nMaterialized {copied} clip video(s)")
         return 0 if copied else 1
 
@@ -1274,12 +1315,12 @@ def main() -> int:
             has_work = work_mp4.is_dir() and any(work_mp4.glob("clip_preview_camera*.mp4"))
             ok = "OK" if lab.is_file() and (run_dir / "fusion_embeddings.jsonl").is_file() else "MISSING"
             media = "sdk-multicam" if vid.is_file() or has_work else "frames?"
-            print(f"  [{ok}|{media}] {run_dir.relative_to(REAL_DATA_ROOT)}")
+            print(f"  [{ok}|{media}] {run_dir.relative_to(data_root)}")
         print(f"\nTotal: {len(runs)} run(s)")
         return 0
 
     if not runs:
-        print(f"error: no importable runs under {REAL_DATA_ROOT}", file=sys.stderr)
+        print(f"error: no importable runs under {data_root}", file=sys.stderr)
         return 1
 
     if args.reset:
@@ -1290,8 +1331,8 @@ def main() -> int:
     if args.run:
         run_arg = args.run.strip().replace("\\", "/")
         candidates = [
-            REAL_DATA_ROOT / run_arg,
-            REAL_DATA_ROOT / "pipeline_latest" / run_arg.split("/")[-1],
+            data_root / run_arg,
+            data_root / "pipeline_latest" / run_arg.split("/")[-1],
         ]
         targets = [c for c in candidates if c.is_dir()]
         if not targets:
@@ -1309,6 +1350,9 @@ def main() -> int:
                     preview_mode=args.preview_mode,
                     preview_fps=args.preview_fps,
                     max_frames_per_camera=args.max_frames_per_camera,
+                    fixed_run_id=args.fixed_run_id,
+                    fixed_clip_id=args.fixed_clip_id,
+                    bag_oss_key=args.bag_oss_key,
                 )
             )
         except Exception as exc:
@@ -1321,14 +1365,16 @@ def main() -> int:
     except Exception:
         pass
 
-    print(f"Imported {len(results)} clip(s) from {REAL_DATA_ROOT}\n")
+    from hmi.data_source import LOCAL_ARTIFACTS_ROOT, LOCAL_DB_PATH
+
+    print(f"Imported {len(results)} clip(s) from {data_root}\n")
     for row in results:
         print(
             f"  {row['display_name'][:40]:40}  preview={row['preview_source']:16}  "
             f"labels={row['label_count']:3}  dim={row['embed_dim']}  review={row['review']}"
         )
-    print(f"\nArtifacts: data/hmi_local/artifacts/clips/")
-    print(f"SQLite:    data/hmi_local/hmi.db  (ds={DS})")
+    print(f"\nArtifacts: {LOCAL_ARTIFACTS_ROOT / 'clips'}/")
+    print(f"SQLite:    {LOCAL_DB_PATH}  (ds={DS})")
     return 0 if results else 1
 
 

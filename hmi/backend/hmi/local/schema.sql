@@ -24,13 +24,21 @@ CREATE TABLE IF NOT EXISTS pipeline_run (
 
 CREATE TABLE IF NOT EXISTS pipeline_step (
   run_id TEXT NOT NULL,
+  clip_id TEXT NOT NULL DEFAULT '',
   ds TEXT NOT NULL,
   step_id TEXT NOT NULL,
   status TEXT,
   started_at TEXT,
   finished_at TEXT,
   error_message TEXT,
-  PRIMARY KEY (run_id, ds, step_id)
+  PRIMARY KEY (run_id, clip_id, ds, step_id)
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_execution (
+  run_id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS clip_parse_summary (

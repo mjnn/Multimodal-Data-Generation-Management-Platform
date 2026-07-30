@@ -255,7 +255,7 @@ Dispatch payload 额外字段：`pipeline_version` · `taxonomy_version_id` · `
 | **≥ threshold**（默认 0.7） | 合并为 `labels_merged.json`；单字段不一致时 **以 job2（primary）为准** |
 | **< threshold** | 不一致字段 **留空**；`consensus_meta.json` 标记争议；HMI 校核页高亮 |
 
-实现：`pipeline/dataworks/label_merge.py` · 配置：`shared/shared/config.yaml` → `cloud.job4_label_merge_and_compare.agreement_threshold`
+实现：`pipeline/dataworks/label_merge.py` · 配置：`shared/config.yaml` → `cloud.job4_label_merge_and_compare.agreement_threshold`
 
 ---
 

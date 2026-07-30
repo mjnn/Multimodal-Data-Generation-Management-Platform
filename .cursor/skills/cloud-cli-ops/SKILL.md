@@ -58,7 +58,7 @@ PATH 未生效时用完整路径。odpscmd 需要 **Java 8+**（本机 Temurin J
 ## Standard workflow
 
 ```powershell
-cd D:\cursor_project\rosbag_to_labels_pipline\pipeline
+cd pipeline
 
 # 1. After .env change (repo root .env)
 py -3 scripts\sync_cloud_cli_config.py

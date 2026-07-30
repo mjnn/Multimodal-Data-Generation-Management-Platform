@@ -9,7 +9,7 @@ from dotenv import load_dotenv as _load_dotenv
 from .acoustic_panel import AcousticPanelConfig, render_acoustic_panel
 from .asr_client import AsrClient, AsrConfig
 from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_video
-from .config import BagProcessResult, ClientConfig, ClipConfig, ModelBackend, OutputConfig
+from .config import BagProcessResult, ClientConfig, ClipConfig, ModelBackend, OutputConfig, StorageBackend
 from .embedding_client import FusionEmbeddingClient
 from .exceptions import ConfigurationError
 from .omni_client import OmniLabelClient
@@ -48,6 +48,7 @@ class OmsMultimodalClient:
         config: ClientConfig | None = None,
         load_dotenv: bool = True,
         model_backend: ModelBackend | None = None,
+        storage_backend: StorageBackend | None = None,
     ):
         if load_dotenv:
             _load_dotenv()
@@ -66,13 +67,14 @@ class OmsMultimodalClient:
         self.asr_config = asr_config or base.asr_config or AsrConfig.from_env()
         self.clip_video_config = clip_video_config or base.clip_video_config or ClipVideoConfig.from_env()
         self.model_backend: ModelBackend = model_backend or base.model_backend
-
-        taxonomy = Path(taxonomy_path) if taxonomy_path else base.taxonomy_path
-        if taxonomy is None:
-            self.taxonomy_path: Path | None = None
-            self._taxonomy: dict[str, Any] | None = None
+        self.storage_backend: StorageBackend = storage_backend or base.storage_backend
+        self.omni_label_prompt = base.omni_label_prompt
+        resolved_taxonomy_path = Path(taxonomy_path) if taxonomy_path else base.taxonomy_path
+        if resolved_taxonomy_path is None:
+            self.taxonomy_path = None
+            self._taxonomy = None
         else:
-            self.taxonomy_path = Path(taxonomy)
+            self.taxonomy_path = Path(resolved_taxonomy_path)
             self._taxonomy = load_taxonomy(self.taxonomy_path)
 
         self._pipeline: LabelEmbeddingPipeline | None = None
@@ -115,6 +117,7 @@ class OmsMultimodalClient:
                 api_key=self.api_key,
                 workspace_id=self.workspace_id,
                 region=self.region,
+                omni_label_prompt=self.omni_label_prompt,
             )
         return self._omni
 
@@ -263,6 +266,25 @@ class OmsMultimodalClient:
             video_rows=summary.get("video_rows", 0),
             errors=summary["errors"],
         )
+
+    def publish_run_storage(
+        self,
+        run_dir: Path,
+        *,
+        clip_id: str,
+        run_id: str,
+    ) -> str | None:
+        """After process_bag, mirror or upload artifacts per storage_backend."""
+        from .storage_backend import (
+            mirror_outputs_to_local_runtime,
+            upload_run_dir_to_oss,
+        )
+
+        run_dir = Path(run_dir)
+        if self.storage_backend == "local":
+            dest = mirror_outputs_to_local_runtime(run_dir=run_dir, clip_id=clip_id, run_id=run_id)
+            return str(dest)
+        return upload_run_dir_to_oss(run_dir, clip_id=clip_id, run_id=run_id)
 
     def render_acoustic_panel(
         self,

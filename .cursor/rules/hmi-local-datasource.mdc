@@ -1,52 +1,58 @@
 ---
-description: HMI 本地数据源（SQLite+artifacts）与云端切换；sync_hmi_local、HMI_DATA_SOURCE
-globs: hmi/backend/**,hmi/scripts/**,hmi/frontend/**
+description: HMI 本地数据源（SQLite + 磁盘 OSS 模拟）与在线 OSS/MC
+globs: hmi/backend/**,hmi/frontend/**,hmi/scripts/**
 alwaysApply: false
 ---
 
-# HMI 双数据源（cloud / local）
+# HMI 数据源
 
-## 目的
+## 模式
 
-- **local**：`hmi/data/hmi_local/` 镜像 MC 表 + OSS 产物，秒开预览与 UI 联调
-- **cloud**：MaxCompute + OSS 预签名，生产数据；性能优化与 local 并行迭代
+| `data_source` | 元数据 | 文件 |
+|---------------|--------|------|
+| **local** | `hmi_runtime/hmi.db` | **`oss/`**（模拟云端桶）+ **`artifacts/`**（同步后 runtime） |
+| **cloud** | MaxCompute | 阿里云 OSS |
 
-## 目录
+UI 侧栏 **本地模式 / 在线模式** → `GET/POST /api/config/data-source`。切换后刷新页面；后端 `router.py` 在 local 时用 `clips_local` / `search_local`。
 
-| 路径 | 内容 |
-|------|------|
-| `hmi/data/hmi_local/hmi.db` | SQLite（`hmi/hmi/backend/hmi/local/schema.sql`） |
-| `hmi/data/hmi_local/artifacts/clips/{safe_clip}/runs/{run_id}/` | **sdk_v1**：三 jsonl + `preview/` |
-| `hmi/data/hmi_local/config.json` | 运行时 `data_source`（前端切换写入） |
+## 本地运行时
 
-**Windows**：`clip_id` 含 `:`，artifacts 目录用 `safe_clip_dir`（`sha256:hex` → `sha256__hex`），逻辑 ID 仍为 `sha256:hex`。
+- 默认根：`hmi/data/hmi_runtime/`（`HMI_RUNTIME_ROOT` / `shared/repo_paths.HMI_RUNTIME_ROOT`）
+- 初始化：`hmi/scripts/init_local_runtime.py`
+- ECS：将 `HMI_RUNTIME_ROOT` 指向挂载盘即可视为本地模式
 
-## 切换
+## 本地 OSS 模拟（sdk_v1）
 
-- 前端右上角 **云端 MC / 本地 SQLite** → `POST /api/config/data-source`
-- 本地模式下二级：**真实数据 / 演示数据** → `POST /api/config/local-profile`（`real|demo`）
-- 或 `.env`：`HMI_DATA_SOURCE=cloud|local` · `HMI_LOCAL_PROFILE=real|demo`
-- **real**：读 `hmi.db` + artifacts；图像/音频 `GET /api/local-files/...`；禁止上传
-- **demo**：前端 Mock（picsum 占位图）；无需 sync；上传走前端模拟
+- **云端等价物**：`hmi_runtime/oss/`（rosbags、clips、pipeline/dispatch、config/taxonomy、…）
+- **Clip 产物路径**：`oss/clips/{clip_id 中 `:` → `__}/runs/{run_id}/`（jsonl + preview/ + run.json）
+- **SDK worker**（`local_sdk_worker`）：infer → import 生成 preview → **mirror 到 `oss/clips/`** → 写 `pipeline/dispatch/latest.json`
+- **禁止**依赖 `sync_sandbox_pipeline.py`（已废弃）；新 bag 走上传 + worker
 
-## 同步（cloud → local）
+## OSS 管理（local）
 
-```bash
-cd hmi
-python scripts/sync_hmi_local.py --clip-id sha256:...
-# 仅表：--skip-oss · 仅 OSS：--oss-only
-```
+- `GET /api/oss/*` 在 `data_source=local` 时读写 **`LOCAL_OSS_ROOT`**，勿连真实 bucket
+- **`bucket` 展示名**：`本地磁盘`；`endpoint` 为 oss 根目录绝对路径；`simulated: true`
+- 前端 `OssManagePage` 随 data-source 切换重新拉 info/list
 
-- 配置：`shared/config.yaml` · 表前缀 **`aig_sdk__`**
-- 同步表（SDK）：`dim_clip`、`pipeline_run/step`、`clip_parse_summary`、`fact_clip_label`、`fact_clip_embedding`、`fact_audio_segment`
-- OSS 下载：`preview/`、`labels.jsonl`、`fusion_embeddings.jsonl`、`clip_videos.jsonl`、`run.json`（legacy：`parsed/`、`ai/` 只读 fallback）
-- OSS 同步后：`hmi/hmi/backend/hmi/sdk_ingest.py` 刷新 SQLite
+## OSS → runtime 同步
 
-## 代码分界
+- OSS 管理 **「自动同步 OSS 产物到本地」** → `oss_sync_poller`；local 下读 **本地** dispatch，执行 `sync_runtime_from_local_oss`（oss/clips → artifacts + SQLite ingest）
+- 线上仍用 `hmi/scripts/sync_hmi_local.py`（MC+OSS）
+- 启动可选：`HMI_MIRROR_ARTIFACTS_TO_OSS=1` 将已有 artifacts 回填到 oss/clips
 
-- 路由：`hmi/router.py` → `clips_local` / `clips`（cloud）
-- 禁止 local 路径直接调 ODPS；禁止 cloud 路径读 `hmi.db` 当生产源
+## 本地 SDK 轮询
+
+- `HMI_LOCAL_SDK_POLL_ENABLED`（local 默认开）扫描 `local://rosbags/` 登记项
+- 步骤写 `pipeline_step`；总览读 `hmi.db`
+
+## HMI 产物 baseline
+
+侧栏 **重置 HMI 产物**（admin）→ `POST /api/hmi/reset-artifacts`：校核/派单/数据集/用户(除 admin)/标签树 → 仅 `label_tree_baseline`；**不删** clip 管线产物。
+
+## 演示 Clip
+
+`sha256:demo_*` 通过 `seed_demo_clip_data.py` 写入本地 clip SQLite。
 
 ## 来源
 
-沉淀自 session 2026-06-11 + 2026-07-27（SDK v1 sync / sdk_ingest）
+沉淀自 session 2026-07-27（本地 OSS 模拟 + SDK worker + 同步 + OSS UI）

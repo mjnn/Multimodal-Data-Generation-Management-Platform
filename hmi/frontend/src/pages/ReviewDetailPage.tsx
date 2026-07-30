@@ -401,7 +401,7 @@ export function ReviewDetailPage() {
                     ? 'Clip 级'
                     : '兼容聚合'}
                 </Descriptions.Item>
-                <Descriptions.Item label="更新时间">{review.updated_at}</Descriptions.Item>
+                <Descriptions.Item label="更新时间">{api.formatDateTime(review.updated_at)}</Descriptions.Item>
               </Descriptions>
             </ContentCard>
           </Space>

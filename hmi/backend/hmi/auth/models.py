@@ -27,3 +27,27 @@ class LoginResponse(BaseModel):
 
 class MeResponse(BaseModel):
     user: UserPublic
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8)
+    display_name: str | None = Field(default=None, max_length=64)
+
+
+class RegisterResponse(BaseModel):
+    ok: bool = True
+    message: str
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserPublic
+
+
+class UpdateMeRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=64)

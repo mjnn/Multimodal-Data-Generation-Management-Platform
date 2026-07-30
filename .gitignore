@@ -16,12 +16,11 @@ pipeline/data/*.db
 
 # HMI runtime
 hmi/data/hmi_local/
+hmi/data/hmi_runtime/**
+!hmi/data/hmi_runtime/README.md
 hmi/data/*.db
 hmi/frontend/node_modules/
 hmi/frontend/dist/
-
-# Legacy nested copy (should be removed)
-rosbag_to_labels_pipline/
 
 # Pipeline clip parse outputs (keep rosbag)
 pipeline/clips/**/parsed_data/**/images/**
@@ -38,6 +37,3 @@ Thumbs.db
 archive/workspace-scratch/
 reset-cloud-env/
 *.zip
-
-# One-off maintenance
-tools/_patch_monorepo_paths*.py

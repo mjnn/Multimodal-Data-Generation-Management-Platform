@@ -1,8 +1,9 @@
-import { Tag } from 'antd'
+import { Empty, Space, Tag, Typography } from 'antd'
 
 import type { ReviewV2ClipCard as ClipCard, ReviewV2Task } from '../api/types'
 
 import { ClipMediaPanel } from './ClipMediaPanel'
+import { ContentCard } from './ui'
 import { clipDisplayName } from '../utils/clipDisplay'
 
 
@@ -67,41 +68,71 @@ export function ReviewClipMediaPanel({ task }: Props) {
 
   return (
 
-    <ClipMediaPanel
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
 
-      clipId={task.clip_id}
+      <ClipMediaPanel
 
-      runId={task.run_id}
+        clipId={task.clip_id}
 
-      initialTimestampNs={parseAnchorTimestampNs(card.anchor_timestamp_ns)}
+        runId={task.run_id}
 
-      title={clipDisplayName({ clip_id: card.clip_id })}
+        initialTimestampNs={parseAnchorTimestampNs(card.anchor_timestamp_ns)}
 
-      labelPreview={card.label_preview}
+        title={clipDisplayName({ clip_id: card.clip_id })}
 
-      testId="review-clip-card"
+        labelPreview={card.label_preview}
 
-      metaTags={
+        testId="review-clip-card"
 
-        <>
+        metaTags={
 
-          {renderGateTags(card)}
+          <>
 
-          {card.review_status ? (
+            {renderGateTags(card)}
 
-            <Tag color={card.review_status === 'reviewed' ? 'success' : 'warning'}>
+            {card.review_status ? (
 
-              {card.review_status === 'reviewed' ? 'Clip 已校核' : 'Clip 待校核'}
+              <Tag color={card.review_status === 'reviewed' ? 'success' : 'warning'}>
 
-            </Tag>
+                {card.review_status === 'reviewed' ? 'Clip 已校核' : 'Clip 待校核'}
 
-          ) : null}
+              </Tag>
 
-        </>
+            ) : null}
 
-      }
+          </>
 
-    />
+        }
+
+      />
+
+      <ContentCard title="ASR 文本" className="review-workbench-asr">
+
+        {card.asr_text?.trim() ? (
+
+          <Typography.Paragraph className="clip-detail-asr" style={{ margin: 0 }}>
+
+            {card.asr_text.trim()}
+
+          </Typography.Paragraph>
+
+        ) : (
+
+          <Empty
+
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+
+            description="本 Clip 无 ASR 文本"
+
+            style={{ margin: '8px 0' }}
+
+          />
+
+        )}
+
+      </ContentCard>
+
+    </Space>
 
   )
 

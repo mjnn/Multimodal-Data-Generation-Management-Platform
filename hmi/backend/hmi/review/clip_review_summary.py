@@ -7,8 +7,32 @@ from typing import Any
 from hmi.app_db import db_conn
 from hmi.clip_facts import get_clip_label_view
 from hmi.local.clip_context import resolve_ds_for_run
+from hmi.labels_util import labels_to_clip_dict
 from hmi.review.merge import all_ai_labels_field_reviewed, get_ai_label_ids
 from hmi.review_db import get_review
+
+
+def _legacy_reviewed_field_count(
+    *,
+    review_status: str | None,
+    label_total: int,
+    field_reviewed: int,
+    clip_id: str,
+    run_id: str,
+) -> tuple[int, int]:
+    """Clip-level「已校核」但无逐字段记录时，与详情展示对齐。"""
+    if review_status != "reviewed" or field_reviewed > 0:
+        return label_total, field_reviewed
+    review = get_review(clip_id, run_id)
+    if not review:
+        return label_total, field_reviewed
+    if label_total <= 0:
+        legacy_flat = labels_to_clip_dict(review.get("labels_json") or {})
+        if legacy_flat:
+            label_total = len(legacy_flat)
+    if label_total > 0:
+        field_reviewed = label_total
+    return label_total, field_reviewed
 
 
 def get_clip_review_summary(clip_id: str, run_id: str) -> dict[str, Any]:
@@ -30,6 +54,14 @@ def get_clip_review_summary(clip_id: str, run_id: str) -> dict[str, Any]:
     field_reviewed = count_field_reviews(clip_id, run_id)
     review = get_review(clip_id, run_id)
     review_status = review.get("review_status") if review else None
+
+    label_total, field_reviewed = _legacy_reviewed_field_count(
+        review_status=review_status,
+        label_total=label_total,
+        field_reviewed=field_reviewed,
+        clip_id=clip_id,
+        run_id=run_id,
+    )
 
     complete = bool(ai_ids) and all_ai_labels_field_reviewed(clip_id, run_id)
     if review_status == "reviewed" and label_total > 0:
@@ -98,6 +130,14 @@ def batch_clip_review_summaries(
         label_total = len(ai_ids)
         field_reviewed = field_counts.get((clip_id, run_id), 0)
         review_status = review_statuses.get((clip_id, run_id))
+
+        label_total, field_reviewed = _legacy_reviewed_field_count(
+            review_status=review_status,
+            label_total=label_total,
+            field_reviewed=field_reviewed,
+            clip_id=clip_id,
+            run_id=run_id,
+        )
 
         complete = label_total > 0 and field_reviewed >= label_total
         if review_status == "reviewed" and label_total > 0:

@@ -1,4 +1,10 @@
-export type AppRole = 'admin' | 'reviewer' | 'dataset_manager' | 'model_trainer'
+export type AppRole =
+  | 'admin'
+  | 'reviewer'
+  | 'dataset_manager'
+  | 'model_trainer'
+  | 'pipeline_manager'
+  | 'anonymous'
 
 export type AuthUser = {
   id: string

@@ -12,7 +12,7 @@ import {
 
   Modal,
 
-  Switch,
+  Space,
 
   Table,
 
@@ -33,7 +33,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { apiErrorMessage } from '../utils/apiError'
 
-import type { DatasetSnapshot, DatasetStatus, TaxonomyNodeDetail } from '../api/types'
+import type { DatasetSnapshot, DatasetStatus, DatasetPoolClipItem, TaxonomyNodeDetail } from '../api/types'
 
 import { DatasetLabelFilterForm, type LabelFilters } from '../components/DatasetLabelFilterForm'
 
@@ -71,7 +71,7 @@ const STATUS_LABEL: Record<DatasetStatus, string> = {
 
   failed: '失败',
 
-  archived: '已归档',
+  archived: '已删除',
 
 }
 
@@ -94,43 +94,23 @@ function cleanLabelFilters(labelFilters: LabelFilters): LabelFilters {
 
 
 function buildFilterJson(
-
-  includePendingReview: boolean,
-
   labelFilters: LabelFilters,
-
   sampleSize?: number | null,
-
 ): {
-
   review_status: 'reviewed'
-
   include_pending_review: boolean
-
   label_filters?: LabelFilters
-
   sample_size?: number
-
 } {
-
   const cleaned = cleanLabelFilters(labelFilters)
-
   const filter: {
-
     review_status: 'reviewed'
-
     include_pending_review: boolean
-
     label_filters?: LabelFilters
-
     sample_size?: number
-
   } = {
-
     review_status: 'reviewed',
-
-    include_pending_review: includePendingReview,
-
+    include_pending_review: false,
   }
 
   if (Object.keys(cleaned).length > 0) {
@@ -159,8 +139,6 @@ export function DatasetListPage() {
 
   const canManage = canManageDatasets(user?.roles)
 
-  const isAdmin = user?.roles?.includes('admin')
-
 
 
   const { status, page, setStatus, setPage } = useListQueryState({ defaultStatus: 'all' })
@@ -185,11 +163,15 @@ export function DatasetListPage() {
 
   const [previewLoading, setPreviewLoading] = useState(false)
 
+  const [poolItems, setPoolItems] = useState<DatasetPoolClipItem[]>([])
+
+  const [poolItemsTruncated, setPoolItemsTruncated] = useState(false)
+
+  const [poolModalOpen, setPoolModalOpen] = useState(false)
+
   const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
 
   const [labelFilters, setLabelFilters] = useState<LabelFilters>({})
-
-  const [includePendingReview, setIncludePendingReview] = useState(false)
 
   const [form] = Form.useForm()
 
@@ -295,7 +277,7 @@ export function DatasetListPage() {
 
       .previewDataset({
 
-        filter_json: buildFilterJson(includePendingReview, debouncedLabelFilters, sampleSize),
+        filter_json: buildFilterJson(debouncedLabelFilters, sampleSize),
 
       })
 
@@ -305,6 +287,10 @@ export function DatasetListPage() {
 
         setPreviewCount(res.candidate_count)
 
+        setPoolItems(res.pool_items ?? [])
+
+        setPoolItemsTruncated(Boolean(res.pool_items_truncated))
+
       })
 
       .catch(() => {
@@ -313,11 +299,15 @@ export function DatasetListPage() {
 
         setPreviewCount(null)
 
+        setPoolItems([])
+
+        setPoolItemsTruncated(false)
+
       })
 
       .finally(() => setPreviewLoading(false))
 
-  }, [createOpen, debouncedLabelFilters, includePendingReview, sampleSize])
+  }, [createOpen, debouncedLabelFilters, sampleSize])
 
 
 
@@ -325,15 +315,17 @@ export function DatasetListPage() {
 
     form.resetFields()
 
-    form.setFieldsValue({ include_pending_review: false, sample_size: undefined })
+    form.setFieldsValue({ sample_size: undefined })
 
     setLabelFilters({})
-
-    setIncludePendingReview(false)
 
     setPreviewPool(null)
 
     setPreviewCount(null)
+
+    setPoolItems([])
+
+    setPoolModalOpen(false)
 
     setCreateOpen(true)
 
@@ -344,8 +336,6 @@ export function DatasetListPage() {
   const submitCreate = async () => {
 
     const values = await form.validateFields()
-
-    const pending = Boolean(values.include_pending_review)
 
     const sample = values.sample_size as number | undefined
 
@@ -359,7 +349,7 @@ export function DatasetListPage() {
 
         description: values.description?.trim() || undefined,
 
-        filter_json: buildFilterJson(pending, labelFilters, sample),
+        filter_json: buildFilterJson(labelFilters, sample),
 
       })
 
@@ -415,7 +405,12 @@ export function DatasetListPage() {
 
       { title: 'Clip 数', dataIndex: 'clip_count', width: 100 },
 
-      { title: '创建时间', dataIndex: 'created_at', width: 220 },
+      {
+        title: '创建时间',
+        dataIndex: 'created_at',
+        width: 220,
+        render: (v: string) => api.formatDateTime(v),
+      },
 
       {
 
@@ -649,6 +644,32 @@ export function DatasetListPage() {
 
 
 
+          <Form.Item
+            label="满足条件的已校核 Clip"
+            extra="按上方标签条件筛选，且已完成字段校核的 clip 数量；可点击查看列表并跳转详情。"
+          >
+            <Space wrap>
+              <Typography.Text>
+                {previewLoading ? '计算中…' : previewPool != null ? `${previewPool} 条` : '—'}
+              </Typography.Text>
+              <Button
+                type="link"
+                size="small"
+                disabled={previewLoading || !previewPool}
+                onClick={() => setPoolModalOpen(true)}
+              >
+                查看列表
+              </Button>
+              {sampleSize != null && sampleSize > 0 && previewCount != null ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  随机取样后约 {previewCount} 条
+                </Typography.Text>
+              ) : null}
+            </Space>
+          </Form.Item>
+
+
+
           <Typography.Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 0 }}>
 
             默认仅纳入已校核 clip
@@ -659,38 +680,72 @@ export function DatasetListPage() {
 
           </Typography.Paragraph>
 
-
-
-          {isAdmin && (
-
-            <Form.Item
-
-              name="include_pending_review"
-
-              label="包含待校核 clip（仅 admin）"
-
-              valuePropName="checked"
-
-              style={{ marginTop: 12 }}
-
-            >
-
-              <Switch
-
-                onChange={(checked) => {
-
-                  setIncludePendingReview(checked)
-
-                }}
-
-              />
-
-            </Form.Item>
-
-          )}
-
         </Form>
 
+      </Modal>
+
+
+
+      <Modal
+        title="已校核匹配 Clip"
+        open={poolModalOpen}
+        onCancel={() => setPoolModalOpen(false)}
+        footer={null}
+        width={720}
+      >
+        {poolItemsTruncated ? (
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+            列表最多展示 {poolItems.length} 条，共 {previewPool ?? poolItems.length} 条匹配。
+          </Typography.Paragraph>
+        ) : null}
+        <Table
+          rowKey={(r) => `${r.clip_id}:${r.run_id}`}
+          size="small"
+          pagination={{ pageSize: 10, showSizeChanger: true }}
+          dataSource={poolItems}
+          columns={[
+            {
+              title: 'Clip',
+              dataIndex: 'clip_dir_name',
+              ellipsis: true,
+              render: (name: string, row) => (
+                <Typography.Text className="mono" style={{ fontSize: 12 }}>
+                  {name || row.clip_id.slice(0, 24)}
+                </Typography.Text>
+              ),
+            },
+            {
+              title: 'clip_id',
+              dataIndex: 'clip_id',
+              ellipsis: true,
+              render: (v: string) => (
+                <Typography.Text code style={{ fontSize: 11 }}>
+                  {v.slice(0, 20)}…
+                </Typography.Text>
+              ),
+            },
+            {
+              title: '操作',
+              key: 'action',
+              width: 88,
+              render: (_, row) => (
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => {
+                    setPoolModalOpen(false)
+                    setCreateOpen(false)
+                    navigate(
+                      `/clips/${encodeURIComponent(row.clip_id)}?run_id=${encodeURIComponent(row.run_id)}`,
+                    )
+                  }}
+                >
+                  详情
+                </Button>
+              ),
+            },
+          ]}
+        />
       </Modal>
 
     </PageStack>

@@ -5,7 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from hmi.clip_facts import get_clip_label_view, resolve_clip_labels_for_enqueue
+from hmi.clip_facts import get_clip_label_row, get_clip_label_view, resolve_clip_labels_for_enqueue
+from hmi.labels_util import labels_to_clip_dict
 from hmi.local.clip_context import resolve_ds_for_run
 from hmi.review.field_review_db import (
     FIELD_REVIEW_ACTIONS,
@@ -16,19 +17,34 @@ from hmi.review_db import get_or_create_review, get_review, update_review
 from hmi.taxonomy_db import get_published_version
 
 
+def _flatten_label_id_map(raw: Any) -> dict[str, Any]:
+    if not raw or not isinstance(raw, dict):
+        return {}
+    flat = labels_to_clip_dict(raw)
+    if flat:
+        return flat
+    return {str(k): v for k, v in raw.items() if str(k) not in ("values",)}
+
+
 def get_ai_label_ids(clip_id: str, run_id: str) -> list[str]:
     """Label keys from AI clip label view (rollup scope)."""
     try:
         ds = resolve_ds_for_run(clip_id, run_id)
     except ValueError:
         return []
+    flat: dict[str, Any] = {}
     view = get_clip_label_view(clip_id, run_id, ds=ds)
-    if not view.get("clip_label_ready"):
-        return []
-    labels = view.get("labels_json") or {}
-    if not isinstance(labels, dict):
-        return []
-    return sorted(str(k) for k in labels.keys())
+    if view.get("clip_label_ready"):
+        flat = _flatten_label_id_map(view.get("labels_json"))
+        if not flat:
+            row = get_clip_label_row(clip_id, run_id, ds=ds)
+            if row:
+                flat = _flatten_label_id_map(row.get("labels_json"))
+    if not flat:
+        review = get_review(clip_id, run_id)
+        if review:
+            flat = _flatten_label_id_map(review.get("labels_json"))
+    return sorted(str(k) for k in flat.keys())
 
 
 def get_ai_label_value(clip_id: str, run_id: str, label_id: str) -> Any:

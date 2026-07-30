@@ -42,21 +42,14 @@ class ImportResult:
     message: str
 
 
-def parse_taxonomy_yaml(yaml_path: Path | None = None) -> ParsedTaxonomyYaml:
-    path = (yaml_path or TAXONOMY_PATH).resolve()
-    if not path.is_file():
-        raise FileNotFoundError(f"taxonomy YAML not found: {path}")
-
-    with path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
+def _parse_taxonomy_document(data: dict[str, Any], *, source_label: str) -> ParsedTaxonomyYaml:
     labels_raw = data.get("labels") or []
     if not labels_raw:
-        raise ValueError(f"no labels[] in taxonomy YAML: {path}")
+        raise ValueError("YAML 中缺少 labels 列表")
 
     version_code = str(data.get("version") or "v1").strip()
     if not version_code:
-        raise ValueError("version_code resolved empty from YAML")
+        raise ValueError("version 字段为空")
 
     label_count = data.get("label_count")
     if label_count is not None:
@@ -67,8 +60,26 @@ def parse_taxonomy_yaml(yaml_path: Path | None = None) -> ParsedTaxonomyYaml:
         source=str(data.get("source") or "") or None,
         label_count=label_count,
         labels=[dict(item) for item in labels_raw],
-        yaml_path=path,
+        yaml_path=Path(source_label),
     )
+
+
+def parse_taxonomy_yaml(yaml_path: Path | None = None) -> ParsedTaxonomyYaml:
+    path = (yaml_path or TAXONOMY_PATH).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"taxonomy YAML not found: {path}")
+
+    with path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    return _parse_taxonomy_document(data, source_label=str(path))
+
+
+def parse_taxonomy_yaml_content(content: str, *, source_label: str = "upload") -> ParsedTaxonomyYaml:
+    data = yaml.safe_load(content) or {}
+    if not isinstance(data, dict):
+        raise ValueError("YAML 根节点必须是对象")
+    return _parse_taxonomy_document(data, source_label=source_label)
 
 
 def yaml_labels_to_nodes(labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -171,4 +182,47 @@ def import_taxonomy_from_yaml(
         node_count=node_count,
         yaml_path=parsed.yaml_path,
         message=message,
+    )
+
+
+def import_taxonomy_from_yaml_content(
+    yaml_content: str,
+    *,
+    version_code: str,
+    created_by: str | None = None,
+) -> ImportResult:
+    """Create a new draft version from uploaded YAML text (UI import)."""
+    ensure_schema()
+    parsed = parse_taxonomy_yaml_content(yaml_content)
+    resolved_code = version_code.strip()
+    if not resolved_code:
+        raise ValueError("version_code required")
+
+    existing = get_version_by_code(resolved_code)
+    if existing is not None:
+        raise ValueError(f"版本 {resolved_code} 已存在，请更换版本号")
+
+    nodes = yaml_labels_to_nodes(parsed.labels)
+    source_import = f"upload:{parsed.yaml_path}"
+
+    version = create_version(
+        resolved_code,
+        source_import=source_import,
+        created_by=created_by,
+    )
+    replace_nodes(version["id"], nodes)
+    node_count = count_nodes(version["id"])
+
+    if parsed.label_count is not None and node_count != parsed.label_count:
+        raise ValueError(
+            f"导入节点数 {node_count} 与 YAML label_count {parsed.label_count} 不一致"
+        )
+
+    return ImportResult(
+        action="created",
+        version_id=version["id"],
+        version_code=resolved_code,
+        node_count=node_count,
+        yaml_path=parsed.yaml_path,
+        message=f"created draft {resolved_code} with {node_count} nodes",
     )

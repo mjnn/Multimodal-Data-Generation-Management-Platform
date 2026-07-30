@@ -87,7 +87,7 @@ oss_bucket=rosbag-labels-pipeline-bucket2
 |----|------|
 | **作用** | OSS 桶名；Job0 扫描 bag、Job1+ DPE 挂载读写的目标桶 |
 | **必填** | 是（Job0/Job1+ 代码 `require_arg`） |
-| **可填值** | 与 `shared/shared/config.yaml` → `cloud.oss.bucket`、`.env` → `OSS_BUCKET` 一致；**v2**：`rosbag-labels-pipeline-bucket2`；legacy：`rosbag-labels-pipline-bucket` |
+| **可填值** | 与 `shared/config.yaml` → `cloud.oss.bucket`、`.env` → `OSS_BUCKET` 一致；**v2**：`rosbag-labels-pipeline-bucket2`；legacy：`rosbag-labels-pipline-bucket` |
 | **使用节点** | 全部 |
 
 ---
@@ -200,7 +200,7 @@ scan_prefix=rosbags/
 |----|------|
 | **作用** | Job0 在 OSS 挂载目录下扫描 bag 的前缀 |
 | **必填** | 否（默认 `rosbags/`） |
-| **可填值** | `rosbags/`（与 `shared/shared/config.yaml` → `cloud.oss.data_prefix` 一致） |
+| **可填值** | `rosbags/`（与 `shared/config.yaml` → `cloud.oss.data_prefix` 一致） |
 | **使用节点** | Job0 |
 
 ---

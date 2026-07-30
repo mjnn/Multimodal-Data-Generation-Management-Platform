@@ -1,13 +1,13 @@
 import {
   DeleteOutlined,
   EditOutlined,
+  MinusCircleOutlined,
   PlusOutlined,
 } from '@ant-design/icons'
 import {
   Button,
   Form,
   Input,
-  InputNumber,
   Modal,
   Popconfirm,
   Select,
@@ -30,6 +30,7 @@ import {
   toEditorTreeData,
   type TaxonomyLevelMeta,
 } from '../utils/taxonomyTree'
+import { buildValueSchema, schemaToFormFields } from '../utils/taxonomyLeafSchema'
 
 type LevelFormValues = {
   level_code: string
@@ -41,8 +42,10 @@ type LeafFormValues = {
   name: string
   definition?: string
   dtype?: string
-  value_schema_json?: string
-  sort_order?: number
+  enum_options?: string[]
+  bool_true_label?: string
+  bool_false_label?: string
+  string_example?: string
   is_active: boolean
 }
 
@@ -55,11 +58,18 @@ type TaxonomyTreeEditorProps = {
   onEmptyLevelsChange: (levels: TaxonomyLevelMeta[]) => void
 }
 
+function nextSortOrder(nodes: TaxonomyNodeDetail[], levelCode: string): number {
+  const inLevel = nodes.filter((n) => n.level_code === levelCode)
+  if (!inLevel.length) return 0
+  return Math.max(...inLevel.map((n) => n.sort_order)) + 1
+}
+
 function newLeafNode(
   versionId: string,
   level: TaxonomyLevelMeta,
   values: LeafFormValues,
   valueSchema: unknown,
+  sortOrder: number,
 ): TaxonomyNodeDetail {
   return {
     id: crypto.randomUUID(),
@@ -72,7 +82,7 @@ function newLeafNode(
     definition: values.definition?.trim() || null,
     dtype: values.dtype || null,
     value_schema: valueSchema,
-    sort_order: values.sort_order ?? 0,
+    sort_order: sortOrder,
     is_active: values.is_active,
   }
 }
@@ -160,7 +170,7 @@ export function TaxonomyTreeEditor({
     setLeafEditing(null)
     setLeafLevel(level)
     leafForm.resetFields()
-    leafForm.setFieldsValue({ is_active: true, sort_order: 0, dtype: 'enum' })
+    leafForm.setFieldsValue({ is_active: true, dtype: 'enum', enum_options: [''] })
     setLeafModalOpen(true)
   }
 
@@ -172,9 +182,8 @@ export function TaxonomyTreeEditor({
       name: node.name,
       definition: node.definition ?? '',
       dtype: node.dtype ?? 'enum',
-      value_schema_json: node.value_schema ? JSON.stringify(node.value_schema, null, 2) : '',
-      sort_order: node.sort_order,
       is_active: node.is_active !== false,
+      ...schemaToFormFields(node.dtype, node.value_schema),
     })
     setLeafModalOpen(true)
   }
@@ -183,13 +192,11 @@ export function TaxonomyTreeEditor({
     if (!leafLevel) return
     const values = await leafForm.validateFields()
     let valueSchema: unknown = null
-    if (values.value_schema_json?.trim()) {
-      try {
-        valueSchema = JSON.parse(values.value_schema_json)
-      } catch {
-        message.error('value_schema 不是合法 JSON')
-        return
-      }
+    try {
+      valueSchema = buildValueSchema(values.dtype, values)
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : 'schema 无效')
+      return
     }
 
     if (leafEditing) {
@@ -202,7 +209,6 @@ export function TaxonomyTreeEditor({
                 definition: values.definition?.trim() || null,
                 dtype: values.dtype || null,
                 value_schema: valueSchema,
-                sort_order: values.sort_order ?? n.sort_order,
                 is_active: values.is_active,
               }
             : n,
@@ -216,7 +222,13 @@ export function TaxonomyTreeEditor({
       }
       onNodesChange([
         ...nodes,
-        newLeafNode(versionId, leafLevel, values, valueSchema),
+        newLeafNode(
+          versionId,
+          leafLevel,
+          values,
+          valueSchema,
+          nextSortOrder(nodes, leafLevel.level_code),
+        ),
       ])
       onEmptyLevelsChange(emptyLevels.filter((l) => l.level_code !== leafLevel.level_code))
     }
@@ -230,6 +242,37 @@ export function TaxonomyTreeEditor({
   const deleteLeaf = (labelId: string) => {
     onNodesChange(nodes.filter((n) => n.label_id !== labelId))
     if (selectedKey === labelId) setSelectedKey(undefined)
+  }
+
+  const onDrop = (info: {
+    dragNode: { key: Key }
+    node: { key: Key }
+    dropToGap: boolean
+  }) => {
+    const dragKey = String(info.dragNode.key)
+    const dropKey = String(info.node.key)
+    if (dragKey.startsWith('level:') || dropKey.startsWith('level:')) return
+    const dragLeaf = nodes.find((n) => n.label_id === dragKey)
+    const dropLeaf = nodes.find((n) => n.label_id === dropKey)
+    if (!dragLeaf || !dropLeaf || dragLeaf.level_code !== dropLeaf.level_code) return
+
+    const levelCode = dragLeaf.level_code
+    const ordered = nodes
+      .filter((n) => n.level_code === levelCode)
+      .sort((a, b) => a.sort_order - b.sort_order || a.label_id.localeCompare(b.label_id))
+    const without = ordered.filter((n) => n.label_id !== dragKey)
+    const dropIndex = without.findIndex((n) => n.label_id === dropKey)
+    if (dropIndex < 0) return
+    const insertAt = info.dropToGap ? dropIndex + 1 : dropIndex
+    without.splice(insertAt, 0, dragLeaf)
+    const sortMap = new Map(without.map((n, i) => [n.label_id, i]))
+    onNodesChange(
+      nodes.map((n) =>
+        n.level_code === levelCode && sortMap.has(n.label_id)
+          ? { ...n, sort_order: sortMap.get(n.label_id)! }
+          : n,
+      ),
+    )
   }
 
   const onTreeSelect = (keys: Key[]) => {
@@ -363,7 +406,7 @@ export function TaxonomyTreeEditor({
 
       {canEdit && (
         <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-          支持层级与标签增删改；裁剪层级将删除其下全部标签。保存后生效。
+          支持层级与标签增删改；同级标签可拖动调整顺序。保存后生效。
         </Typography.Paragraph>
       )}
 
@@ -371,8 +414,11 @@ export function TaxonomyTreeEditor({
         treeData={treeData}
         selectedKeys={selectedKey ? [selectedKey] : []}
         defaultExpandAll
+        blockNode
+        draggable={canEdit ? { icon: false } : false}
         titleRender={titleRender}
         onSelect={onTreeSelect}
+        onDrop={onDrop}
       />
 
       <LevelModal
@@ -498,11 +544,58 @@ function LeafModal({
             ]}
           />
         </Form.Item>
-        <Form.Item name="value_schema_json" label="value_schema (JSON)">
-          <Input.TextArea rows={6} placeholder='{"type":"enum","values":["morning","night"]}' />
-        </Form.Item>
-        <Form.Item name="sort_order" label="排序">
-          <InputNumber min={0} style={{ width: '100%' }} />
+        <Form.Item noStyle shouldUpdate={(prev, cur) => prev.dtype !== cur.dtype}>
+          {({ getFieldValue }) => {
+            const dtype = getFieldValue('dtype') as string | undefined
+            if (dtype === 'enum') {
+              return (
+                <Form.List name="enum_options">
+                  {(fields, { add, remove }) => (
+                    <Form.Item label="枚举选项">
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        {fields.map((field) => (
+                          <Space key={field.key} align="baseline">
+                            <Form.Item {...field} rules={[{ required: true, message: '请输入选项' }]} noStyle>
+                              <Input placeholder="选项值" style={{ width: 360 }} />
+                            </Form.Item>
+                            <Button
+                              type="text"
+                              danger
+                              icon={<MinusCircleOutlined />}
+                              onClick={() => remove(field.name)}
+                            />
+                          </Space>
+                        ))}
+                        <Button type="dashed" icon={<PlusOutlined />} onClick={() => add('')}>
+                          添加选项
+                        </Button>
+                      </Space>
+                    </Form.Item>
+                  )}
+                </Form.List>
+              )
+            }
+            if (dtype === 'bool') {
+              return (
+                <>
+                  <Form.Item name="bool_true_label" label="「真」含义">
+                    <Input placeholder="例如：是 / 开启" />
+                  </Form.Item>
+                  <Form.Item name="bool_false_label" label="「假」含义">
+                    <Input placeholder="例如：否 / 关闭" />
+                  </Form.Item>
+                </>
+              )
+            }
+            if (dtype === 'string') {
+              return (
+                <Form.Item name="string_example" label="示例值">
+                  <Input placeholder="用于自动生成 string schema" />
+                </Form.Item>
+              )
+            }
+            return null
+          }}
         </Form.Item>
         <Form.Item name="is_active" label="启用" valuePropName="checked">
           <Switch />

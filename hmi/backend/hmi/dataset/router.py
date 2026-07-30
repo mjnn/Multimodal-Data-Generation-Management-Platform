@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from hmi.audit import append_audit_log
 from hmi.auth.deps import require_dataset_manager, require_dataset_read
-from hmi.dataset.assemble import MAX_CLIP_COUNT, normalize_filter, query_review_candidates, query_review_pool
+from hmi.dataset.assemble import MAX_CLIP_COUNT, normalize_filter, pool_preview_items, query_review_candidates, query_review_pool
 from hmi.dataset.build import enqueue_build, is_build_running
 from hmi.dataset_db import (
     DATASET_STATUSES,
@@ -135,11 +135,14 @@ def api_preview_dataset(
     filter_json = _resolve_filter(body, user=user)
     pool = query_review_pool(filter_json)
     candidates = query_review_candidates(filter_json)
+    pool_items = pool_preview_items(pool)
     return {
         "pool_count": len(pool),
         "candidate_count": len(candidates),
         "sample_size": filter_json.get("sample_size"),
         "clip_ids": [str(c["clip_id"]) for c in candidates[:20]],
+        "pool_items": pool_items,
+        "pool_items_truncated": len(pool) > len(pool_items),
         "filter_json": filter_json,
     }
 

@@ -198,7 +198,7 @@ export function ReviewSectionLayout() {
 
 
 
-        description="置信度开放队列按空值与低置信度排序；管理员派发的任务包在「任务领取」中领取后进入工作台。"
+        description="低置信度任务需先领取任务包；管理员派发的任务在「任务派发 / 任务领取」中管理。"
 
 
 

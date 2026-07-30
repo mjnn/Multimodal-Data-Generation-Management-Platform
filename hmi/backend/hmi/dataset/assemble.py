@@ -190,6 +190,33 @@ def query_review_candidates(filter_json: dict[str, Any] | None) -> list[dict[str
     return apply_sample(pool, filt)
 
 
+def pool_preview_items(pool: list[dict[str, Any]], *, limit: int = 2000) -> list[dict[str, str]]:
+    """Lightweight clip list for dataset create UI (clip_id, run_id, display name)."""
+    from hmi.data_source import is_local_mode
+    from hmi.local import store
+
+    items: list[dict[str, str]] = []
+    for row in pool[:limit]:
+        clip_id = str(row["clip_id"])
+        run_id = str(row["run_id"])
+        clip_dir_name = clip_id[:24]
+        if is_local_mode():
+            dim = store.query_one(
+                "SELECT clip_dir_name FROM dim_clip WHERE clip_id=? LIMIT 1",
+                (clip_id,),
+            )
+            if dim and dim.get("clip_dir_name"):
+                clip_dir_name = str(dim["clip_dir_name"])
+        items.append(
+            {
+                "clip_id": clip_id,
+                "run_id": run_id,
+                "clip_dir_name": clip_dir_name,
+            }
+        )
+    return items
+
+
 def fetch_frame_embeddings_local(clip_id: str, run_id: str) -> list[dict[str, Any]]:
     try:
         ds = resolve_ds_for_run(clip_id, run_id)

@@ -4,7 +4,7 @@ import {
 
   Button,
 
-  Col,
+  Drawer,
 
   Form,
 
@@ -13,8 +13,6 @@ import {
   Modal,
 
   Popconfirm,
-
-  Row,
 
   Space,
 
@@ -26,13 +24,15 @@ import {
 
   Typography,
 
+  Upload,
+
   message,
 
 } from 'antd'
 
 import type { ColumnsType } from 'antd/es/table'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useNavigate, useParams } from 'react-router-dom'
 
@@ -70,8 +70,31 @@ const STATUS_LABEL: Record<string, string> = {
 
   published: '已发布',
 
-  archived: '已归档',
+  archived: '已删除',
 
+}
+
+
+
+function isReleasedTaxonomyVersion(row: TaxonomyVersion): boolean {
+  return (
+    row.status === 'published' ||
+    (row.status === 'archived' && row.archive_reason === 'superseded')
+  )
+}
+
+function versionStatusLabel(row: TaxonomyVersion): string {
+  if (isReleasedTaxonomyVersion(row)) {
+    return '已发布'
+  }
+  return STATUS_LABEL[row.status] ?? row.status
+}
+
+function versionStatusColor(row: TaxonomyVersion): string {
+  if (isReleasedTaxonomyVersion(row)) {
+    return STATUS_COLOR.published ?? 'success'
+  }
+  return STATUS_COLOR[row.status] ?? 'default'
 }
 
 
@@ -120,6 +143,8 @@ export function TaxonomyPage() {
 
   const [createOpen, setCreateOpen] = useState(false)
 
+  const [createYamlContent, setCreateYamlContent] = useState<string | null>(null)
+
   const [cloneOpen, setCloneOpen] = useState(false)
 
   const [cloneSource, setCloneSource] = useState<TaxonomyVersion | null>(null)
@@ -127,6 +152,8 @@ export function TaxonomyPage() {
 
 
   const [createForm] = Form.useForm<{ version_code: string; import_yaml: boolean }>()
+
+  const createImportYaml = Form.useWatch('import_yaml', createForm)
 
   const [cloneForm] = Form.useForm<{ version_code: string }>()
 
@@ -162,9 +189,19 @@ export function TaxonomyPage() {
 
       const data = await api.getTaxonomyTree(id)
 
+      if (data.version.status === 'archived' && data.version.archive_reason !== 'superseded') {
+
+        message.warning('该版本已删除')
+
+        navigate('/taxonomy')
+
+        return
+
+      }
+
       setSelectedVersion(data.version)
 
-      setNodes(data.nodes)
+      setNodes(data.nodes.filter((n) => n.is_active !== false))
 
       setEmptyLevels([])
 
@@ -186,7 +223,7 @@ export function TaxonomyPage() {
 
     }
 
-  }, [])
+  }, [navigate])
 
 
 
@@ -252,25 +289,75 @@ export function TaxonomyPage() {
 
 
 
+  const closeVersion = () => {
+
+    navigate('/taxonomy')
+
+  }
+
+
+
+  const releasedVersions = useMemo(
+
+    () => versions.filter(isReleasedTaxonomyVersion),
+
+    [versions],
+
+  )
+
+
+
+  const draftVersions = useMemo(
+
+    () => (isAdmin ? versions.filter((v) => v.status === 'draft') : []),
+
+    [versions, isAdmin],
+
+  )
+
+
+
   const onCreate = async () => {
 
     const values = await createForm.validateFields()
 
+    if (values.import_yaml && !createYamlContent?.trim()) {
+
+      message.error('请上传本地 YAML 文件')
+
+      return
+
+    }
+
     try {
 
-      const created = await api.createTaxonomyVersion({
+      const versionCode = values.version_code.trim()
 
-        version_code: values.version_code.trim(),
+      const created = values.import_yaml
 
-        import_yaml: values.import_yaml,
+        ? await api.importTaxonomyYamlVersion({
 
-      })
+            version_code: versionCode,
+
+            yaml_content: createYamlContent ?? '',
+
+          })
+
+        : await api.createTaxonomyVersion({
+
+            version_code: versionCode,
+
+            import_yaml: false,
+
+          })
 
       message.success('版本已创建')
 
       setCreateOpen(false)
 
       createForm.resetFields()
+
+      setCreateYamlContent(null)
 
       await loadVersions()
 
@@ -350,15 +437,15 @@ export function TaxonomyPage() {
 
       await api.archiveTaxonomyVersion(row.id)
 
-      message.success('已归档')
+      message.success('已删除')
 
       await loadVersions()
 
-      if (versionId === row.id) await loadTree(row.id)
+      if (versionId === row.id) navigate('/taxonomy')
 
     } catch (e) {
 
-      message.error(apiErrorMessage(e, '归档失败'))
+      message.error(apiErrorMessage(e, '删除失败'))
 
     }
 
@@ -420,9 +507,9 @@ export function TaxonomyPage() {
 
       key: 'status',
 
-      render: (status: string) => (
+      render: (_status: string, row) => (
 
-        <Tag color={STATUS_COLOR[status] ?? 'default'}>{STATUS_LABEL[status] ?? status}</Tag>
+        <Tag color={versionStatusColor(row)}>{versionStatusLabel(row)}</Tag>
 
       ),
 
@@ -438,7 +525,7 @@ export function TaxonomyPage() {
 
       key: 'published_at',
 
-      render: (v: string | null) => v ?? '—',
+      render: (v: string | null) => (v ? api.formatDateTime(v) : '—'),
 
     },
 
@@ -500,11 +587,11 @@ export function TaxonomyPage() {
 
           {isAdmin && row.status !== 'archived' ? (
 
-            <Popconfirm title="确认归档？" onConfirm={() => void onArchive(row)}>
+            <Popconfirm title="确认删除此版本？" onConfirm={() => void onArchive(row)}>
 
               <Button type="link" size="small" danger>
 
-                归档
+                删除
 
               </Button>
 
@@ -530,7 +617,7 @@ export function TaxonomyPage() {
 
         title="标签树管理"
 
-        description="草稿版本支持层级枝干增删改与标签节点维护，发布后供打标与校核引用。"
+        description="浏览已发布标签树；管理员可新建草稿、在查看页编辑后发布。"
 
         icon={<ApartmentOutlined />}
 
@@ -552,121 +639,137 @@ export function TaxonomyPage() {
 
 
 
-      <Row gutter={16}>
+      <ContentCard title="已发布标签树">
 
-        <Col xs={24} lg={14}>
+        <Table
 
-          <ContentCard title="版本列表">
+          rowKey="id"
 
-            <Table
+          size="small"
 
-              rowKey="id"
+          loading={versionsLoading}
+
+          columns={versionColumns}
+
+          dataSource={releasedVersions}
+
+          pagination={{ pageSize: 10 }}
+
+        />
+
+      </ContentCard>
+
+
+
+      {isAdmin && draftVersions.length > 0 ? (
+
+        <ContentCard title="草稿版本">
+
+          <Typography.Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12 }}>
+
+            草稿仅在发布前展示；点击「查看」可编辑并保存。
+
+          </Typography.Paragraph>
+
+          <Table
+
+            rowKey="id"
+
+            size="small"
+
+            loading={versionsLoading}
+
+            columns={versionColumns}
+
+            dataSource={draftVersions}
+
+            pagination={{ pageSize: 5 }}
+
+          />
+
+        </ContentCard>
+
+      ) : null}
+
+
+
+      <Drawer
+
+        title={
+
+          selectedVersion
+
+            ? `${selectedVersion.version_code} · ${versionStatusLabel(selectedVersion)}`
+
+            : '标签树'
+
+        }
+
+        open={Boolean(versionId)}
+
+        onClose={closeVersion}
+
+        width={920}
+
+        styles={{ body: { paddingTop: 12 } }}
+
+        destroyOnClose
+
+        extra={
+
+          canEdit ? (
+
+            <Button
+
+              type="primary"
 
               size="small"
 
-              loading={versionsLoading}
+              icon={<SaveOutlined />}
 
-              columns={versionColumns}
+              disabled={!dirty}
 
-              dataSource={versions}
+              loading={saving}
 
-              pagination={{ pageSize: 8 }}
+              onClick={() => void onSaveAll()}
 
-              rowClassName={(row) => (row.id === versionId ? 'ant-table-row-selected' : '')}
+            >
 
-              onRow={(row) => ({
+              保存
 
-                onClick: () => openVersion(row.id),
+            </Button>
 
-                style: { cursor: 'pointer' },
+          ) : null
 
-              })}
+        }
 
-            />
+      >
 
-          </ContentCard>
+        {!versionId ? null : treeLoading ? (
 
-        </Col>
+          <Typography.Text type="secondary">加载中…</Typography.Text>
 
+        ) : (
 
+          <TaxonomyTreeEditor
 
-        <Col xs={24} lg={10}>
+            versionId={versionId}
 
-          <ContentCard
+            nodes={nodes}
 
-            title={
+            emptyLevels={emptyLevels}
 
-              selectedVersion
+            canEdit={canEdit}
 
-                ? `${selectedVersion.version_code} · ${STATUS_LABEL[selectedVersion.status] ?? selectedVersion.status}`
+            onNodesChange={handleNodesChange}
 
-                : '标签树'
+            onEmptyLevelsChange={handleEmptyLevelsChange}
 
-            }
+          />
 
-            extra={
+        )}
 
-              canEdit ? (
-
-                <Button
-
-                  type="primary"
-
-                  size="small"
-
-                  icon={<SaveOutlined />}
-
-                  disabled={!dirty}
-
-                  loading={saving}
-
-                  onClick={() => void onSaveAll()}
-
-                >
-
-                  保存
-
-                </Button>
-
-              ) : null
-
-            }
-
-          >
-
-            {!versionId ? (
-
-              <Typography.Text type="secondary">请从左侧选择版本查看标签树</Typography.Text>
-
-            ) : treeLoading ? (
-
-              <Typography.Text type="secondary">加载中…</Typography.Text>
-
-            ) : (
-
-              <TaxonomyTreeEditor
-
-                versionId={versionId}
-
-                nodes={nodes}
-
-                emptyLevels={emptyLevels}
-
-                canEdit={canEdit}
-
-                onNodesChange={handleNodesChange}
-
-                onEmptyLevelsChange={handleEmptyLevelsChange}
-
-              />
-
-            )}
-
-          </ContentCard>
-
-        </Col>
-
-      </Row>
+      </Drawer>
 
 
 
@@ -682,6 +785,8 @@ export function TaxonomyPage() {
 
           createForm.resetFields()
 
+          setCreateYamlContent(null)
+
         }}
 
         onOk={() => void onCreate()}
@@ -690,7 +795,12 @@ export function TaxonomyPage() {
 
       >
 
-        <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form
+          form={createForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          initialValues={{ version_code: 'v1', import_yaml: false }}
+        >
 
           <Form.Item
 
@@ -702,7 +812,7 @@ export function TaxonomyPage() {
 
           >
 
-            <Input placeholder="v3" />
+            <Input placeholder="v1" />
 
           </Form.Item>
 
@@ -711,6 +821,24 @@ export function TaxonomyPage() {
             <Switch />
 
           </Form.Item>
+
+          {createImportYaml ? (
+            <Form.Item label="上传 YAML 文件" required>
+              <Upload
+                accept=".yaml,.yml,text/yaml"
+                maxCount={1}
+                beforeUpload={(file) => {
+                  void file.text().then((text) => setCreateYamlContent(text))
+                  return false
+                }}
+                onRemove={() => {
+                  setCreateYamlContent(null)
+                }}
+              >
+                <Button>选择本地 YAML 文件</Button>
+              </Upload>
+            </Form.Item>
+          ) : null}
 
         </Form>
 

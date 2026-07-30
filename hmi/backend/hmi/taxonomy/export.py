@@ -37,7 +37,14 @@ def nodes_to_yaml_document(version: dict[str, Any], nodes: list[dict[str, Any]])
         if node.get("dtype"):
             item["dtype"] = node["dtype"]
         if node.get("value_schema") is not None:
-            item["value_schema"] = node["value_schema"]
+            schema = node["value_schema"]
+            try:
+                from shared.taxonomy_i18n import enrich_value_schema
+
+                schema = enrich_value_schema(schema if isinstance(schema, dict) else None)
+            except ImportError:
+                pass
+            item["value_schema"] = schema
         labels.append(item)
 
     return {
