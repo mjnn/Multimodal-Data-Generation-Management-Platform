@@ -182,21 +182,37 @@ def _apply_field_review_gate(reviews: list[dict[str, Any]], filt: dict[str, Any]
     return out
 
 
+def _local_active_clip_pairs() -> list[dict[str, str]]:
+    """One entry per dim_clip using active_run_id (avoids stale run duplicates)."""
+    rows = store.query(
+        """
+        SELECT clip_id, active_run_id AS run_id FROM dim_clip
+        WHERE active_run_id IS NOT NULL AND TRIM(active_run_id) != ''
+        """
+    )
+    return [{"clip_id": str(r["clip_id"]), "run_id": str(r["run_id"])} for r in rows]
+
+
 def _local_ai_labeled_pool(filt: dict[str, Any], *, allow_unreviewed: bool = False) -> list[dict[str, Any]]:
-    """Local HMI: clips with AI labels + embedding but no clip_label_review row yet."""
+    """Local HMI: active-run clips with AI labels + embedding (any review progress)."""
     if not is_local_mode():
         return []
     include_pending = bool(filt.get("include_pending_review"))
     allow_unreviewed = allow_unreviewed or include_pending
-    statuses = set(_allowed_statuses(filt))
     label_filters = filt.get("label_filters")
+    clip_ids = filt.get("clip_ids")
+    allowed_clip_ids: set[str] | None = None
+    if clip_ids:
+        allowed_clip_ids = {str(c).strip() for c in clip_ids if str(c).strip()}
     published = get_published_version()
     default_taxonomy = published["id"] if published else None
 
     out: list[dict[str, Any]] = []
-    for pair in list_clip_label_candidates():
+    for pair in _local_active_clip_pairs():
         clip_id = str(pair["clip_id"])
         run_id = str(pair["run_id"])
+        if allowed_clip_ids is not None and clip_id not in allowed_clip_ids:
+            continue
         if not is_clip_label_ready(clip_id, run_id):
             continue
         if fetch_clip_feature_local(clip_id, run_id) is None:
@@ -204,13 +220,8 @@ def _local_ai_labeled_pool(filt: dict[str, Any], *, allow_unreviewed: bool = Fal
 
         review = get_review(clip_id, run_id)
         if review:
-            status = str(review.get("review_status") or "")
-            if status not in statuses:
-                continue
             row = review
-        else:
-            if not allow_unreviewed:
-                continue
+        elif allow_unreviewed:
             try:
                 payload = resolve_clip_labels_for_enqueue(clip_id, run_id)
             except ValueError:
@@ -223,6 +234,8 @@ def _local_ai_labeled_pool(filt: dict[str, Any], *, allow_unreviewed: bool = Fal
                 "labels_json": labels_json,
                 "taxonomy_version_id": payload.get("taxonomy_version_id") or default_taxonomy,
             }
+        else:
+            continue
 
         if label_filters and not match_label_filters(row.get("labels_json"), label_filters):
             continue
@@ -292,6 +305,9 @@ def preview_skip_reasons(
 
 def query_review_pool(filter_json: dict[str, Any] | None) -> list[dict[str, Any]]:
     filt = normalize_filter(filter_json)
+    if is_local_mode():
+        return _local_ai_labeled_pool(filt, allow_unreviewed=True)
+
     statuses = _allowed_statuses(filt)
     placeholders = ",".join("?" for _ in statuses)
     sql = f"""
@@ -328,14 +344,7 @@ def query_review_pool(filter_json: dict[str, Any] | None) -> list[dict[str, Any]
         ]
 
     reviews = _apply_field_review_gate(reviews, filt)
-
-    if reviews:
-        return reviews
-
-    if is_local_mode():
-        return _local_ai_labeled_pool(filt, allow_unreviewed=True)
-
-    return []
+    return reviews
 
 
 def query_review_candidates(filter_json: dict[str, Any] | None) -> list[dict[str, Any]]:

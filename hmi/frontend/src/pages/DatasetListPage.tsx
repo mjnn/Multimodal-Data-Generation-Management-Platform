@@ -620,8 +620,8 @@ export function DatasetListPage() {
           >
             <Typography.Text strong>符合筛选条件的 Clip</Typography.Text>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
-              候选池：有 AI 标签与向量、且匹配下方标签条件的 clip（本地模式含尚未入库校核记录的 clip）。
-              「可导出」指全部字段校核完成、可纳入数据集的数量。
+              候选池：有 AI 标签与向量、且匹配下方标签条件的 clip（本地模式含校核中及尚未入库的 clip）。
+              「可导出」指全部字段校核完成、可正式纳入数据集的数量。
             </Typography.Paragraph>
             <Space wrap align="center">
               <Typography.Text>

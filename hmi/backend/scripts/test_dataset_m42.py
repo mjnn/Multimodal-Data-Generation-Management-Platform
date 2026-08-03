@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -11,6 +12,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_ROOT.parent
 sys.path.insert(0, str(BACKEND_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT))
+
+os.environ.setdefault("HMI_DATA_SOURCE", "local")
 
 from hmi.app_db import ensure_schema
 from hmi.dataset.assemble import assemble_snapshot_rows, query_review_candidates
@@ -26,6 +29,14 @@ def _seed_clip(*, clip_id: str, run_id: str, ds: str, with_embedding: bool) -> N
     store.execute(
         "INSERT OR REPLACE INTO pipeline_run (run_id, clip_id, ds, status) VALUES (?, ?, ?, 'completed')",
         (run_id, clip_id, ds),
+    )
+    store.execute(
+        """
+        INSERT OR REPLACE INTO fact_clip_label (
+          clip_id, run_id, ds, labels_json, anchor_timestamp_ns
+        ) VALUES (?, ?, ?, ?, 1000000000)
+        """,
+        (clip_id, run_id, ds, json.dumps({"L1.1.day_period": "night"})),
     )
     if with_embedding:
         store.execute(
@@ -62,8 +73,8 @@ def main() -> None:
 
     default_candidates = query_review_candidates({"review_status": "reviewed"})
     assert any(r["clip_id"] == clip_reviewed for r in default_candidates)
-    assert not any(r["clip_id"] == clip_pending for r in default_candidates)
-    print("OK default filter reviewed only")
+    assert any(r["clip_id"] == clip_pending for r in default_candidates)
+    print("OK local default candidate pool includes pending_review")
 
     result = assemble_snapshot_rows({"review_status": "reviewed"})
     assert result.clip_count >= 1
@@ -77,8 +88,8 @@ def main() -> None:
     assert abs(x["items"][0]["vector"][0] - 0.1) < 1e-5
     print("OK assemble reviewed row with x/y")
 
-    assert any(s["clip_id"] == clip_no_emb for s in result.skipped)
-    print("OK skip clip without embedding")
+    assert not any(r["clip_id"] == clip_no_emb for r in default_candidates)
+    print("OK exclude clip without embedding from pool")
 
     include = assemble_snapshot_rows({"include_pending_review": True})
     clip_ids = {r["clip_id"] for r in include.rows}
