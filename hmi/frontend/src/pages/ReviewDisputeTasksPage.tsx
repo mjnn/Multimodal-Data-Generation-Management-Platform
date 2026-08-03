@@ -32,7 +32,7 @@ export function ReviewConfidenceTasksPage() {
     void load()
   }, [load])
 
-  const pending = stats?.pending ?? 0
+  const pending = stats?.low_confidence_pending ?? stats?.pending ?? 0
 
   const openClaim = () => {
     claimForm.setFieldsValue({ limit: Math.min(20, Math.max(1, pending)) })
@@ -61,19 +61,17 @@ export function ReviewConfidenceTasksPage() {
         showIcon
         icon={<InfoCircleOutlined />}
         message="低置信度任务 · 领取后进入任务包校核"
-        description="按「空值优先、置信度从低到高」从开放池领取指定条数，生成个人任务包；可在「任务领取」继续查看进度。"
+        description="仅领取 AI 输出为空或置信度低于 75% 的条目；按空值优先、置信度从低到高排序生成个人任务包。"
         style={{ marginBottom: 16 }}
       />
 
       <ContentCard title="置信度优先校核">
         <Space direction="vertical" size={20} style={{ width: '100%' }}>
-          <Space size={48} wrap>
-            <Statistic title="待校核条目（开放池）" value={pending} loading={loading} />
-          </Space>
+          <Statistic title="可领取（空值 / 低置信度）" value={pending} loading={loading} />
 
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            优先级：AI 输出为空 → 置信度 &lt; {Math.round(LOW_CONFIDENCE_THRESHOLD * 100)}% 或缺失
-            → 其余按置信度升序。
+            领取范围：AI 输出为空，或置信度 &lt; {Math.round(LOW_CONFIDENCE_THRESHOLD * 100)}% 或缺失。
+            置信度 ≥ {Math.round(LOW_CONFIDENCE_THRESHOLD * 100)}% 的条目不会进入任务包。
           </Typography.Paragraph>
 
           <Button
@@ -101,7 +99,7 @@ export function ReviewConfidenceTasksPage() {
             name="limit"
             label="领取条数"
             rules={[{ required: true, message: '请输入领取条数' }]}
-            extra={`当前开放池约 ${pending} 条可领`}
+            extra={`当前可领取约 ${pending} 条`}
           >
             <InputNumber min={1} max={500} style={{ width: '100%' }} />
           </Form.Item>

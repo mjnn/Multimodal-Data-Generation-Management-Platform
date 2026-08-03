@@ -106,7 +106,7 @@ def resolve_pipeline_taxonomy_display(settings: dict[str, Any] | None = None) ->
         from hmi.taxonomy_db import taxonomy_version_display_label
 
         return f"默认（{taxonomy_version_display_label(published)}）"
-    return "默认（仓库 taxonomy）"
+    return "默认（仓库标签树）"
 
 
 def _sanitize_stored_taxonomy_version_id(out: dict[str, Any]) -> None:

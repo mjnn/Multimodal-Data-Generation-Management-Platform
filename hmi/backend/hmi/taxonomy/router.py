@@ -7,7 +7,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from hmi.auth.deps import require_admin, require_clip_explorer_access
+from hmi.auth.deps import require_admin, require_clip_explorer_access, require_dataset_manager
+from hmi.audit import append_audit_log
 from hmi.taxonomy_db import (
     archive_version,
     clone_version,
@@ -21,6 +22,17 @@ from hmi.taxonomy_db import (
 )
 from hmi.taxonomy.export import export_published_taxonomy
 from hmi.taxonomy_import import import_taxonomy_from_yaml, import_taxonomy_from_yaml_content
+from hmi.taxonomy.insights import build_coverage, build_taxonomy_context
+from hmi.taxonomy.diff import diff_versions
+from hmi.taxonomy.impact import build_version_impact
+from hmi.taxonomy.lineage import build_version_lineage
+from hmi.taxonomy.node_usage import build_node_usage
+from hmi.taxonomy_proposal_db import (
+    create_proposal,
+    get_proposal,
+    list_proposals,
+    update_proposal_status,
+)
 
 router = APIRouter(prefix="/api/taxonomy", tags=["taxonomy"])
 
@@ -256,3 +268,157 @@ def api_archive_taxonomy_version(
     except ValueError as exc:
         raise _taxonomy_error(exc) from exc
     return _version_payload(version)
+
+
+class CreateProposalBody(BaseModel):
+    title: str = Field(min_length=1)
+    proposal_type: str = Field(default="other")
+    target_label_id: str | None = None
+    suggested_patch_json: dict[str, Any] | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    taxonomy_version_id: str | None = None
+
+
+class PatchProposalBody(BaseModel):
+    status: str = Field(min_length=1)
+    merged_version_id: str | None = None
+
+
+@router.get("/context")
+def api_taxonomy_context(
+    _user: dict = Depends(require_clip_explorer_access),
+) -> dict[str, Any]:
+    return build_taxonomy_context()
+
+
+@router.get("/versions/{version_id}/coverage")
+def api_taxonomy_coverage(
+    version_id: str,
+    _user: dict = Depends(require_clip_explorer_access),
+) -> dict[str, Any]:
+    try:
+        return build_coverage(version_id)
+    except ValueError as exc:
+        raise _taxonomy_error(exc) from exc
+
+
+@router.get("/versions/{version_id}/diff")
+def api_taxonomy_diff(
+    version_id: str,
+    against: str,
+    _user: dict = Depends(require_clip_explorer_access),
+) -> dict[str, Any]:
+    try:
+        return diff_versions(version_id, against)
+    except ValueError as exc:
+        raise _taxonomy_error(exc) from exc
+
+
+@router.get("/versions/{version_id}/impact")
+def api_taxonomy_impact(
+    version_id: str,
+    _admin: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        return build_version_impact(version_id)
+    except ValueError as exc:
+        raise _taxonomy_error(exc) from exc
+
+
+@router.get("/versions/{version_id}/lineage")
+def api_taxonomy_lineage(
+    version_id: str,
+    _user: dict = Depends(require_clip_explorer_access),
+) -> dict[str, Any]:
+    try:
+        return build_version_lineage(version_id)
+    except ValueError as exc:
+        raise _taxonomy_error(exc) from exc
+
+
+@router.get("/nodes/{label_id}/usage")
+def api_taxonomy_node_usage(
+    label_id: str,
+    version_id: str | None = None,
+    _user: dict = Depends(require_clip_explorer_access),
+) -> dict[str, Any]:
+    try:
+        return build_node_usage(label_id, taxonomy_version_id=version_id)
+    except ValueError as exc:
+        raise _taxonomy_error(exc) from exc
+
+
+@router.get("/proposals")
+def api_list_taxonomy_proposals(
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    _user: dict = Depends(require_dataset_manager),
+) -> dict[str, Any]:
+    items, total = list_proposals(status=status, limit=min(limit, 200), offset=offset)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.post("/proposals", status_code=201)
+def api_create_taxonomy_proposal(
+    body: CreateProposalBody,
+    user: dict = Depends(require_dataset_manager),
+) -> dict[str, Any]:
+    try:
+        proposal = create_proposal(
+            title=body.title,
+            proposal_type=body.proposal_type,
+            evidence=body.evidence,
+            created_by=user["id"],
+            target_label_id=body.target_label_id,
+            suggested_patch_json=body.suggested_patch_json,
+            taxonomy_version_id=body.taxonomy_version_id,
+        )
+    except ValueError as exc:
+        raise _taxonomy_error(exc) from exc
+    append_audit_log(
+        actor_id=user["id"],
+        action="taxonomy.proposal.create",
+        resource_type="taxonomy_proposal",
+        resource_id=proposal["id"],
+        detail={"title": body.title, "proposal_type": body.proposal_type},
+    )
+    return proposal
+
+
+@router.get("/proposals/{proposal_id}")
+def api_get_taxonomy_proposal(
+    proposal_id: str,
+    _user: dict = Depends(require_dataset_manager),
+) -> dict[str, Any]:
+    proposal = get_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "404_NOT_FOUND", "message": "proposal not found"},
+        )
+    return proposal
+
+
+@router.patch("/proposals/{proposal_id}")
+def api_patch_taxonomy_proposal(
+    proposal_id: str,
+    body: PatchProposalBody,
+    user: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        proposal = update_proposal_status(
+            proposal_id,
+            status=body.status,
+            merged_version_id=body.merged_version_id,
+        )
+    except ValueError as exc:
+        raise _taxonomy_error(exc) from exc
+    append_audit_log(
+        actor_id=user["id"],
+        action="taxonomy.proposal.update",
+        resource_type="taxonomy_proposal",
+        resource_id=proposal_id,
+        detail={"status": body.status, "merged_version_id": body.merged_version_id},
+    )
+    return proposal

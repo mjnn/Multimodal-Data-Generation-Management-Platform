@@ -1,5 +1,6 @@
 import { Select, Tag, Typography } from 'antd'
 import type { ClipRun } from '../api/types'
+import { formatClipRunStatus } from '../utils/uiLabels'
 
 interface Props {
   runs: ClipRun[]
@@ -13,7 +14,7 @@ export function RunSelector({ runs, value, onChange }: Props) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        Pipeline Run
+        管线运行
       </Typography.Text>
       <Select
         size="small"
@@ -22,16 +23,16 @@ export function RunSelector({ runs, value, onChange }: Props) {
         onChange={onChange}
         options={runs.map((r) => ({
           value: r.run_id,
-          label: `${r.run_id.slice(0, 8)}… ${r.is_active ? '(active)' : ''} — ${r.status}`,
+          label: `${r.run_id.slice(0, 8)}… ${r.is_active ? '（当前生效）' : ''} — ${formatClipRunStatus(r.status)}`,
         }))}
         optionRender={(opt) => (
           <span>
             {String(opt.label).split(' — ')[0]}
             {runs.find((x) => x.run_id === opt.value)?.is_active && (
-              <Tag color="green" style={{ marginLeft: 6 }}>active</Tag>
+              <Tag color="green" style={{ marginLeft: 6 }}>生效中</Tag>
             )}
             <Typography.Text type="secondary" style={{ marginLeft: 4, fontSize: 11 }}>
-              {runs.find((x) => x.run_id === opt.value)?.status}
+              {formatClipRunStatus(runs.find((x) => x.run_id === opt.value)?.status ?? '')}
             </Typography.Text>
           </span>
         )}

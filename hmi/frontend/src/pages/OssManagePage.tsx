@@ -10,22 +10,19 @@ import {
   Button,
   Popconfirm,
   Space,
-  Spin,
   Table,
   Typography,
   message,
 } from 'antd'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
-import type { OssBagPipeline, OssInfo, OssListItem } from '../api/types'
-import { UploadPipelineProgress } from '../components/UploadPipelineProgress'
+import type { OssInfo, OssListItem } from '../api/types'
+import { isOssPreviewableFile, OssFilePreviewPanel } from '../components/oss/OssFilePreviewPanel'
 import { OssShortcutBar } from '../components/oss/OssShortcutBar'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
 import { downloadOssObject } from '../utils/ossDownload'
-
-const PIPELINE_SESSION_PREFIX = 'hmi:oss-bag-pipeline:'
 
 function formatSize(bytes: number): string {
   if (bytes <= 0) return '—'
@@ -48,11 +45,8 @@ export function OssManagePage() {
   const [parentPrefix, setParentPrefix] = useState('')
   const [items, setItems] = useState<OssListItem[]>([])
   const [loading, setLoading] = useState(false)
-  const [pipelineOpen, setPipelineOpen] = useState(false)
-  const [pipelineLoading, setPipelineLoading] = useState(false)
-  const [pipelineKey, setPipelineKey] = useState('')
-  const [pipeline, setPipeline] = useState<OssBagPipeline | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [pipelineNavKey, setPipelineNavKey] = useState<string | null>(null)
+  const [previewFile, setPreviewFile] = useState<{ key: string; name: string } | null>(null)
   const initialPrefix = searchParams.get('prefix') ?? ''
 
   const loadList = useCallback((p = prefix) => {
@@ -112,48 +106,31 @@ export function OssManagePage() {
     }
   }
 
-  const loadPipeline = useCallback(async (key: string, refresh = false) => {
-    setPipelineKey(key)
-    if (!refresh) {
-      try {
-        const cached = sessionStorage.getItem(`${PIPELINE_SESSION_PREFIX}${key}`)
-        if (cached) {
-          setPipeline(JSON.parse(cached) as OssBagPipeline)
-        }
-      } catch {
-        /* ignore stale cache */
-      }
-    }
-    setPipelineLoading(true)
+  const goPipelineManage = async (key: string) => {
+    setPipelineNavKey(key)
     try {
-      const p = await api.getOssBagPipeline(key, refresh)
-      setPipeline(p)
-      sessionStorage.setItem(`${PIPELINE_SESSION_PREFIX}${key}`, JSON.stringify(p))
+      const pipeline = await api.getOssBagPipeline(key, false)
+      if (pipeline.clip_id && pipeline.run_id) {
+        const params = new URLSearchParams({
+          run_id: pipeline.run_id,
+          clip_id: pipeline.clip_id,
+        })
+        navigate(`/pipeline?${params.toString()}`)
+        return
+      }
+      navigate('/pipeline')
+      message.info('该 bag 尚未登记 clip，请在管线管理查看上传队列')
     } catch (e) {
       message.error((e as Error).message)
     } finally {
-      setPipelineLoading(false)
+      setPipelineNavKey(null)
     }
-  }, [])
-
-  const showPipeline = (key: string) => {
-    setPipelineOpen(true)
-    void loadPipeline(key)
   }
 
-  useEffect(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current)
-      pollRef.current = null
-    }
-    if (!pipelineOpen || !pipelineKey || pipeline?.pipeline_status !== 'running') return
-    pollRef.current = setInterval(() => {
-      void loadPipeline(pipelineKey, true)
-    }, 8000)
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [pipelineOpen, pipelineKey, pipeline?.pipeline_status, loadPipeline])
+  const openPreview = (record: OssListItem) => {
+    if (record.type !== 'file' || !isOssPreviewableFile(record.name)) return
+    setPreviewFile({ key: record.key, name: record.name })
+  }
 
   return (
     <PageStack>
@@ -190,109 +167,121 @@ export function OssManagePage() {
         <Breadcrumb items={breadcrumbItems()} style={{ marginBottom: 12 }} />
         <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
           当前路径：<Typography.Text code>{prefix || '/'}</Typography.Text>
+          {previewFile ? (
+            <>
+              {' '}
+              · 点击文件名预览文本/JSON；右侧为内容摘要
+            </>
+          ) : null}
         </Typography.Text>
 
-        <Table
-          rowKey="key"
-          loading={loading}
-          dataSource={items}
-          pagination={false}
-          columns={[
-            {
-              title: '名称',
-              dataIndex: 'name',
-              render: (name: string, r) =>
-                r.type === 'dir' ? (
-                  <a onClick={() => enterDir(r.key)}>
-                    <FolderOpenOutlined style={{ marginRight: 6 }} />
-                    {name}/
-                  </a>
-                ) : (
-                  name
-                ),
-            },
-            {
-              title: '大小',
-              dataIndex: 'size',
-              width: 100,
-              render: (v: number, r) => (r.type === 'dir' ? '—' : formatSize(v)),
-            },
-            {
-              title: '修改时间',
-              dataIndex: 'last_modified',
-              width: 180,
-              render: (v: string | null) => (v ? api.formatDateTime(v) : '—'),
-            },
-            {
-              title: '操作',
-              width: 220,
-              render: (_, r) => (
-                <Space size={4}>
-                  {r.type === 'file' && (
-                    <Button
-                      type="link"
-                      size="small"
-                      icon={<DownloadOutlined />}
-                      onClick={() => void onDownload(r.key, r.name)}
-                    >
-                      下载
-                    </Button>
-                  )}
-                  {r.type === 'file' && r.name.toLowerCase().endsWith('.bag') && (
-                    <Button type="link" size="small" onClick={() => showPipeline(r.key)}>
-                      管线
-                    </Button>
-                  )}
-                  <Popconfirm title={`确认删除 ${r.name}${r.type === 'dir' ? ' 及下属文件' : ''}？`} onConfirm={() => onDelete(r)}>
-                    <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-                      删除
-                    </Button>
-                  </Popconfirm>
-                </Space>
-              ),
-            },
-          ]}
-        />
-      </ContentCard>
+        <div style={{ display: 'flex', alignItems: 'stretch', gap: 0 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Table
+              rowKey="key"
+              loading={loading}
+              dataSource={items}
+              pagination={false}
+              onRow={(record) =>
+                record.type === 'file' && isOssPreviewableFile(record.name)
+                  ? {
+                      onClick: () => openPreview(record),
+                      style: { cursor: 'pointer' },
+                    }
+                  : {}
+              }
+              rowClassName={(record) =>
+                previewFile?.key === record.key ? 'oss-row-preview-active' : ''
+              }
+              columns={[
+                {
+                  title: '名称',
+                  dataIndex: 'name',
+                  render: (name: string, r) =>
+                    r.type === 'dir' ? (
+                      <a
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          enterDir(r.key)
+                        }}
+                      >
+                        <FolderOpenOutlined style={{ marginRight: 6 }} />
+                        {name}/
+                      </a>
+                    ) : isOssPreviewableFile(name) ? (
+                      <a
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openPreview(r)
+                        }}
+                      >
+                        {name}
+                      </a>
+                    ) : (
+                      name
+                    ),
+                },
+                {
+                  title: '大小',
+                  dataIndex: 'size',
+                  width: 100,
+                  render: (v: number, r) => (r.type === 'dir' ? '—' : formatSize(v)),
+                },
+                {
+                  title: '修改时间',
+                  dataIndex: 'last_modified',
+                  width: 180,
+                  render: (v: string | null) => (v ? api.formatDateTime(v) : '—'),
+                },
+                {
+                  title: '操作',
+                  width: 220,
+                  render: (_, r) => (
+                    <Space size={4} onClick={(e) => e.stopPropagation()}>
+                      {r.type === 'file' && (
+                        <Button
+                          type="link"
+                          size="small"
+                          icon={<DownloadOutlined />}
+                          onClick={() => void onDownload(r.key, r.name)}
+                        >
+                          下载
+                        </Button>
+                      )}
+                      {r.type === 'file' && r.name.toLowerCase().endsWith('.bag') && (
+                        <Button
+                          type="link"
+                          size="small"
+                          loading={pipelineNavKey === r.key}
+                          onClick={() => void goPipelineManage(r.key)}
+                        >
+                          管线
+                        </Button>
+                      )}
+                      <Popconfirm
+                        title={`确认删除 ${r.name}${r.type === 'dir' ? ' 及下属文件' : ''}？`}
+                        onConfirm={() => onDelete(r)}
+                      >
+                        <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                          删除
+                        </Button>
+                      </Popconfirm>
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+          </div>
 
-      {pipelineOpen && (
-        <ContentCard
-          title="Bag 管线状态"
-          extra={
-            <Space>
-              <Button
-                icon={<ReloadOutlined />}
-                loading={pipelineLoading}
-                onClick={() => pipelineKey && loadPipeline(pipelineKey, true)}
-              >
-                刷新
-              </Button>
-              <Button onClick={() => { setPipelineOpen(false); setPipelineKey('') }}>关闭</Button>
-              {pipeline?.clip_id && pipeline.pipeline_status === 'completed' ? (
-                <Button
-                  type="primary"
-                  onClick={() => navigate(`/clips/${encodeURIComponent(pipeline.clip_id!)}`)}
-                >
-                  进入时间轴
-                </Button>
-              ) : null}
-            </Space>
-          }
-        >
-          <Spin spinning={pipelineLoading}>
-            <Typography.Text code>{pipeline?.oss_key ?? pipelineKey}</Typography.Text>
-            {pipeline?.pipeline_steps?.length ? (
-              <UploadPipelineProgress
-                steps={pipeline.pipeline_steps}
-                clipId={pipeline.clip_id ?? undefined}
-                runId={pipeline.run_id ?? undefined}
-              />
-            ) : (
-              <Typography.Text type="secondary">暂无步骤数据</Typography.Text>
-            )}
-          </Spin>
-        </ContentCard>
-      )}
+          {previewFile ? (
+            <OssFilePreviewPanel
+              fileKey={previewFile.key}
+              fileName={previewFile.name}
+              onClose={() => setPreviewFile(null)}
+            />
+          ) : null}
+        </div>
+      </ContentCard>
     </PageStack>
   )
 }

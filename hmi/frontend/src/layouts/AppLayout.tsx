@@ -1,4 +1,5 @@
 import {
+  AuditOutlined,
   ApartmentOutlined,
   CheckCircleOutlined,
   CloudServerOutlined,
@@ -46,6 +47,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/datasets': '数据集',
   '/taxonomy': '标签树',
   '/admin/users': '用户管理',
+  '/admin/audit': '审计日志',
   '/admin/system-env': '系统参数管理',
 }
 
@@ -85,6 +87,14 @@ function buildBreadcrumbs(pathname: string, search: string): { title: ReactNode 
   if (pathname.startsWith('/taxonomy/') && pathname !== '/taxonomy') {
     items.push({ title: <Link to="/taxonomy">标签树</Link> })
     items.push({ title: '版本编辑' })
+    return items
+  }
+
+  if (pathname.startsWith('/admin/')) {
+    const sub = ROUTE_LABELS[pathname]
+    if (sub) {
+      items.push({ title: sub })
+    }
     return items
   }
 
@@ -128,6 +138,7 @@ export function AppLayout() {
     }
     if (canManageUsers(roles)) {
       admin.push({ key: '/admin/users', icon: <TeamOutlined />, label: '用户管理' })
+      admin.push({ key: '/admin/audit', icon: <AuditOutlined />, label: '审计日志' })
       admin.push({ key: '/admin/system-env', icon: <SettingOutlined />, label: '系统参数管理' })
     }
 

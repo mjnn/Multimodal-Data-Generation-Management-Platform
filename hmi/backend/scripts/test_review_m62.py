@@ -21,9 +21,11 @@ from hmi.app_db import create_user, ensure_schema, get_user_by_username
 from hmi.main import app
 from hmi.review.field_review_db import upsert_field_review
 from hmi.review.v2_tasks import (
+    build_low_confidence_claim_tasks,
     build_pending_tasks,
     clear_sessions,
     encode_cursor,
+    filter_low_confidence_claim_tasks,
     get_or_reset_session,
     pick_next_task,
     prev_session_task,
@@ -141,6 +143,42 @@ def main() -> None:
     )
     assert idx_holiday_dispute > idx_afternoon_holiday
     print("OK confidence ascending among non-empty")
+
+    high_conf_hints = {
+        ("sha256:demo_afternoon_park", "run-c"): {
+            "L1.1.day_period": {"confidence": 0.8, "evidence": "high"},
+        },
+    }
+
+    def fake_high_conf_hints(clip_id: str, run_id: str):
+        return high_conf_hints.get((clip_id, run_id), {})
+
+    with patch("hmi.review.v2_tasks._active_label_candidate_pairs", return_value=candidates):
+        with patch("hmi.review.v2_tasks.get_clip_label_view_for_queue", side_effect=fake_view):
+            with patch("hmi.review.v2_tasks.field_review_key_set", return_value=set()):
+                with patch("hmi.review.v2_tasks.resolve_ds_for_run", return_value="20260721"):
+                    with patch("hmi.review.v2_tasks.resolve_clip_thumbnail", return_value=None):
+                        with patch("hmi.review.v2_tasks.get_review", return_value=None):
+                            with patch(
+                                "hmi.review.v2_tasks.load_ai_label_hints_local",
+                                side_effect=fake_high_conf_hints,
+                            ):
+                                with patch(
+                                    "hmi.review.v2_tasks._clip_dir_name",
+                                    side_effect=lambda cid: cid.split(":")[-1],
+                                ):
+                                    all_tasks = build_pending_tasks("confidence")
+                                    claimable = filter_low_confidence_claim_tasks(all_tasks)
+                                    high_conf_task = next(
+                                        t
+                                        for t in all_tasks
+                                        if t["clip_id"] == "sha256:demo_afternoon_park"
+                                        and t["label_id"] == "L1.1.day_period"
+                                    )
+    assert high_conf_task["priority_bucket"] == 3
+    assert high_conf_task not in claimable
+    assert len(build_low_confidence_claim_tasks(100)) == len(claimable)
+    print("OK low-confidence claim excludes confidence >= 75%")
 
     with patch("hmi.review.v2_tasks._active_label_candidate_pairs", return_value=candidates):
         with patch("hmi.review.v2_tasks.get_clip_label_view_for_queue", side_effect=fake_view):

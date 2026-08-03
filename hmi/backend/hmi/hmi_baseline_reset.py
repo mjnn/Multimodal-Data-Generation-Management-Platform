@@ -161,6 +161,7 @@ def _purge_app_db_artifacts(conn: sqlite3.Connection) -> dict[str, int]:
         "clip_label_review",
         "audit_log",
         "dataset_snapshot",
+        "taxonomy_proposal",
     ):
         n = _count(table)
         conn.execute(f"DELETE FROM {table}")

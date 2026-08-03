@@ -474,8 +474,8 @@ function LevelModal({
       <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
         <Form.Item
           name="level_code"
-          label="层级 code"
-          rules={[{ required: true, message: '请输入层级 code' }]}
+          label="层级编码"
+          rules={[{ required: true, message: '请输入层级编码' }]}
         >
           <Input placeholder="L1.1" disabled={Boolean(editing)} />
         </Form.Item>
@@ -524,8 +524,8 @@ function LeafModal({
       <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
         <Form.Item
           name="label_id"
-          label="label_id"
-          rules={[{ required: true, message: '请输入 label_id' }]}
+          label="标签 ID"
+          rules={[{ required: true, message: '请输入标签 ID' }]}
         >
           <Input placeholder="L1.1.day_period" disabled={Boolean(editing)} />
         </Form.Item>
@@ -538,9 +538,9 @@ function LeafModal({
         <Form.Item name="dtype" label="数据类型">
           <Select
             options={[
-              { value: 'enum', label: 'enum' },
-              { value: 'bool', label: 'bool' },
-              { value: 'string', label: 'string' },
+              { value: 'enum', label: '枚举' },
+              { value: 'bool', label: '布尔' },
+              { value: 'string', label: '字符串' },
             ]}
           />
         </Form.Item>

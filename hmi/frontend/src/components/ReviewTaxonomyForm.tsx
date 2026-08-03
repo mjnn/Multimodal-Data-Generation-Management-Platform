@@ -271,9 +271,9 @@ export function ReviewTaxonomyForm({
 
         {focusLabelIds?.length
 
-          ? '当前任务标签不在 taxonomy 中，请检查标签树发布状态。'
+          ? '当前任务标签不在标签树中，请检查标签树发布状态。'
 
-          : '无可用 taxonomy 节点，请检查标签树发布状态。'}
+          : '无可用标签树节点，请检查标签树发布状态。'}
 
       </Typography.Text>
 

@@ -35,7 +35,7 @@ function resolveTaxonomyConfirmLabel(
   if (published) {
     return `默认（${formatTaxonomyVersionLabel(published)}）`
   }
-  return backendLabel || '默认（仓库 taxonomy）'
+  return backendLabel || '默认（仓库标签树）'
 }
 
 function settingsSummaryItems(

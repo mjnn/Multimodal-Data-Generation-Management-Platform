@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from typing import Any
+from typing import Any, Iterable
 
 from hmi.app_db import _utc_now_iso, db_conn
 
@@ -243,6 +243,46 @@ def list_pipeline_taxonomy_versions() -> list[dict[str, Any]]:
 def get_published_version() -> dict[str, Any] | None:
     versions = list_versions(status="published")
     return versions[0] if versions else None
+
+
+def resolve_taxonomy_version_for_label_ids(
+    label_ids: Iterable[str],
+    *,
+    preferred_version_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Pick taxonomy version whose active nodes best match clip label_id keys."""
+    wanted = {str(x).strip() for x in label_ids if x and str(x).strip()}
+    if not wanted:
+        return get_published_version()
+
+    preferred = str(preferred_version_id or "").strip() or None
+    status_rank = {"published": 3, "draft": 2, "archived": 1}
+    best_version: dict[str, Any] | None = None
+    best_key: tuple[int, int, int, int] = (-1, -1, -1, -1)
+
+    for version in list_versions(include_archived=True):
+        active_ids = {
+            str(node["label_id"])
+            for node in list_nodes(version["id"])
+            if node.get("is_active") is not False
+        }
+        overlap = len(wanted & active_ids)
+        if overlap <= 0:
+            continue
+        preferred_boost = 1 if preferred and version["id"] == preferred else 0
+        key = (
+            overlap,
+            preferred_boost,
+            status_rank.get(str(version.get("status") or ""), 0),
+            len(active_ids),
+        )
+        if key > best_key:
+            best_key = key
+            best_version = version
+
+    if best_version is not None:
+        return best_version
+    return get_published_version()
 
 
 def taxonomy_version_display_label(version: dict[str, Any]) -> str:

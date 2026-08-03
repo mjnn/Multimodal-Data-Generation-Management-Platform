@@ -568,6 +568,21 @@ def api_oss_download_url(
         raise HTTPException(500, str(exc)) from exc
 
 
+@app.get("/api/oss/preview")
+def api_oss_preview(
+    key: str = Query(...),
+    _user: dict = Depends(require_oss_access),
+) -> dict[str, Any]:
+    try:
+        return oss_manage.preview_object(key)
+    except FileNotFoundError:
+        raise HTTPException(404, "object not found") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
 @app.get("/api/oss/file")
 def api_oss_file(
     key: str = Query(...),

@@ -1,27 +1,19 @@
 import { FolderOpenOutlined, PlusOutlined } from '@ant-design/icons'
 
 import {
-
+  Alert,
   Button,
-
+  Checkbox,
   Form,
-
   Input,
-
   InputNumber,
-
   Modal,
-
+  Select,
   Space,
-
   Table,
-
   Tag,
-
   Typography,
-
   message,
-
 } from 'antd'
 
 import type { ColumnsType } from 'antd/es/table'
@@ -33,9 +25,10 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { apiErrorMessage } from '../utils/apiError'
 
-import type { DatasetSnapshot, DatasetStatus, DatasetPoolClipItem, TaxonomyNodeDetail } from '../api/types'
+import type { DatasetSnapshot, DatasetStatus, DatasetPoolClipItem, TaxonomyNodeDetail, DatasetExportRecommendation, TaxonomyVersionDistribution, TaxonomyVersion } from '../api/types'
 
 import { DatasetLabelFilterForm, type LabelFilters } from '../components/DatasetLabelFilterForm'
+import { TaxonomyContextBar } from '../components/TaxonomyContextBar'
 
 import { useAuth } from '../auth/AuthContext'
 
@@ -47,92 +40,26 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue'
 
 import { useListQueryState } from '../hooks/useListQueryState'
 
-
+import { buildFilterJson, cleanLabelFilters } from '../utils/datasetFilter'
+import { formatTaxonomyVersionLabel } from '../utils/taxonomyDisplay'
 
 const STATUS_COLOR: Record<DatasetStatus, string> = {
-
   building: 'processing',
-
   ready: 'success',
-
   failed: 'error',
-
   archived: 'default',
-
 }
-
-
 
 const STATUS_LABEL: Record<DatasetStatus, string> = {
-
   building: '构建中',
-
   ready: '就绪',
-
   failed: '失败',
-
   archived: '已删除',
-
 }
-
-
 
 type StatusFilter = 'all' | DatasetStatus
 
-
-
-function cleanLabelFilters(labelFilters: LabelFilters): LabelFilters {
-
-  return Object.fromEntries(
-
-    Object.entries(labelFilters).filter(([, v]) => v !== '' && v != null),
-
-  ) as LabelFilters
-
-}
-
-
-
-function buildFilterJson(
-  labelFilters: LabelFilters,
-  sampleSize?: number | null,
-): {
-  review_status: 'reviewed'
-  include_pending_review: boolean
-  label_filters?: LabelFilters
-  sample_size?: number
-} {
-  const cleaned = cleanLabelFilters(labelFilters)
-  const filter: {
-    review_status: 'reviewed'
-    include_pending_review: boolean
-    label_filters?: LabelFilters
-    sample_size?: number
-  } = {
-    review_status: 'reviewed',
-    include_pending_review: false,
-  }
-
-  if (Object.keys(cleaned).length > 0) {
-
-    filter.label_filters = cleaned
-
-  }
-
-  if (sampleSize != null && sampleSize > 0) {
-
-    filter.sample_size = sampleSize
-
-  }
-
-  return filter
-
-}
-
-
-
 export function DatasetListPage() {
-
   const navigate = useNavigate()
 
   const { user } = useAuth()
@@ -167,6 +94,15 @@ export function DatasetListPage() {
 
   const [poolItemsTruncated, setPoolItemsTruncated] = useState(false)
 
+  const [previewReadyCount, setPreviewReadyCount] = useState<number | null>(null)
+  const [previewExceedsLimit, setPreviewExceedsLimit] = useState(false)
+  const [previewTaxonomyWarning, setPreviewTaxonomyWarning] = useState<string | null>(null)
+  const [exportRecommendation, setExportRecommendation] = useState<DatasetExportRecommendation | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [taxonomyVersionDistribution, setTaxonomyVersionDistribution] = useState<
+    TaxonomyVersionDistribution[] | null
+  >(null)
+  const [taxonomyVersions, setTaxonomyVersions] = useState<TaxonomyVersion[]>([])
   const [poolModalOpen, setPoolModalOpen] = useState(false)
 
   const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
@@ -181,7 +117,42 @@ export function DatasetListPage() {
 
   const debouncedLabelFilters = useDebouncedValue(labelFilters, 300)
 
+  const exportPreset = Form.useWatch('export_preset', form) as 'minimal' | 'full' | undefined
+  const balanceByLabel = Form.useWatch('balance_by_label', form) as string | undefined
+  const minPerClass = Form.useWatch('min_per_class', form) as number | undefined
+  const maxPerClass = Form.useWatch('max_per_class', form) as number | undefined
   const sampleSize = Form.useWatch('sample_size', form) as number | null | undefined
+  const includeParquet = Form.useWatch('include_parquet', form) as boolean | undefined
+  const previewName = Form.useWatch('name', form) as string | undefined
+  const taxonomyLock = Form.useWatch('taxonomy_lock', form) as string | undefined
+
+  const previewFilterExtra = useMemo(
+    () => ({
+      export_preset: exportPreset ?? 'minimal',
+      include_parquet: Boolean(includeParquet),
+      ...(taxonomyLock && taxonomyLock !== 'default'
+        ? { taxonomy_version_id: taxonomyLock }
+        : {}),
+      ...(balanceByLabel?.trim() ? { balance_by_label: balanceByLabel.trim() } : {}),
+      ...(minPerClass != null && minPerClass > 0
+        ? { min_per_class: minPerClass, oversample_policy: 'duplicate_to_min' as const }
+        : {}),
+      ...(maxPerClass != null && maxPerClass > 0 ? { max_per_class: maxPerClass } : {}),
+    }),
+    [exportPreset, balanceByLabel, minPerClass, maxPerClass, includeParquet, taxonomyLock],
+  )
+
+  const balanceDimensionOptions = useMemo(
+    () =>
+      taxonomyNodes
+        .filter((n) => n.is_active !== false)
+        .sort((a, b) => a.sort_order - b.sort_order || a.label_id.localeCompare(b.label_id))
+        .map((node) => ({
+          value: node.label_id,
+          label: `${node.name} (${node.label_id})`,
+        })),
+    [taxonomyNodes],
+  )
 
 
 
@@ -262,6 +233,7 @@ export function DatasetListPage() {
     if (!createOpen) return
 
     void loadTaxonomy()
+    void api.listTaxonomyVersions().then(setTaxonomyVersions).catch(() => setTaxonomyVersions([]))
 
   }, [createOpen, loadTaxonomy])
 
@@ -274,40 +246,50 @@ export function DatasetListPage() {
     setPreviewLoading(true)
 
     void api
-
       .previewDataset({
-
-        filter_json: buildFilterJson(debouncedLabelFilters, sampleSize),
-
+        name: previewName?.trim() || 'preview',
+        filter_json: buildFilterJson(debouncedLabelFilters, sampleSize, previewFilterExtra),
+        export_preset: exportPreset ?? 'minimal',
       })
-
       .then((res) => {
-
+        setPreviewError(null)
         setPreviewPool(res.pool_count)
-
         setPreviewCount(res.candidate_count)
-
+        setPreviewReadyCount(res.dataset_ready_count ?? null)
+        setPreviewExceedsLimit(Boolean(res.exceeds_clip_limit))
+        setPreviewTaxonomyWarning(res.taxonomy_version_warning ?? null)
+        setExportRecommendation(res.export_recommendation ?? null)
+        setTaxonomyVersionDistribution(res.taxonomy_version_distribution ?? null)
         setPoolItems(res.pool_items ?? [])
-
         setPoolItemsTruncated(Boolean(res.pool_items_truncated))
-
       })
-
-      .catch(() => {
-
+      .catch((err: unknown) => {
+        setPreviewError(apiErrorMessage(err, '预览失败'))
         setPreviewPool(null)
-
         setPreviewCount(null)
-
+        setPreviewReadyCount(null)
+        setPreviewExceedsLimit(false)
+        setPreviewTaxonomyWarning(null)
+        setExportRecommendation(null)
+        setTaxonomyVersionDistribution(null)
         setPoolItems([])
-
         setPoolItemsTruncated(false)
-
       })
-
       .finally(() => setPreviewLoading(false))
+  }, [createOpen, debouncedLabelFilters, sampleSize, previewFilterExtra, exportPreset, previewName, taxonomyLock])
 
-  }, [createOpen, debouncedLabelFilters, sampleSize])
+  const applyExportRecommendation = () => {
+    if (!exportRecommendation) return
+    const patch: Record<string, unknown> = {
+      export_preset: exportRecommendation.suggested_export_preset,
+      include_parquet: exportRecommendation.suggested_include_parquet,
+    }
+    if (exportRecommendation.suggested_sample_size != null) {
+      patch.sample_size = exportRecommendation.suggested_sample_size
+    }
+    form.setFieldsValue(patch)
+    message.success('已应用导出建议')
+  }
 
 
 
@@ -315,13 +297,16 @@ export function DatasetListPage() {
 
     form.resetFields()
 
-    form.setFieldsValue({ sample_size: undefined })
+    form.setFieldsValue({ sample_size: undefined, export_preset: 'minimal', include_parquet: false, taxonomy_lock: 'default' })
 
     setLabelFilters({})
 
     setPreviewPool(null)
 
     setPreviewCount(null)
+    setPreviewTaxonomyWarning(null)
+    setExportRecommendation(null)
+    setPreviewError(null)
 
     setPoolItems([])
 
@@ -344,13 +329,10 @@ export function DatasetListPage() {
     try {
 
       const snapshot = await api.createDataset({
-
         name: values.name.trim(),
-
         description: values.description?.trim() || undefined,
-
-        filter_json: buildFilterJson(labelFilters, sample),
-
+        filter_json: buildFilterJson(labelFilters, sample, previewFilterExtra),
+        export_preset: (values.export_preset as 'minimal' | 'full') ?? 'minimal',
       })
 
       message.success('数据集创建成功，正在构建')
@@ -403,7 +385,19 @@ export function DatasetListPage() {
 
       },
 
-      { title: 'Clip 数', dataIndex: 'clip_count', width: 100 },
+      { title: 'Clip 数', dataIndex: 'clip_count', width: 90 },
+      {
+        title: '导出行数',
+        dataIndex: 'line_count',
+        width: 90,
+        render: (v: number | null | undefined, row) => v ?? row.clip_count,
+      },
+      {
+        title: '预设',
+        dataIndex: 'export_preset',
+        width: 88,
+        render: (v: string | null | undefined) => (v === 'full' ? '完整' : '精简'),
+      },
 
       {
         title: '创建时间',
@@ -582,7 +576,15 @@ export function DatasetListPage() {
 
         width={720}
 
+        styles={{ body: { maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', paddingTop: 8 } }}
+
       >
+
+        <TaxonomyContextBar
+          mixedHint={
+            taxonomyVersionDistribution != null && taxonomyVersionDistribution.length > 1
+          }
+        />
 
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
 
@@ -606,12 +608,191 @@ export function DatasetListPage() {
 
           </Form.Item>
 
+          <div
+            data-testid="dataset-preview-panel"
+            style={{
+              marginBottom: 16,
+              padding: '12px 16px',
+              borderRadius: 8,
+              border: '1px solid var(--ant-color-border-secondary, #f0f0f0)',
+              background: 'var(--ant-color-fill-quaternary, #fafafa)',
+            }}
+          >
+            <Typography.Text strong>符合筛选条件的 Clip</Typography.Text>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
+              候选池：有 AI 标签与向量、且匹配下方标签条件的 clip（本地模式含尚未入库校核记录的 clip）。
+              「可导出」指全部字段校核完成、可纳入数据集的数量。
+            </Typography.Paragraph>
+            <Space wrap align="center">
+              <Typography.Text>
+                {previewLoading
+                  ? '计算中…'
+                  : previewPool != null
+                    ? `候选 ${previewPool} 条`
+                    : previewError
+                      ? '—'
+                      : '等待预览…'}
+              </Typography.Text>
+              {previewReadyCount != null && !previewLoading ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  可导出（已全部校核）{previewReadyCount} 条
+                </Typography.Text>
+              ) : null}
+              {sampleSize != null && sampleSize > 0 && previewCount != null && !previewLoading ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  随机取样后约 {previewCount} 条
+                </Typography.Text>
+              ) : null}
+              <Button
+                type="link"
+                size="small"
+                disabled={previewLoading || previewPool == null || previewPool === 0}
+                onClick={() => setPoolModalOpen(true)}
+              >
+                查看列表
+              </Button>
+            </Space>
+            {!previewLoading && previewPool === 0 ? (
+              <Typography.Paragraph type="warning" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+                当前无匹配 clip：请调整标签条件，或确认 clip 已完成校核与向量导出。
+              </Typography.Paragraph>
+            ) : null}
+            {previewTaxonomyWarning ? (
+              <Alert type="warning" showIcon style={{ marginTop: 8 }} message={previewTaxonomyWarning} />
+            ) : null}
+            {taxonomyVersionDistribution && taxonomyVersionDistribution.length > 0 ? (
+              <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+                标签树版本分布：
+                {taxonomyVersionDistribution.map((d) => (
+                  <Tag key={d.taxonomy_version_id ?? 'mixed'} style={{ marginInlineStart: 4 }}>
+                    {d.taxonomy_version_code ?? '未知'} · {d.clip_count}
+                  </Tag>
+                ))}
+              </Typography.Paragraph>
+            ) : null}
+            {previewExceedsLimit ? (
+              <Typography.Paragraph type="warning" style={{ marginTop: 8, marginBottom: 0 }}>
+                匹配 clip 超过 10,000 条上限，请缩小标签条件或启用随机取样后分批创建。
+              </Typography.Paragraph>
+            ) : null}
+            {previewError ? (
+              <Alert type="error" showIcon style={{ marginTop: 8 }} message="预览失败" description={previewError} />
+            ) : null}
+            {previewLoading ? (
+              <Alert type="info" showIcon style={{ marginTop: 8 }} message="正在计算导出建议…" />
+            ) : exportRecommendation ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 8 }}
+                message="导出建议"
+                data-testid="export-recommendation"
+                description={
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      约 {exportRecommendation.stats.clip_count} clip ·{' '}
+                      {exportRecommendation.stats.line_count} 行 ·{' '}
+                      {exportRecommendation.stats.label_column_count} 个标签列
+                      {exportRecommendation.estimates.jsonl_mb_estimated != null
+                        ? ` · JSONL ≈ ${exportRecommendation.estimates.jsonl_mb_estimated} MB`
+                        : ''}
+                    </Typography.Text>
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>
+                      {exportRecommendation.reasons.map((r) => (
+                        <li key={r}>
+                          <Typography.Text style={{ fontSize: 12 }}>{r}</Typography.Text>
+                        </li>
+                      ))}
+                    </ul>
+                    <Space wrap>
+                      <Typography.Text style={{ fontSize: 12 }}>
+                        建议：{exportRecommendation.suggested_export_preset === 'full' ? '完整包' : '精简'}
+                        {exportRecommendation.suggested_include_parquet ? ' + Parquet' : ''}
+                        {exportRecommendation.suggested_sample_size
+                          ? ` · 取样 ${exportRecommendation.suggested_sample_size}`
+                          : ''}
+                      </Typography.Text>
+                      <Button type="link" size="small" onClick={applyExportRecommendation}>
+                        采用建议
+                      </Button>
+                    </Space>
+                  </Space>
+                }
+              />
+            ) : null}
+          </div>
 
+          <Form.Item
+            name="taxonomy_lock"
+            label="标签树契约"
+            initialValue="default"
+            extra="默认纳入各 clip 校核时的标签树版本（R10）；锁定后仅匹配指定版本。"
+          >
+            <Select
+              options={[
+                { value: 'default', label: '默认（各 clip 校核版本）' },
+                ...taxonomyVersions.map((v) => ({
+                  value: v.id,
+                  label: `锁定：${formatTaxonomyVersionLabel(v)}`,
+                })),
+              ]}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="export_preset"
+            label="导出预设"
+            initialValue="minimal"
+            extra="精简：仅特征+标签+元数据；完整：另含解析原始数据（体积更大）。"
+          >
+            <Select
+              options={[
+                { value: 'minimal', label: '精简（推荐）' },
+                { value: 'full', label: '完整（含 parsed 媒体）' },
+              ]}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="include_parquet"
+            valuePropName="checked"
+            initialValue={false}
+            extra="额外生成 Parquet（特征向量列 + 扁平标签列），便于 pandas/Spark 读取；JSONL 仍保留。"
+          >
+            <Checkbox>同时导出 Parquet</Checkbox>
+          </Form.Item>
 
           <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+            类别平衡（可选 · M8）
+          </Typography.Text>
+          <Form.Item
+            name="balance_by_label"
+            label="平衡维度"
+            extra="从已发布标签树选择标签；按该标签取值分组后做过采样/欠采样。"
+          >
+            <Select
+              allowClear
+              showSearch
+              placeholder="选择标签，例如 day_period"
+              optionFilterProp="label"
+              disabled={balanceDimensionOptions.length === 0}
+              notFoundContent={
+                balanceDimensionOptions.length === 0 ? '暂无已发布标签树' : '无匹配标签'
+              }
+              options={balanceDimensionOptions}
+            />
+          </Form.Item>
+          <Space style={{ width: '100%' }} size="middle">
+            <Form.Item name="min_per_class" label="每类最少行数" style={{ flex: 1 }}>
+              <InputNumber min={1} max={1000} style={{ width: '100%' }} placeholder="过采样" />
+            </Form.Item>
+            <Form.Item name="max_per_class" label="每类最多行数" style={{ flex: 1 }}>
+              <InputNumber min={1} max={10000} style={{ width: '100%' }} placeholder="欠采样" />
+            </Form.Item>
+          </Space>
 
+          <Typography.Text strong style={{ display: 'block', marginBottom: 8, marginTop: 8 }}>
             取样条件 · 标签
-
           </Typography.Text>
 
           <DatasetLabelFilterForm
@@ -642,42 +823,10 @@ export function DatasetListPage() {
 
           </Form.Item>
 
-
-
-          <Form.Item
-            label="满足条件的已校核 Clip"
-            extra="按上方标签条件筛选，且已完成字段校核的 clip 数量；可点击查看列表并跳转详情。"
-          >
-            <Space wrap>
-              <Typography.Text>
-                {previewLoading ? '计算中…' : previewPool != null ? `${previewPool} 条` : '—'}
-              </Typography.Text>
-              <Button
-                type="link"
-                size="small"
-                disabled={previewLoading || !previewPool}
-                onClick={() => setPoolModalOpen(true)}
-              >
-                查看列表
-              </Button>
-              {sampleSize != null && sampleSize > 0 && previewCount != null ? (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  随机取样后约 {previewCount} 条
-                </Typography.Text>
-              ) : null}
-            </Space>
-          </Form.Item>
-
-
-
           <Typography.Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 0 }}>
-
             默认仅纳入已校核 clip
-
             {previewHint}
-
             {activeLabelFilterCount > 0 ? `（${activeLabelFilterCount} 个标签条件）` : ''}
-
           </Typography.Paragraph>
 
         </Form>
@@ -715,7 +864,7 @@ export function DatasetListPage() {
               ),
             },
             {
-              title: 'clip_id',
+              title: 'Clip ID',
               dataIndex: 'clip_id',
               ellipsis: true,
               render: (v: string) => (

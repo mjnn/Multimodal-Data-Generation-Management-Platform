@@ -1275,3 +1275,107 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.oss-row-preview-active > td {
+  background: color-mix(in srgb, var(--color-primary, #5e6ad2) 12%, transparent) !important;
+}
+
+.pipeline-clip-focus > td {
+  background: color-mix(in srgb, var(--color-primary, #5e6ad2) 10%, transparent) !important;
+}
+
+/* 管线执行队列：嵌套表格展开行去掉多余左侧留白 */
+.pipeline-execution-queue .ant-table-expanded-row > .ant-table-cell {
+  padding: 0 !important;
+  background: var(--ant-color-fill-quaternary, #fafafa);
+}
+
+.pipeline-execution-queue .pipeline-clip-table-wrap {
+  padding: 4px 0 8px;
+}
+
+.pipeline-execution-queue .pipeline-clip-table .ant-table {
+  margin: 0 !important;
+}
+
+.pipeline-execution-queue .pipeline-clip-table .ant-table-container {
+  border-inline-start: none;
+}
+
+.pipeline-execution-queue .pipeline-clip-table .ant-table-expanded-row > .ant-table-cell {
+  padding: 8px 16px 12px 40px !important;
+  background: transparent;
+}
+
+.pipeline-execution-queue .pipeline-clip-steps {
+  max-width: 420px;
+}
+
+.overview-summary {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(280px, 420px);
+  gap: var(--space-2xl);
+  align-items: center;
+  min-height: 280px;
+}
+
+@media (max-width: 900px) {
+  .overview-summary {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+}
+
+.overview-clip-pie--solo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+}
+
+.overview-clip-pie__empty {
+  display: block;
+  padding: 48px 0;
+  text-align: center;
+}
+
+.overview-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+  width: 100%;
+  align-self: stretch;
+}
+
+.overview-metrics-grid__cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-xl);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-hairline);
+  background: var(--color-surface-2);
+  border-top: 3px solid var(--metric-accent, var(--color-hairline-strong));
+  min-height: 112px;
+}
+
+.overview-metrics-grid__label {
+  font-size: 13px;
+  color: var(--color-ink-subtle);
+  line-height: 1.4;
+}
+
+.overview-metrics-grid__value {
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-ink);
+}
+
+.overview-metrics-grid__pct {
+  font-size: 12px;
+  color: var(--color-ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}

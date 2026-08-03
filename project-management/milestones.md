@@ -52,3 +52,14 @@
 | **入口** | M4 出口 |
 | **出口** | PRD 附录 C 正向/负向全通过 |
 | **交付** | 更新 WIKI §8 路由表；运维 runbook 补充账号/bootstrap |
+
+---
+
+## M10 · Taxonomy 语义中枢（立项）
+
+| | |
+|---|---|
+| **入口** | M9 出口；`docs/m10-implementation-notes.md`；P0=0 |
+| **出口** | T1–T7；`acceptance/M10.md`；R11–R15 落地 |
+| **阶段 U** | `DESIGN-M10.md` · R-UI-M10-1 A−+B **已出口** |
+| **禁止** | 自动 publish / 自动改 reviewed y |

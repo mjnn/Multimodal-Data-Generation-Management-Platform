@@ -1,8 +1,10 @@
-import { Drawer, List, Space, Tag, Typography } from 'antd'
+import { Button, Drawer, List, Space, Tag, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import type { SimilarItem } from '../api/types'
+import { useAuth } from '../auth/AuthContext'
+import { canManageDatasets } from '../auth/roles'
 import { resolveMediaUrl } from '../utils/mediaUrl'
 
 interface Props {
@@ -14,7 +16,10 @@ interface Props {
 export function SimilarDrawer({ open, compositeId, onClose }: Props) {
   const [items, setItems] = useState<SimilarItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [creating, setCreating] = useState(false)
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const canPropose = canManageDatasets(user?.roles)
 
   useEffect(() => {
     if (!open || !compositeId) return
@@ -26,7 +31,38 @@ export function SimilarDrawer({ open, compositeId, onClose }: Props) {
   }, [open, compositeId])
 
   return (
-    <Drawer title="相似时刻（向量检索 Mock）" open={open} onClose={onClose} width={420}>
+    <Drawer
+      title="相似时刻（向量检索 Mock）"
+      open={open}
+      onClose={onClose}
+      width={420}
+      extra={
+        canPropose && items.length > 0 ? (
+          <Button
+            type="link"
+            loading={creating}
+            onClick={() => {
+              setCreating(true)
+              void api
+                .createTaxonomyProposal({
+                  title: `相似簇提案 · ${compositeId?.slice(0, 16) ?? 'clip'}`,
+                  proposal_type: 'scene_cluster',
+                  evidence: {
+                    source: 'similar',
+                    anchor_composite_id: compositeId,
+                    clip_ids: [...new Set(items.map((i) => i.clip_id))],
+                  },
+                })
+                .then(() => message.success('已创建标签树提案'))
+                .catch(() => message.error('创建提案失败'))
+                .finally(() => setCreating(false))
+            }}
+          >
+            建议补充标签树
+          </Button>
+        ) : null
+      }
+    >
       <List
         loading={loading}
         dataSource={items}

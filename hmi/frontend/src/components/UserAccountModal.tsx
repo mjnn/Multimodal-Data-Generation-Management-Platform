@@ -15,19 +15,22 @@ function formatRoleLabel(role: string): string {
 }
 
 export function UserAccountModal({ open, onClose }: Props) {
-  const { message } = App.useApp()
-  const { user, refreshMe } = useAuth()
+  const { message, modal } = App.useApp()
+  const { user, refreshMe, logout } = useAuth()
   const [profileForm] = Form.useForm<{ display_name: string }>()
   const [passwordForm] = Form.useForm<{ current_password: string; new_password: string; confirm: string }>()
+  const [deleteForm] = Form.useForm<{ password: string }>()
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
+  const [deletingAccount, setDeletingAccount] = useState(false)
 
   useEffect(() => {
     if (open && user) {
       profileForm.setFieldsValue({ display_name: user.display_name })
       passwordForm.resetFields()
+      deleteForm.resetFields()
     }
-  }, [open, user, profileForm, passwordForm])
+  }, [open, user, profileForm, passwordForm, deleteForm])
 
   if (!user) return null
 
@@ -61,6 +64,37 @@ export function UserAccountModal({ open, onClose }: Props) {
     } finally {
       setSavingPassword(false)
     }
+  }
+
+  const onDeleteAccount = () => {
+    modal.confirm({
+      title: '确认注销账号？',
+      content: '注销后账号将被永久删除，无法恢复。进行中的校核领取将释放回任务池。',
+      okText: '确认注销',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        const values = await deleteForm.validateFields()
+        setDeletingAccount(true)
+        try {
+          await api.deleteMyAccount(values.password)
+          message.success('账号已注销')
+          onClose()
+          await logout()
+        } catch (e: unknown) {
+          const detail = (e as { response?: { data?: { detail?: { message?: string } | string } } })
+            ?.response?.data?.detail
+          const msg =
+            typeof detail === 'string'
+              ? detail
+              : detail?.message ?? (e instanceof Error ? e.message : '注销失败')
+          message.error(msg)
+          throw e
+        } finally {
+          setDeletingAccount(false)
+        }
+      },
+    })
   }
 
   return (
@@ -119,6 +153,25 @@ export function UserAccountModal({ open, onClose }: Props) {
           </Form.Item>
           <Button htmlType="submit" loading={savingPassword}>
             更新密码
+          </Button>
+        </Form>
+
+        <Typography.Title level={5} type="danger" style={{ margin: 0 }}>
+          注销账号
+        </Typography.Title>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+          永久删除当前账号及 OSS 快捷方式；校核历史记录中的操作者 ID 将保留。
+        </Typography.Paragraph>
+        <Form form={deleteForm} layout="vertical" onFinish={() => void onDeleteAccount()}>
+          <Form.Item
+            label="当前密码"
+            name="password"
+            rules={[{ required: true, message: '请输入当前密码以确认注销' }]}
+          >
+            <Input.Password autoComplete="current-password" />
+          </Form.Item>
+          <Button danger htmlType="submit" loading={deletingAccount}>
+            注销账号
           </Button>
         </Form>
       </Space>

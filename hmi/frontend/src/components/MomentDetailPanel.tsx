@@ -60,44 +60,53 @@ export function MomentDetailPanel({
     return extractAiHintsFromLabels((label?.labels_json ?? {}) as Record<string, unknown>)
   }, [review?.ai_label_hints, label?.labels_json])
 
+  const loadTaxonomyNodes = useCallback(async (versionId?: string | null) => {
+    try {
+      if (versionId) {
+        const tree = await api.getTaxonomyTree(versionId)
+        setTaxonomyNodes(tree.nodes)
+        return
+      }
+      const versions = await api.listTaxonomyVersions()
+      const published = versions.find((v) => v.status === 'published')
+      if (published) {
+        const tree = await api.getTaxonomyTree(published.id)
+        setTaxonomyNodes(tree.nodes)
+      } else {
+        setTaxonomyNodes([])
+      }
+    } catch {
+      setTaxonomyNodes([])
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!label?.clip_label_ready) {
+      setTaxonomyNodes([])
+      return
+    }
+    void loadTaxonomyNodes(label.taxonomy_version_id)
+  }, [label?.clip_label_ready, label?.taxonomy_version_id, loadTaxonomyNodes])
+
   const loadReviewMeta = useCallback(async () => {
     if (!clip.clip_id || !runId) return
     setReviewLoading(true)
     try {
-      let detail: ClipLabelReview
-      try {
-        detail = await api.getReviewDetail(clip.clip_id, runId)
-      } catch (e) {
-        if ((e as AxiosError)?.response?.status === 404) {
-          setReview(null)
-          const versions = await api.listTaxonomyVersions()
-          const published = versions.find((v) => v.status === 'published')
-          if (published) {
-            const tree = await api.getTaxonomyTree(published.id)
-            setTaxonomyNodes(tree.nodes)
-          }
-          return
-        }
-        throw e
-      }
+      const detail = await api.getReviewDetail(clip.clip_id, runId)
       setReview(detail)
       if (detail.taxonomy_version_id) {
-        const tree = await api.getTaxonomyTree(detail.taxonomy_version_id)
-        setTaxonomyNodes(tree.nodes)
-      } else {
-        const versions = await api.listTaxonomyVersions()
-        const published = versions.find((v) => v.status === 'published')
-        if (published) {
-          const tree = await api.getTaxonomyTree(published.id)
-          setTaxonomyNodes(tree.nodes)
-        }
+        await loadTaxonomyNodes(detail.taxonomy_version_id)
       }
-    } catch {
+    } catch (e) {
+      if ((e as AxiosError)?.response?.status === 404) {
+        setReview(null)
+        return
+      }
       setReview(null)
     } finally {
       setReviewLoading(false)
     }
-  }, [clip.clip_id, runId])
+  }, [clip.clip_id, runId, loadTaxonomyNodes])
 
   useEffect(() => {
     void loadReviewMeta()

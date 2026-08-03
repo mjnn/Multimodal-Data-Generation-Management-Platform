@@ -51,3 +51,7 @@ class RegisterResponse(BaseModel):
 
 class UpdateMeRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str = Field(min_length=1)

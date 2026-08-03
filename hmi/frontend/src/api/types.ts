@@ -27,6 +27,8 @@ export interface ClipLabelView {
   anchor_timestamp_ns?: number | null
   source?: string | null
   aggregation?: string | null
+  taxonomy_version_id?: string | null
+  taxonomy_version_code?: string | null
 }
 
 export interface ClipOverview {
@@ -238,6 +240,17 @@ export interface OssListResponse {
   items: OssListItem[]
 }
 
+export interface OssFilePreview {
+  key: string
+  name: string
+  size: number
+  content_type: string
+  format: 'json' | 'jsonl' | 'text'
+  preview: string
+  truncated: boolean
+  preview_bytes: number
+}
+
 export type BagPipelineStatus =
   | 'idle'
   | 'running'
@@ -294,6 +307,104 @@ export interface TaxonomyTreeResponse {
   version: TaxonomyVersion
   nodes: TaxonomyNodeDetail[]
   tree: LabelTaxonomyNode[]
+}
+
+export interface TaxonomyContext {
+  published_taxonomy_version_id: string | null
+  published_taxonomy_version_code: string | null
+  published_node_count: number
+  reviewed_clip_total: number
+  clips_on_non_published_taxonomy: number
+  open_proposal_count: number
+  version_clip_counts: Record<string, number>
+}
+
+export interface TaxonomyCoverageItem {
+  label_id: string
+  name: string | null
+  dtype: string | null
+  reviewed_with_label: number
+  reviewed_missing_label: number
+  value_counts: Record<string, number>
+  enum_values: string[]
+  missing_enum_values: string[]
+  has_gap: boolean
+}
+
+export interface TaxonomyCoverageResponse {
+  taxonomy_version_id: string
+  taxonomy_version_code: string | null
+  review_pool_count: number
+  reviewed_count: number
+  node_count: number
+  gap_node_count: number
+  items: TaxonomyCoverageItem[]
+}
+
+export interface TaxonomyProposal {
+  id: string
+  title: string
+  proposal_type: string
+  target_label_id: string | null
+  suggested_patch_json: Record<string, unknown> | null
+  evidence: Record<string, unknown>
+  status: string
+  taxonomy_version_id: string | null
+  merged_version_id: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TaxonomyVersionDistribution {
+  taxonomy_version_id: string | null
+  taxonomy_version_code: string | null
+  clip_count: number
+}
+
+export interface TaxonomyLineageNode {
+  id: string
+  version_code: string
+  status: string
+  depth?: number
+}
+
+export interface TaxonomyLineageResponse {
+  version_id: string
+  parent_version_id: string | null
+  ancestors: TaxonomyLineageNode[]
+  descendants: TaxonomyLineageNode[]
+  lineage_chain: TaxonomyLineageNode[]
+}
+
+export interface TaxonomyDiffChanged {
+  label_id: string
+  fields: string[]
+  before: { name?: string | null; dtype?: string | null; is_active?: boolean }
+  after: { name?: string | null; dtype?: string | null; is_active?: boolean }
+}
+
+export interface TaxonomyDiffResponse {
+  base_version_id: string
+  base_version_code: string | null
+  against_version_id: string
+  against_version_code: string | null
+  added_label_ids: string[]
+  removed_label_ids: string[]
+  changed: TaxonomyDiffChanged[]
+  summary: { added: number; removed: number; changed: number }
+}
+
+export interface TaxonomyImpactResponse {
+  taxonomy_version_id: string
+  taxonomy_version_code: string | null
+  status: string
+  is_published: boolean
+  clip_counts: { total: number; reviewed: number; pending_review: number }
+  dataset_filter_lock_count: number
+  dataset_label_reference_count: number
+  child_version_ids: string[]
+  warnings: string[]
 }
 
 export type TaxonomyNodeInput = {
@@ -453,6 +564,8 @@ export interface ReviewV2Stats {
   value: unknown
   pending: number
   total: number
+  /** Empty or confidence < 75%; eligible for low-confidence batch claim. */
+  low_confidence_pending?: number
 }
 
 export interface ReviewV2LabelOption {
@@ -584,6 +697,26 @@ export interface PipelineSettingsResponse {
 
 export type DatasetStatus = 'building' | 'ready' | 'failed' | 'archived'
 
+export interface AuditLogEntry {
+  id: string
+  actor_id: string | null
+  actor_username?: string | null
+  action: string
+  resource_type: string
+  resource_id: string
+  detail: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogEntry[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type DatasetExportPreset = 'minimal' | 'full'
+
 export interface DatasetFilterJson {
   review_status?: string
   include_pending_review?: boolean
@@ -591,12 +724,54 @@ export interface DatasetFilterJson {
   taxonomy_version_id?: string | null
   label_filters?: Record<string, string | boolean> | null
   sample_size?: number | null
+  export_preset?: DatasetExportPreset | null
+  balance_by_label?: string | null
+  min_per_class?: number | null
+  max_per_class?: number | null
+  oversample_policy?: string | null
+  oversample_max_multiplier?: number | null
+  include_parquet?: boolean
+  export_label_ids?: string[] | null
+  export_taxonomy_version_id?: string | null
+}
+
+export interface DatasetBuildReport {
+  skipped?: Array<{ clip_id: string; run_id: string; reason: string }>
+  skipped_by_reason?: Record<string, number>
+  warnings?: string[]
+}
+
+export interface DatasetDistributionReport {
+  before?: Record<string, number>
+  after?: Record<string, number>
 }
 
 export interface DatasetPoolClipItem {
   clip_id: string
   run_id: string
   clip_dir_name: string
+}
+
+export interface DatasetExportRecommendation {
+  suggested_export_preset: DatasetExportPreset
+  suggested_include_parquet: boolean
+  suggested_batch: boolean
+  suggested_sample_size?: number | null
+  reasons: string[]
+  estimates: {
+    line_count: number
+    jsonl_mb_estimated: number
+    zip_mb_estimated?: number | null
+    full_media_note?: string | null
+  }
+  stats: {
+    clip_count: number
+    line_count: number
+    label_column_count: number
+    embedding_schemas: string[]
+    balance_class_count?: number | null
+  }
+  confidence: 'high' | 'low'
 }
 
 export interface DatasetPreviewResponse {
@@ -607,6 +782,20 @@ export interface DatasetPreviewResponse {
   pool_items: DatasetPoolClipItem[]
   pool_items_truncated?: boolean
   filter_json: DatasetFilterJson
+  dataset_ready_count?: number
+  export_preset?: DatasetExportPreset
+  estimated_line_count?: number | null
+  distribution_before?: DatasetDistributionReport['before']
+  distribution_after?: DatasetDistributionReport['after']
+  skipped_preview?: Array<{ clip_id: string; run_id: string; reason: string }>
+  exceeds_clip_limit?: boolean
+  taxonomy_version_warning?: string | null
+  published_taxonomy_version_code?: string | null
+  filter_taxonomy_version_code?: string | null
+  label_column_count?: number
+  embedding_summary?: { schemas?: string[]; model_versions?: string[] }
+  export_recommendation?: DatasetExportRecommendation
+  taxonomy_version_distribution?: TaxonomyVersionDistribution[]
 }
 
 export interface DatasetSnapshot {
@@ -616,6 +805,7 @@ export interface DatasetSnapshot {
   status: DatasetStatus
   filter_json: DatasetFilterJson
   clip_count: number
+  line_count?: number | null
   feature_spec_json: Record<string, unknown>
   target_spec_json: Record<string, unknown>
   oss_manifest_uri?: string | null
@@ -628,6 +818,47 @@ export interface DatasetSnapshot {
   updated_at: string
   ready_at: string | null
   build_running?: boolean
+  export_preset?: DatasetExportPreset | null
+  schema_version?: string | null
+  build_report?: DatasetBuildReport | null
+  parent_snapshot_id?: string | null
+  derivation_json?: Record<string, unknown> | null
+  augmentation_mode?: string | null
+  aug_recipe_id?: string | null
+  taxonomy_version_warning?: string | null
+  taxonomy_mixed_hint?: string | null
+  published_taxonomy_version_code?: string | null
+  parquet_available?: boolean | null
+  parent_snapshot?: DatasetSnapshotRef | null
+  lineage?: DatasetLineageContext | null
+}
+
+export interface DatasetSnapshotRef {
+  id: string
+  name: string
+  status?: DatasetStatus
+  parent_snapshot_id?: string | null
+  created_at?: string
+}
+
+export interface DatasetLineageContext {
+  snapshot_id: string
+  root_snapshot_id: string
+  derivation_depth: number
+  ancestor_chain: DatasetSnapshotRef[]
+  derived_children: DatasetSnapshotRef[]
+  is_root: boolean
+}
+
+export interface AugRecipe {
+  id: string
+  recipe_code: string
+  version: number
+  status: 'draft' | 'published' | 'archived'
+  spec_json: Record<string, unknown>
+  created_by: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface DatasetListResponse {

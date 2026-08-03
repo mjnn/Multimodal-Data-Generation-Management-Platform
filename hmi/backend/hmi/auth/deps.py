@@ -44,14 +44,14 @@ def resolve_user_from_token(token: str) -> dict[str, Any]:
     except jwt.PyJWTError as exc:
         raise HTTPException(
             status_code=401,
-            detail={"code": "401_UNAUTHORIZED", "message": "invalid or expired token"},
+            detail={"code": "401_UNAUTHORIZED", "message": "登录已失效，请重新登录"},
         ) from exc
 
     user = get_user_by_id(str(payload["sub"]))
     if user is None or not user["is_active"]:
         raise HTTPException(
             status_code=401,
-            detail={"code": "401_UNAUTHORIZED", "message": "user not found or inactive"},
+            detail={"code": "401_UNAUTHORIZED", "message": "用户不存在或已禁用"},
         )
     return user
 
@@ -64,7 +64,7 @@ def get_current_user(request: Request) -> dict[str, Any]:
     if not token:
         raise HTTPException(
             status_code=401,
-            detail={"code": "401_UNAUTHORIZED", "message": "authentication required"},
+            detail={"code": "401_UNAUTHORIZED", "message": "请先登录"},
         )
     user = resolve_user_from_token(token)
     request.state.user = user
@@ -75,7 +75,7 @@ def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str,
     if "admin" not in (user.get("roles") or []):
         raise HTTPException(
             status_code=403,
-            detail={"code": "403_FORBIDDEN", "message": "admin role required"},
+            detail={"code": "403_FORBIDDEN", "message": "需要管理员权限"},
         )
     return user
 
@@ -85,7 +85,7 @@ def require_oss_access(user: dict[str, Any] = Depends(get_current_user)) -> dict
     if not any(r in roles for r in ("admin", "dataset_manager")):
         raise HTTPException(
             status_code=403,
-            detail={"code": "403_FORBIDDEN", "message": "OSS access requires admin or dataset_manager"},
+            detail={"code": "403_FORBIDDEN", "message": "OSS 访问需要管理员或数据集管理员权限"},
         )
     return user
 
@@ -97,7 +97,7 @@ def require_pipeline_access(user: dict[str, Any] = Depends(get_current_user)) ->
             status_code=403,
             detail={
                 "code": "403_FORBIDDEN",
-                "message": "pipeline access requires admin, dataset_manager, or pipeline_manager",
+                "message": "管线访问需要管理员、数据集管理员或管线管理员权限",
             },
         )
     return user
@@ -116,7 +116,7 @@ def require_reviewer(user: dict[str, Any] = Depends(get_current_user)) -> dict[s
     if not any(r in roles for r in ("admin", "reviewer")):
         raise HTTPException(
             status_code=403,
-            detail={"code": "403_FORBIDDEN", "message": "review access requires admin or reviewer"},
+            detail={"code": "403_FORBIDDEN", "message": "校核访问需要管理员或校核员权限"},
         )
     return user
 
@@ -128,7 +128,7 @@ def require_dataset_read(user: dict[str, Any] = Depends(get_current_user)) -> di
             status_code=403,
             detail={
                 "code": "403_FORBIDDEN",
-                "message": "dataset read requires admin, dataset_manager, or model_trainer",
+                "message": "数据集读取需要管理员、数据集管理员或模型训练员权限",
             },
         )
     return user
@@ -141,7 +141,7 @@ def require_dataset_manager(user: dict[str, Any] = Depends(get_current_user)) ->
             status_code=403,
             detail={
                 "code": "403_FORBIDDEN",
-                "message": "dataset write requires admin or dataset_manager",
+                "message": "数据集写入需要管理员或数据集管理员权限",
             },
         )
     return user
@@ -156,7 +156,7 @@ def require_overview_access(user: dict[str, Any] = Depends(get_current_user)) ->
         status_code=403,
         detail={
             "code": "403_FORBIDDEN",
-            "message": "overview access denied",
+            "message": "无权访问数据总览",
         },
     )
 

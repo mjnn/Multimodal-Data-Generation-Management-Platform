@@ -59,8 +59,8 @@ export function UploadPipelineProgress({ steps, clipId, runId, compact = false }
       </Typography.Text>
       {!compact && (clipId || runId) && (
         <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
-          {clipId && <>clip_id: <Typography.Text code>{clipId}</Typography.Text></>}
-          {runId && <> · run_id: <Typography.Text code>{runId}</Typography.Text></>}
+          {clipId && <>Clip ID：<Typography.Text code>{clipId}</Typography.Text></>}
+          {runId && <> · 运行 ID：<Typography.Text code>{runId}</Typography.Text></>}
         </Typography.Text>
       )}
       <Steps

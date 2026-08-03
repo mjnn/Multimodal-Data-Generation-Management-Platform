@@ -4,7 +4,9 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Select,
+  Space,
   Switch,
   Table,
   Tag,
@@ -13,6 +15,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
+import { useAuth } from '../auth/AuthContext'
 import { ALL_ROLES, ROLE_LABELS } from '../auth/roles'
 import type { AppRole, AuthUser } from '../auth/types'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
@@ -28,6 +31,7 @@ type UserForm = {
 }
 
 export function AdminUsersPage() {
+  const { user: currentUser } = useAuth()
   const [users, setUsers] = useState<UserRow[]>([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
@@ -95,6 +99,18 @@ export function AdminUsersPage() {
     }
   }
 
+  const onDeleteUser = async (row: UserRow) => {
+    try {
+      await api.deleteAdminUser(row.id)
+      message.success(`已注销用户 ${row.username}`)
+      await load()
+    } catch (e) {
+      const detail = (e as { response?: { data?: { detail?: { message?: string } } } })?.response
+        ?.data?.detail?.message
+      message.error(detail ?? '注销失败')
+    }
+  }
+
   const columns: ColumnsType<UserRow> = [
     { title: '用户名', dataIndex: 'username', key: 'username' },
     { title: '显示名', dataIndex: 'display_name', key: 'display_name' },
@@ -124,9 +140,29 @@ export function AdminUsersPage() {
       title: '操作',
       key: 'actions',
       render: (_, row) => (
-        <Button type="link" size="small" onClick={() => openEdit(row)}>
-          编辑
-        </Button>
+        <Space size={0}>
+          <Button type="link" size="small" onClick={() => openEdit(row)}>
+            编辑
+          </Button>
+          {currentUser?.id === row.id ? (
+            <Button type="link" size="small" disabled title="请在账号设置中注销自己的账号">
+              注销
+            </Button>
+          ) : (
+            <Popconfirm
+              title={`注销用户 ${row.username}？`}
+              description="永久删除账号，进行中的校核领取将释放回任务池。"
+              okText="注销"
+              okType="danger"
+              cancelText="取消"
+              onConfirm={() => void onDeleteUser(row)}
+            >
+              <Button type="link" size="small" danger>
+                注销
+              </Button>
+            </Popconfirm>
+          )}
+        </Space>
       ),
     },
   ]

@@ -60,6 +60,14 @@ export function ClipExplorerPage() {
   }, [clipId, runId])
 
   useEffect(() => {
+    const versionId = clipLabelMeta?.taxonomy_version_id
+    if (versionId) {
+      void api
+        .getTaxonomyTree(versionId)
+        .then((tree) => setTaxonomyNodes(tree.nodes))
+        .catch(() => setTaxonomyNodes([]))
+      return
+    }
     void api
       .listTaxonomyVersions()
       .then((versions) => {
@@ -71,7 +79,7 @@ export function ClipExplorerPage() {
         return api.getTaxonomyTree(published.id).then((tree) => setTaxonomyNodes(tree.nodes))
       })
       .catch(() => setTaxonomyNodes([]))
-  }, [])
+  }, [clipLabelMeta?.taxonomy_version_id])
 
   const sceneDescription = useMemo(() => {
     const clipLabel = timelineState?.meta.clip_label ?? clipLabelMeta

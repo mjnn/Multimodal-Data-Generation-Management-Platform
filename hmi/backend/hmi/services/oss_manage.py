@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,33 @@ from hmi.config import get_settings
 from hmi.data_source import is_local_mode
 from hmi.oss_layout import OSS_LAYOUT_PREFIXES
 from hmi.oss_signer import _bucket, sign_key
+
+PREVIEW_MAX_BYTES = 256 * 1024
+PREVIEW_JSONL_MAX_LINES = 40
+PREVIEW_TEXT_SUFFIXES = frozenset(
+    {
+        ".json",
+        ".jsonl",
+        ".yaml",
+        ".yml",
+        ".txt",
+        ".md",
+        ".log",
+        ".csv",
+        ".xml",
+        ".keep",
+        ".sql",
+        ".py",
+        ".js",
+        ".ts",
+        ".html",
+        ".css",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".env",
+    }
+)
 
 
 def _normalize_key(key: str) -> str:
@@ -187,3 +215,68 @@ def local_file_path(key: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(key)
     return path
+
+
+def _read_object_bytes(key: str, *, max_bytes: int) -> tuple[bytes, int]:
+    if is_local_mode():
+        path = local_file_path(key)
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            return fh.read(max_bytes), size
+    bucket = _bucket()
+    meta = bucket.head_object(key)
+    size = int(getattr(meta, "content_length", 0) or 0)
+    if size <= max_bytes:
+        return bucket.get_object(key).read(), size
+    end = max(0, max_bytes - 1)
+    return bucket.get_object(key, byte_range=(0, end)).read(), size
+
+
+def preview_object(key: str) -> dict[str, Any]:
+    key = _normalize_key(key)
+    name = key.rsplit("/", 1)[-1]
+    ext = Path(name).suffix.lower()
+    if ext not in PREVIEW_TEXT_SUFFIXES:
+        raise ValueError(f"preview not supported for {ext or 'this file type'}")
+
+    raw, total_size = _read_object_bytes(key, max_bytes=PREVIEW_MAX_BYTES)
+    truncated_bytes = total_size > len(raw)
+    text = raw.decode("utf-8", errors="replace")
+    content_type = mimetypes.guess_type(name)[0] or "text/plain"
+
+    if ext == ".json":
+        fmt = "json"
+        try:
+            preview = json.dumps(json.loads(text), ensure_ascii=False, indent=2)
+        except json.JSONDecodeError:
+            fmt = "text"
+            preview = text
+    elif ext == ".jsonl":
+        fmt = "jsonl"
+        lines = text.splitlines()
+        parsed: list[Any] = []
+        for line in lines[:PREVIEW_JSONL_MAX_LINES]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                parsed.append(json.loads(stripped))
+            except json.JSONDecodeError:
+                parsed.append(stripped)
+        preview = json.dumps(parsed, ensure_ascii=False, indent=2)
+        truncated_lines = len(lines) > PREVIEW_JSONL_MAX_LINES
+    else:
+        fmt = "text"
+        preview = text
+        truncated_lines = False
+
+    return {
+        "key": key,
+        "name": name,
+        "size": total_size,
+        "content_type": content_type,
+        "format": fmt,
+        "preview": preview,
+        "truncated": truncated_bytes or (ext == ".jsonl" and truncated_lines),
+        "preview_bytes": len(raw),
+    }

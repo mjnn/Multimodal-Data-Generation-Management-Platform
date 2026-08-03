@@ -114,6 +114,9 @@ def ensure_schema() -> None:
     from hmi.dataset_db import ensure_dataset_schema
 
     ensure_dataset_schema()
+    from hmi.taxonomy_proposal_db import ensure_taxonomy_proposal_schema
+
+    ensure_taxonomy_proposal_schema()
 
 
 @contextmanager
@@ -304,6 +307,60 @@ def update_user(
     updated = get_user_by_id(user_id)
     assert updated is not None
     return updated
+
+
+def count_users_with_role(role: str, *, exclude_user_id: str | None = None) -> int:
+    with db_conn() as conn:
+        sql = """
+            SELECT COUNT(DISTINCT u.id) FROM app_user u
+            JOIN app_user_role r ON r.user_id = u.id
+            WHERE r.role = ?
+        """
+        params: list[Any] = [role]
+        if exclude_user_id:
+            sql += " AND u.id != ?"
+            params.append(exclude_user_id)
+        row = conn.execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
+
+
+def delete_user(user_id: str) -> None:
+    """Permanently remove a user and owned session data."""
+    from hmi.review.assignment_db import ensure_assignment_schema
+
+    ensure_assignment_schema()
+    user = get_user_by_id(user_id)
+    if user is None:
+        raise ValueError(f"user not found: {user_id}")
+
+    if "admin" in (user.get("roles") or []):
+        if count_users_with_role("admin", exclude_user_id=user_id) == 0:
+            raise ValueError("cannot delete the last admin account")
+
+    now = _utc_now_iso()
+    with db_conn() as conn:
+        conn.execute(
+            """
+            UPDATE review_assignment_item
+            SET assignee_id = NULL, status = 'pending', claimed_at = NULL, updated_at = ?
+            WHERE assignee_id = ? AND status = 'claimed'
+            """,
+            (now, user_id),
+        )
+        conn.execute(
+            "UPDATE review_assignment_item SET assignee_id = NULL WHERE assignee_id = ?",
+            (user_id,),
+        )
+        conn.execute(
+            "UPDATE review_assignment_batch SET assignee_id = NULL WHERE assignee_id = ?",
+            (user_id,),
+        )
+        conn.execute("DELETE FROM review_workbench_session WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM app_user_oss_shortcut WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM app_user_role WHERE user_id = ?", (user_id,))
+        deleted = conn.execute("DELETE FROM app_user WHERE id = ?", (user_id,)).rowcount
+        if deleted != 1:
+            raise ValueError(f"user not found: {user_id}")
 
 
 def list_user_oss_shortcuts(user_id: str) -> list[dict[str, Any]]:

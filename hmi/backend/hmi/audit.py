@@ -55,30 +55,70 @@ def list_audit_logs(
     *,
     resource_type: str | None = None,
     resource_id: str | None = None,
+    action: str | None = None,
+    actor_id: str | None = None,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
+    items, _ = query_audit_logs(
+        resource_type=resource_type,
+        resource_id=resource_id,
+        action=action,
+        actor_id=actor_id,
+        limit=limit,
+        offset=offset,
+    )
+    return items
+
+
+def query_audit_logs(
+    *,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    action: str | None = None,
+    actor_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
     limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    where: list[str] = []
+    params: list[Any] = []
+
+    if resource_type:
+        where.append("a.resource_type = ?")
+        params.append(resource_type.strip())
+    if resource_id:
+        where.append("a.resource_id = ?")
+        params.append(resource_id.strip())
+    if action:
+        where.append("a.action = ?")
+        params.append(action.strip())
+    if actor_id:
+        where.append("a.actor_id = ?")
+        params.append(actor_id.strip())
+
+    clause = f" WHERE {' AND '.join(where)}" if where else ""
+
     with db_conn() as conn:
-        if resource_type and resource_id:
-            rows = conn.execute(
-                """
-                SELECT * FROM audit_log
-                WHERE resource_type = ? AND resource_id = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (resource_type, resource_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT * FROM audit_log
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-    return [_audit_row(r) for r in rows]
+        count_row = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM audit_log a{clause}",
+            params,
+        ).fetchone()
+        total = int(count_row["cnt"]) if count_row else 0
+        rows = conn.execute(
+            f"""
+            SELECT a.*, u.username AS actor_username
+            FROM audit_log a
+            LEFT JOIN app_user u ON u.id = a.actor_id
+            {clause}
+            ORDER BY a.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+
+    return [_audit_row(r) for r in rows], total
 
 
 def _audit_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -92,6 +132,7 @@ def _audit_row(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "actor_id": row["actor_id"],
+        "actor_username": row["actor_username"] if "actor_username" in row.keys() else None,
         "action": row["action"],
         "resource_type": row["resource_type"],
         "resource_id": row["resource_id"],

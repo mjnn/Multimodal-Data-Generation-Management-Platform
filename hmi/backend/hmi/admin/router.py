@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from hmi.app_db import create_user, get_user_by_id, list_users, update_user
+from hmi.app_db import create_user, delete_user, get_user_by_id, list_users, update_user
+from hmi.audit import query_audit_logs
 from hmi.auth.deps import require_admin
 from hmi.auth.models import UserPublic
 from hmi.system_env import get_system_env_snapshot, save_system_env
@@ -109,3 +110,49 @@ def api_update_user(
             detail={"code": "422_VALIDATION", "message": str(exc)},
         ) from exc
     return _user_public(user)
+
+
+@router.delete("/users/{user_id}")
+def api_delete_user(user_id: str, admin: dict = Depends(require_admin)) -> dict[str, bool]:
+    if get_user_by_id(user_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "404_NOT_FOUND", "message": "user not found"},
+        )
+    if user_id == admin["id"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "400_BAD_REQUEST",
+                "message": "use DELETE /api/auth/me to delete your own account",
+            },
+        )
+    try:
+        delete_user(user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "422_VALIDATION", "message": str(exc)},
+        ) from exc
+    return {"ok": True}
+
+
+@router.get("/audit")
+def api_list_audit_logs(
+    action: str | None = Query(default=None),
+    resource_type: str | None = Query(default=None),
+    resource_id: str | None = Query(default=None),
+    actor_id: str | None = Query(default=None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _admin: dict = Depends(require_admin),
+) -> dict[str, Any]:
+    items, total = query_audit_logs(
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        actor_id=actor_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}

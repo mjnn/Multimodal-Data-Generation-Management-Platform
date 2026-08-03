@@ -16,14 +16,19 @@ import { canAccessOss, canBrowseClips, isAnonymousOnly } from '../auth/roles'
 import { api } from '../api'
 import type { ClipOverview } from '../api/types'
 import { PipelineStatus } from '../components/PipelineStatus'
-import { ContentCard, FilterBar, PageHeader, PageStack, StatCard } from '../components/ui'
+import { OverviewClipMetricsGrid, OverviewClipPieChart } from '../components/OverviewClipPieChart'
+import { ContentCard, FilterBar, PageHeader, PageStack } from '../components/ui'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
 import { useListQueryState } from '../hooks/useListQueryState'
 import { clearOverviewSnapshot, getOverviewSnapshot, setOverviewSnapshot } from '../utils/overviewCache'
 import { clipDisplayName } from '../utils/clipDisplay'
 import { isDemoClip } from '../utils/demoClip'
+import {
+  classifyOverviewClip,
+  summarizeOverviewClipBuckets,
+} from '../utils/overviewClipBuckets'
 
-type PipelineFilter = 'all' | 'completed' | 'running' | 'failed' | 'pending'
+type PipelineFilter = 'all' | 'completed' | 'running' | 'failed' | 'pending' | 'in_review' | 'dataset_ready'
 
 function mergeClipStats(
   clip: ClipOverview,
@@ -146,9 +151,7 @@ export function OverviewPage() {
     })()
   }
 
-  const labeledCount = clips.filter((c) => c.clip_label_ready).length
-  const datasetReadyCount = clips.filter((c) => c.dataset_ready).length
-  const disputeClipCount = clips.filter((c) => (c.dispute_count ?? 0) > 0).length
+  const bucketCounts = useMemo(() => summarizeOverviewClipBuckets(clips), [clips])
   const totalErrors = clips.filter((c) => c.pipeline_status === 'failed').length
   const completed = clips.filter((c) => c.pipeline_status === 'completed').length
   const running = clips.filter((c) => c.pipeline_status === 'running').length
@@ -161,6 +164,12 @@ export function OverviewPage() {
     if (pipelineFilter === 'completed') return clips.filter((c) => c.pipeline_status === 'completed')
     if (pipelineFilter === 'failed') return clips.filter((c) => c.pipeline_status === 'failed')
     if (pipelineFilter === 'running') return clips.filter((c) => c.pipeline_status === 'running')
+    if (pipelineFilter === 'in_review') {
+      return clips.filter((c) => classifyOverviewClip(c) === 'in_review')
+    }
+    if (pipelineFilter === 'dataset_ready') {
+      return clips.filter((c) => classifyOverviewClip(c) === 'dataset_ready')
+    }
     return clips.filter(
       (c) => c.pipeline_status !== 'completed' && c.pipeline_status !== 'failed' && c.pipeline_status !== 'running',
     )
@@ -186,7 +195,7 @@ export function OverviewPage() {
 
   const columns: ColumnsType<ClipOverview> = [
     {
-      title: 'Clip ID',
+      title: 'Clip 标识',
       key: 'clip_info',
       fixed: 'left',
       width: 280,
@@ -338,29 +347,12 @@ export function OverviewPage() {
         <Alert type="error" showIcon message="加载失败" description={loadError} style={{ marginBottom: 16 }} />
       ) : null}
 
-      <div className="stat-grid">
-        <StatCard label="Clip 总数" value={clips.length} accent="stat" />
-        <StatCard label="已完成" value={completed} icon={<CheckCircleOutlined />} accent="success" />
-        <StatCard label="Clip 已打标" value={labeledCount} accent="default" />
-        <StatCard
-          label="可入数据集"
-          value={datasetReadyCount}
-          icon={<CheckCircleOutlined />}
-          accent={datasetReadyCount ? 'success' : 'default'}
-        />
-        <StatCard
-          label="含待校核标签"
-          value={disputeClipCount}
-          icon={<WarningOutlined />}
-          accent={disputeClipCount ? 'danger' : 'default'}
-        />
-        <StatCard
-          label="失败 Clip"
-          value={totalErrors}
-          icon={<WarningOutlined />}
-          accent={totalErrors ? 'danger' : 'default'}
-        />
-      </div>
+      <ContentCard title="Clip 阶段分布">
+        <div className="overview-summary">
+          <OverviewClipPieChart counts={bucketCounts} total={clips.length} />
+          <OverviewClipMetricsGrid counts={bucketCounts} total={clips.length} />
+        </div>
+      </ContentCard>
 
       <ContentCard
         title="全部 Clip"
@@ -375,8 +367,10 @@ export function OverviewPage() {
             onChange={setStatus}
             options={[
               { value: 'all', label: '全部', count: clips.length },
-              { value: 'completed', label: '已完成', count: completed },
+              { value: 'completed', label: '管线已完成', count: completed },
               { value: 'running', label: '进行中', count: running },
+              { value: 'in_review', label: '校核中', count: bucketCounts.in_review },
+              { value: 'dataset_ready', label: '可入数据集', count: bucketCounts.dataset_ready },
               { value: 'failed', label: '失败', count: totalErrors },
               { value: 'pending', label: '待处理', count: pending },
             ]}

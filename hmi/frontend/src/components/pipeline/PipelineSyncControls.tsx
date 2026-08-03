@@ -2,6 +2,7 @@ import { Alert, Space, Switch, Tag, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../../api'
 import type { OssSyncPollerStatus } from '../../api/types'
+import { formatSyncStatus } from '../../utils/uiLabels'
 
 export function PipelineSyncControls() {
   const [syncStatus, setSyncStatus] = useState<OssSyncPollerStatus | null>(null)
@@ -44,7 +45,7 @@ export function PipelineSyncControls() {
         {syncStatus?.running_sync && <Tag color="processing">同步进行中</Tag>}
         {syncStatus?.last_sync_status && (
           <Tag color={syncStatus.last_sync_status === 'success' ? 'success' : 'default'}>
-            上次：{syncStatus.last_sync_status}
+            上次：{formatSyncStatus(syncStatus.last_sync_status)}
             {syncStatus.last_sync_at
               ? ` · ${api.formatDateTime(syncStatus.last_sync_at)}`
               : ''}

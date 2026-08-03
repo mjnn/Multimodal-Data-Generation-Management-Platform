@@ -313,9 +313,6 @@ def _is_low_confidence(ai_value: Any, confidence: float | None) -> bool:
     return confidence < LOW_CONFIDENCE_THRESHOLD
 
 
-
-
-
 def _confidence_sort_key(
 
     ai_value: Any,
@@ -584,6 +581,30 @@ def build_pending_tasks(
 
 
 
+def is_eligible_for_low_confidence_claim(task: dict[str, Any]) -> bool:
+    """Eligible for low-confidence batch claim: empty value or confidence < threshold."""
+    bucket = task.get("priority_bucket")
+    if bucket is not None:
+        return int(bucket) <= 2
+    ai_value = task.get("ai_value")
+    confidence = _confidence_float({"confidence": task.get("ai_confidence")})
+    if _is_empty_value(ai_value):
+        return True
+    return _is_low_confidence(ai_value, confidence)
+
+
+def filter_low_confidence_claim_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [t for t in tasks if is_eligible_for_low_confidence_claim(t)]
+
+
+def build_low_confidence_claim_tasks(limit: int) -> list[dict[str, Any]]:
+    tasks = build_pending_tasks("confidence")
+    return filter_low_confidence_claim_tasks(tasks)[:limit]
+
+
+
+
+
 def task_stats(
 
     mode: str,
@@ -605,7 +626,7 @@ def task_stats(
 
     normalized = normalize_review_v2_mode(mode)
 
-    return {
+    result: dict[str, Any] = {
 
         "mode": normalized,
 
@@ -618,6 +639,14 @@ def task_stats(
         "total": len(tasks),
 
     }
+
+    if normalized == "confidence":
+
+        claimable = filter_low_confidence_claim_tasks(tasks)
+
+        result["low_confidence_pending"] = len(claimable)
+
+    return result
 
 
 

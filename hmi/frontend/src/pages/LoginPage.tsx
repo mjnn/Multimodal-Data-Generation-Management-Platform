@@ -82,7 +82,7 @@ export function LoginPage() {
             label="用户名"
             rules={[{ required: true, message: '请输入用户名' }]}
           >
-            <Input prefix={<UserOutlined />} placeholder="admin" autoFocus size="large" />
+            <Input prefix={<UserOutlined />} placeholder="用户名" autoFocus size="large" />
           </Form.Item>
           <Form.Item
             name="password"

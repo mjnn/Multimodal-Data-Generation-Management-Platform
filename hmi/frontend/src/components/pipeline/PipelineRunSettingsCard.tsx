@@ -94,7 +94,7 @@ export function PipelineRunSettingsCard() {
             结构化提示词设置
           </Button>
           <Typography.Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
-            微调 Omni 打标角色、规则与用户任务句（taxonomy 列表仍随标签树版本生成）
+            微调 Omni 打标角色、规则与用户任务句（标签列表仍随标签树版本生成）
           </Typography.Text>
         </Form.Item>
         <Form.Item name="embedding_model" label="向量化模型">
@@ -103,7 +103,7 @@ export function PipelineRunSettingsCard() {
         <Form.Item name="taxonomy_version_id" label="标签树版本">
           <Select
             allowClear
-            placeholder="默认（仓库 taxonomy 或最新发布）"
+            placeholder="默认（仓库标签树或最新发布）"
             options={taxonomyVersions.map((v) => ({
               value: v.id,
               label: taxonomyOptionLabel(v),

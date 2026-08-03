@@ -1,5 +1,92 @@
 # 进度变更日志（倒序）
 
+## 2026-07-31 — M8.5 标签树裁剪（派生）
+
+- **后端**：`dataset/taxonomy_crop.py`；derive `taxonomy_crop_label_ids` → 克隆 draft taxonomy + `export_label_ids`；assemble 导出 y 列过滤
+- **UI**：`DatasetTaxonomyCropForm`；派生 Modal 区分「标签树裁剪」与「按标签值筛选 clip」
+- **测试**：`test_dataset_m8.py` taxonomy crop case；E2E 文案更新
+
+## 2026-07-31 — M8.5 派生向导 · 平衡 + 按标签筛选 clip
+
+- **UI**：`DatasetDetailPage` 派生 Modal（父集条件、按标签筛选、类别平衡、实时预览）
+- **工具**：`utils/datasetFilter.ts`（`buildDeriveFilterJson`）；`DatasetListPage` 复用
+- **后端**：derive 部分 `filter_json` override merge（已有 `derive.py`）
+- **测试**：`test_dataset_m8.py` 补 label crop derive；`e2e/dataset-derive-wizard.spec.ts`
+- **验收**：`acceptance/M8.md` A-E2E-2/3
+
+## 2026-07-31 — M10.10 Hub diff/impact/lineage UI
+
+- **UI**：`TaxonomyLineageBar`、`TaxonomyVersionMetaPanel`；版本 Tab 血缘条；Drawer diff/impact；发布前 impact 确认框
+- **API 客户端**：`getTaxonomyDiff`、`getTaxonomyImpact`；types 补全
+- **E2E**：`e2e/taxonomy-hub.spec.ts` +2（lineage、diff panel）；**4 passed**
+- **CURRENT → M7.5 全链 E2E / M9.3 待 DataWorks**
+
+## 2026-07-31 — M9.2 docs + Dataset 创建向导 E2E 补全
+
+- **M9.2**：`docs/postgresql-migration-path.md`；`acceptance/M9.2.md`；tracking M9.2 → done
+- **E2E**：`e2e/dataset-create-wizard.spec.ts`（M7.8 导出建议+采用；M7.5 Parquet checkbox；M8 平衡维度 UI）
+- **CURRENT → M9.3 H-1 / M7.5 全链 E2E**
+
+## 2026-07-31 — M10 出口 · Taxonomy 语义中枢
+
+- **API**：context、coverage、diff、impact、lineage、proposals；dataset preview `taxonomy_version_distribution`
+- **UI**：Hub Tabs（版本/数据洞察/提案）、TaxonomyContextBar、Dataset Taxonomy 契约锁定、Similar 提案入口
+- **DB**：`taxonomy_proposal`；R11–R15 落地
+- 验收：`test_taxonomy_m10.py` + `e2e/taxonomy-hub.spec.ts` + `npm run build`；`acceptance/M10.md`
+- **CURRENT → M9.3 / 维护**
+
+## 2026-07-31 — M10 立项 · Taxonomy 语义中枢
+
+- **DOC-M10**：`docs/m10-implementation-notes.md`（Hub + 全链路契约 + 覆盖率 + diff/impact + 提案）
+- **缺口 R11–R15** 写回 `docs/prd-rosbag-labels.md` §13
+- **阶段 U**：`docs/design/m10-ui-options.md`（推荐 A−+B）；`DESIGN-M10.md` 待用户确认
+- tracking：M10-U、M10.1–M10.9；**CURRENT → M10-U**
+- 舱内场景挖掘：M10 只做洞察+提案 ingest（R14）；重算法离线
+
+## 2026-07-31 — M7.8 出口 · 导出顾问
+
+- `export_advisor.py`：按 clip/行数/标签列/embedding 给出 preset、Parquet、取样建议
+- `POST /api/datasets/preview` → `export_recommendation`；创建向导「导出建议」+「采用建议」
+- 验收：`test_export_advisor_m78.py` + `npm run build`；`acceptance/M7.8.md`
+
+## 2026-07-31 — M7.5 出口 · Parquet 可选导出
+
+- `parquet_export.py`：X/y Parquet + OSS + zip 打包
+- `filter_json.include_parquet`；创建向导 Checkbox；meta `parquet_available`
+- 验收：`test_dataset_m75.py` + `npm run build`；`acceptance/M7.5.md`
+- 依赖：`pyarrow` 加入 `hmi/backend/requirements.txt`
+
+## 2026-07-31 — M9 出口 · 部署与治理
+
+- **M9.1**：`GET /api/admin/audit`（admin-only）；`query_audit_logs` + `actor_username`
+- **M9.4**：`taxonomy_hint.py`；dataset preview/detail R10 警告；列表/详情 Alert
+- **M9.5**：`AdminAuditPage` + `/admin/audit` 菜单 + `listAuditLogs`
+- 验收：`test_audit_m9.py` + `npm run build` 全绿；`acceptance/M9.md`
+- **M9.2 PostgreSQL / M9.3 cloud E2E** 延期（docs / H-1）
+- **CURRENT → 维护 / 可选 M7.5**
+
+## 2026-07-30 — M6–M8 出口 · 治理链收敛
+
+- **M6**：删旧 ReviewQueue/Detail；`test_review_v2.py` + `e2e/review-v2.spec.ts` + `acceptance/M6.md`
+- **M7**：Schema/build 报告/export preset；`test_dataset_m7.py`；前端 dataset UI
+- **M8**：balance/oversample/recipe/derive；`test_dataset_m8.py`；examples/
+- 回归：`test_prd_appendix_c.py` 全绿（legacy reviewed + OSS mock 修复）
+- **CURRENT → M9 预告**
+
+## 2026-07-30 — M8 立项 · Dataset 样本扩展
+
+- 边界确认：平台 = 平衡采样 / 过采样 / recipe 契约 / 派生 lineage；训练侧 = transform 执行
+- `docs/m8-implementation-notes.md` + `docs/dataset-augmentation-recipe-schema.md`
+- tracking M8.1–M8.7；`acceptance/M8.md`；delivery schema → 1.1 预告
+- **依赖 M7 出口**；M9 预留部署/audit
+
+## 2026-07-30 — M7 立项 · Dataset 交付加固
+
+- 产品边界确认：不做 PyTorch 开箱即用；强化 Schema 契约、build 报告、export preset
+- `docs/m7-implementation-notes.md` + `docs/dataset-delivery-schema.md` v1.0 草案
+- tracking M7.1–M7.7；`acceptance/M7.md` 模板
+- **CURRENT**：M6.6 仍为推荐工单；M6 出口后启动 M7
+
 ## 2026-07-23 — M6.3 完成 · submit + audit
 
 - POST `/api/review/v2/submit`：confirm/correct/uncertain → merge + rollup

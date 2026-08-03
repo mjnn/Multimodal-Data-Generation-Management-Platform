@@ -1,8 +1,8 @@
 import { ApartmentOutlined, EyeOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import { Button, Popconfirm, Space, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import type { PipelineExecution, PipelineExecutionClip } from '../api/types'
 import { PipelineStatus } from '../components/PipelineStatus'
@@ -16,15 +16,16 @@ import { clipDisplayName } from '../utils/clipDisplay'
 import { formatDateTime } from '../utils/format'
 
 import type { AxiosError } from 'axios'
+import { localizeApiMessage } from '../utils/uiLabels'
 
 function pipelineErrorMessage(e: unknown, fallback: string): string {
   const ax = e as AxiosError<{ detail?: string | { message?: string } }>
   const detail = ax.response?.data?.detail
-  if (typeof detail === 'string' && detail.trim()) return detail
+  if (typeof detail === 'string' && detail.trim()) return localizeApiMessage(detail)
   if (detail && typeof detail === 'object' && typeof detail.message === 'string') {
-    return detail.message
+    return localizeApiMessage(detail.message)
   }
-  if (e instanceof Error && e.message) return e.message
+  if (e instanceof Error && e.message) return localizeApiMessage(e.message)
   return fallback
 }
 
@@ -48,6 +49,9 @@ function executionCanCancel(status: string): boolean {
 
 export function PipelineManagePage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const focusRunId = searchParams.get('run_id')
+  const focusClipId = searchParams.get('clip_id')
   const { dataSource, dataRevision, bumpDataRevision } = useDataSourceMode()
   const [executions, setExecutions] = useState<PipelineExecution[]>([])
   const [total, setTotal] = useState(0)
@@ -57,6 +61,9 @@ export function PipelineManagePage() {
   const [retryingClipId, setRetryingClipId] = useState<string | null>(null)
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null)
   const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([])
+  const [expandedClipByRun, setExpandedClipByRun] = useState<Record<string, string[]>>({})
+  const focusResolvedRef = useRef(false)
+  const focusPageResolvedRef = useRef(false)
 
   const loadExecutions = useCallback(async () => {
     if (dataSource !== 'local') {
@@ -114,6 +121,36 @@ export function PipelineManagePage() {
   useEffect(() => {
     void loadExecutions()
   }, [dataSource, dataRevision, loadExecutions])
+
+  useEffect(() => {
+    if (!focusRunId || dataSource !== 'local' || focusPageResolvedRef.current) return
+    focusPageResolvedRef.current = true
+    void (async () => {
+      try {
+        const probe = await api.listPipelineExecutions({ page: 1, page_size: 100 })
+        const idx = probe.items.findIndex((ex) => ex.run_id === focusRunId)
+        if (idx < 0) return
+        const targetPage = Math.floor(idx / pageSize) + 1
+        if (targetPage !== page) setPage(targetPage)
+      } catch {
+        /* ignore — fall back to current page */
+      }
+    })()
+  }, [dataSource, focusRunId, page, pageSize])
+
+  useEffect(() => {
+    if (!focusRunId || loading || focusResolvedRef.current) return
+    const execution = executions.find((ex) => ex.run_id === focusRunId)
+    if (!execution) return
+    focusResolvedRef.current = true
+    setExpandedRowKeys([focusRunId])
+    if (focusClipId && execution.clips.some((c) => c.clip_id === focusClipId)) {
+      setExpandedClipByRun((prev) => ({ ...prev, [focusRunId]: [focusClipId] }))
+    }
+    window.requestAnimationFrame(() => {
+      document.getElementById(`pipeline-run-${focusRunId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }, [executions, focusClipId, focusRunId, loading])
 
   const needsPoll = useMemo(
     () =>
@@ -204,8 +241,8 @@ export function PipelineManagePage() {
                 title="重试管线"
                 description={
                   r.pipeline_status === 'cancelled'
-                    ? '将清除本 clip 在本 run 下的产物并重置为 pending，重新进入 SDK 队列。'
-                    : '将清除本 clip 在本 run 下的产物并重置为 pending。'
+                    ? '将清除本 clip 在本 run 下的产物并重置为待执行，重新进入 SDK 队列。'
+                    : '将清除本 clip 在本 run 下的产物并重置为待执行。'
                 }
                 okText="重试"
                 cancelText="取消"
@@ -315,12 +352,16 @@ export function PipelineManagePage() {
 
       <ContentCard title="管线执行队列" noPadding>
         <Table<PipelineExecution>
+          className="pipeline-execution-queue"
           rowKey="run_id"
           loading={loading}
           columns={executionColumns}
           dataSource={executions}
           tableLayout="fixed"
           scroll={{ x: 720 }}
+          onRow={(record) =>
+            record.run_id === focusRunId ? { id: `pipeline-run-${record.run_id}` } : {}
+          }
           pagination={{
             current: page,
             pageSize,
@@ -332,24 +373,38 @@ export function PipelineManagePage() {
           onChange={onTableChange}
           expandable={{
             expandedRowKeys,
+            indentSize: 0,
             onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
             expandedRowRender: (ex) => (
-              <Table<PipelineExecutionClip & { run_id: string }>
-                rowKey="clip_id"
-                size="small"
-                pagination={false}
-                columns={clipColumns}
-                dataSource={ex.clips.map((c) => ({ ...c, run_id: ex.run_id }))}
-                expandable={{
-                  expandedRowRender: (r) =>
-                    r.steps?.length ? (
-                      <UploadPipelineProgress steps={r.steps} compact />
-                    ) : (
-                      <Typography.Text type="secondary">暂无步骤数据</Typography.Text>
-                    ),
-                  rowExpandable: (r) => (r.steps?.length ?? 0) > 0,
-                }}
-              />
+              <div className="pipeline-clip-table-wrap">
+                <Table<PipelineExecutionClip & { run_id: string }>
+                  className="pipeline-clip-table"
+                  rowKey="clip_id"
+                  size="small"
+                  pagination={false}
+                  columns={clipColumns}
+                  dataSource={ex.clips.map((c) => ({ ...c, run_id: ex.run_id }))}
+                  rowClassName={(r) =>
+                    r.clip_id === focusClipId && ex.run_id === focusRunId ? 'pipeline-clip-focus' : ''
+                  }
+                  expandable={{
+                    expandedRowKeys: expandedClipByRun[ex.run_id] ?? [],
+                    indentSize: 0,
+                    columnWidth: 32,
+                    onExpandedRowsChange: (keys) =>
+                      setExpandedClipByRun((prev) => ({ ...prev, [ex.run_id]: keys as string[] })),
+                    expandedRowRender: (r) =>
+                      r.steps?.length ? (
+                        <div className="pipeline-clip-steps">
+                          <UploadPipelineProgress steps={r.steps} compact />
+                        </div>
+                      ) : (
+                        <Typography.Text type="secondary">暂无步骤数据</Typography.Text>
+                      ),
+                    rowExpandable: (r) => (r.steps?.length ?? 0) > 0,
+                  }}
+                />
+              </div>
             ),
           }}
           locale={{

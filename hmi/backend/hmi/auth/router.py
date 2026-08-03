@@ -5,7 +5,7 @@ from __future__ import annotations
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from hmi.app_db import authenticate_user, create_user, get_user_by_id, update_user
+from hmi.app_db import authenticate_user, create_user, delete_user, get_user_by_id, update_user
 from hmi.auth.deps import get_current_user
 from hmi.auth.roles import DEFAULT_REGISTRATION_ROLES
 from hmi.auth.jwt_utils import (
@@ -20,6 +20,7 @@ from hmi.auth.jwt_utils import (
 )
 from hmi.auth.models import (
     ChangePasswordRequest,
+    DeleteAccountRequest,
     LoginRequest,
     LoginResponse,
     MeResponse,
@@ -76,7 +77,7 @@ def register(body: RegisterRequest, response: Response) -> RegisterResponse:
     if allow in {"0", "false", "no", "off"}:
         raise HTTPException(
             status_code=403,
-            detail={"code": "403_FORBIDDEN", "message": "registration is disabled"},
+            detail={"code": "403_FORBIDDEN", "message": "注册已关闭"},
         )
     try:
         user = create_user(
@@ -111,7 +112,7 @@ def login(body: LoginRequest, response: Response) -> LoginResponse:
     if user is None:
         raise HTTPException(
             status_code=401,
-            detail={"code": "401_UNAUTHORIZED", "message": "invalid username or password"},
+            detail={"code": "401_UNAUTHORIZED", "message": "用户名或密码错误"},
         )
 
     access_token = create_access_token(user)
@@ -131,21 +132,21 @@ def refresh_token(request: Request, response: Response) -> LoginResponse:
     if not token:
         raise HTTPException(
             status_code=401,
-            detail={"code": "401_UNAUTHORIZED", "message": "refresh token missing"},
+            detail={"code": "401_UNAUTHORIZED", "message": "刷新令牌缺失，请重新登录"},
         )
     try:
         payload = decode_token(token, expected_type="refresh")
     except jwt.PyJWTError as exc:
         raise HTTPException(
             status_code=401,
-            detail={"code": "401_UNAUTHORIZED", "message": "invalid refresh token"},
+            detail={"code": "401_UNAUTHORIZED", "message": "刷新令牌无效，请重新登录"},
         ) from exc
 
     user = get_user_by_id(str(payload["sub"]))
     if user is None or not user["is_active"]:
         raise HTTPException(
             status_code=401,
-            detail={"code": "401_UNAUTHORIZED", "message": "user not found or inactive"},
+            detail={"code": "401_UNAUTHORIZED", "message": "用户不存在或已禁用"},
         )
 
     access_token = create_access_token(user)
@@ -186,10 +187,32 @@ def change_password(body: ChangePasswordRequest, user: dict = Depends(get_curren
     if authenticate_user(user["username"], body.current_password) is None:
         raise HTTPException(
             status_code=400,
-            detail={"code": "400_BAD_REQUEST", "message": "current password is incorrect"},
+            detail={"code": "400_BAD_REQUEST", "message": "当前密码不正确"},
         )
     try:
         update_user(user["id"], password=body.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.delete("/me")
+def delete_me(
+    body: DeleteAccountRequest,
+    response: Response,
+    user: dict = Depends(get_current_user),
+) -> dict[str, bool]:
+    if authenticate_user(user["username"], body.password) is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "400_BAD_REQUEST", "message": "密码不正确"},
+        )
+    try:
+        delete_user(user["id"])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "422_VALIDATION", "message": str(exc)},
+        ) from exc
+    _clear_auth_cookies(response)
     return {"ok": True}

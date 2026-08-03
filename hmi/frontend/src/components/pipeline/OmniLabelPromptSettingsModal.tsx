@@ -58,8 +58,7 @@ export function OmniLabelPromptSettingsModal({
       }
     >
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        以下字段对应 Omni 打标提示词脚手架中可调的文案（角色、规则、用户任务句等）。taxonomy
-        标签列表仍由「标签树版本」动态生成。保存执行参数后，本地 SDK 轮询将使用合并后的提示词。
+        以下字段对应 Omni 打标提示词脚手架中可调的文案（角色、规则、用户任务句等）。标签列表仍由「标签树版本」动态生成。保存执行参数后，本地 SDK 轮询将使用合并后的提示词。
       </Typography.Paragraph>
       <Form form={form} layout="vertical">
         {fields.map((f) => (

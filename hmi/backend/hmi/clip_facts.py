@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from hmi.clip_consensus import attach_consensus_fields, parse_multi_ai_meta
-from hmi.labels_util import has_label_content, labels_preview, labels_to_clip_dict, parse_labels_json
+from hmi.labels_util import has_label_content, label_value_ids, labels_preview, labels_to_clip_dict, parse_labels_json
 from hmi.local import store
 from hmi.local.clip_context import resolve_ds_for_run
 
@@ -55,6 +55,58 @@ def _try_scene_summary(clip_id: str, run_id: str) -> str | None:
     except Exception:
         pass
     return None
+
+
+def _resolve_clip_taxonomy_version_id(
+    row: dict[str, Any] | None,
+    *,
+    parsed_labels: dict[str, Any],
+    flat_labels: dict[str, Any],
+) -> str | None:
+    if row:
+        raw_tid = row.get("taxonomy_version_id")
+        if raw_tid and str(raw_tid).strip():
+            return str(raw_tid).strip()
+
+    label_ids = list(flat_labels.keys()) if flat_labels else label_value_ids(parsed_labels)
+    if not label_ids:
+        return None
+
+    preferred: str | None = None
+    try:
+        from hmi.local.pipeline_settings import get_pipeline_settings
+
+        raw = get_pipeline_settings().get("taxonomy_version_id")
+        if raw and str(raw).strip():
+            preferred = str(raw).strip()
+    except Exception:
+        preferred = None
+
+    from hmi.taxonomy_db import resolve_taxonomy_version_for_label_ids
+
+    version = resolve_taxonomy_version_for_label_ids(
+        label_ids,
+        preferred_version_id=preferred,
+    )
+    return str(version["id"]) if version else None
+
+
+def _attach_taxonomy_version(view: dict[str, Any], row: dict[str, Any] | None, parsed: dict[str, Any]) -> dict[str, Any]:
+    flat = view.get("labels_json") if isinstance(view.get("labels_json"), dict) else {}
+    tid = _resolve_clip_taxonomy_version_id(row, parsed_labels=parsed, flat_labels=flat)
+    if not tid:
+        return view
+    out = dict(view)
+    out["taxonomy_version_id"] = tid
+    try:
+        from hmi.taxonomy_db import resolve_taxonomy_display_for_version_id
+
+        code = resolve_taxonomy_display_for_version_id(tid)
+        if code:
+            out["taxonomy_version_code"] = code
+    except Exception:
+        pass
+    return out
 
 
 def _with_scene_summary(view: dict[str, Any], clip_id: str, run_id: str) -> dict[str, Any]:
@@ -183,6 +235,7 @@ def get_clip_label_view(clip_id: str, run_id: str, *, ds: str | None = None) -> 
             "source": "fact_clip_label",
             "aggregation": "clip_native",
         }
+        view = _attach_taxonomy_version(view, dict(row), parsed)
         return _with_scene_summary(attach_consensus_fields(view, row), clip_id, run_id)
 
     granularity = detect_label_granularity(clip_id, run_id, ds=resolved_ds)
@@ -239,6 +292,7 @@ def get_clip_label_view_for_queue(
         "source": "fact_clip_label",
         "aggregation": "clip_native",
     }
+    view = _attach_taxonomy_version(view, dict(row), parsed)
     return attach_consensus_fields(view, row)
 
 

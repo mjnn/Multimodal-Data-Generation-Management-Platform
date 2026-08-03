@@ -92,9 +92,16 @@ def object_exists(object_key: str) -> bool:
 
 
 def get_object_text(object_key: str) -> str | None:
+    raw = get_object_bytes(object_key)
+    if raw is None:
+        return None
+    return raw.decode("utf-8")
+
+
+def get_object_bytes(object_key: str) -> bytes | None:
     key = object_key.lstrip("/")
     try:
-        return _bucket().get_object(key).read().decode("utf-8")
+        return _bucket().get_object(key).read()
     except oss2.exceptions.NoSuchKey:
         return None
     except oss2.exceptions.NotFound:

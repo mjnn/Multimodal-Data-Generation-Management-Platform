@@ -25,12 +25,12 @@ from fastapi.testclient import TestClient
 from hmi.app_db import create_user, ensure_schema, get_user_by_username
 from hmi.audit import list_audit_logs
 from hmi.dataset.build import build_snapshot_sync
-from hmi.dataset.export import manifest_oss_key
+from hmi.dataset.export import manifest_oss_key, x_oss_key, y_oss_key
 from hmi.local import store
 from hmi.main import app
 from hmi.review_db import create_review
 
-_uploads: dict[str, str] = {}
+_uploads: dict[str, str | bytes] = {}
 
 
 def _login(client: TestClient, username: str, password: str) -> str:
@@ -41,6 +41,26 @@ def _login(client: TestClient, username: str, password: str) -> str:
 
 def _mock_put(key: str, text: str, *, content_type: str = "application/json") -> None:
     _uploads[key.lstrip("/")] = text
+
+
+def _mock_put_bytes(key: str, payload: bytes, *, content_type: str = "application/zip") -> None:
+    _uploads[key.lstrip("/")] = payload
+
+
+def _mock_get_object_text(key: str) -> str | None:
+    val = _uploads.get(key.lstrip("/"))
+    if val is None:
+        return None
+    if isinstance(val, bytes):
+        try:
+            return val.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    return str(val)
+
+
+def _mock_object_exists(key: str) -> bool:
+    return key.lstrip("/") in _uploads
 
 
 def _seed_clip(*, clip_id: str, run_id: str, ds: str) -> None:
@@ -80,7 +100,8 @@ def _seed_clip(*, clip_id: str, run_id: str, ds: str) -> None:
 def _sync_build(snapshot_id: str) -> None:
     try:
         with patch("hmi.dataset.export.put_object_text", side_effect=_mock_put):
-            build_snapshot_sync(snapshot_id)
+            with patch("hmi.dataset.export.put_object_bytes", side_effect=_mock_put_bytes):
+                build_snapshot_sync(snapshot_id)
     except Exception:
         pass
 
@@ -316,16 +337,27 @@ def main() -> None:
     assert snapshot["clip_count"] == 1
     print("OK C5/N4 dataset reviewed-only (pending excluded)")
 
-    manifest = _uploads.get(manifest_oss_key(snapshot_id), "")
-    lines = [ln for ln in manifest.splitlines() if ln.strip()]
+    x_body = _uploads.get(x_oss_key(snapshot_id), "")
+    if isinstance(x_body, bytes):
+        x_body = x_body.decode("utf-8", errors="replace")
+    lines = [ln for ln in str(x_body).splitlines() if ln.strip()]
     assert len(lines) == 1
     row = json.loads(lines[0])
-    assert row["clip_id"] == reviewed_clip and row["x_json"] and row["y_json"]
+    assert row["clip_id"] == reviewed_clip and row["x_json"]
+    y_body = _uploads.get(y_oss_key(snapshot_id), "")
+    if isinstance(y_body, bytes):
+        y_body = y_body.decode("utf-8", errors="replace")
+    y_row = json.loads(str(y_body).splitlines()[0])
+    assert y_row["y_json"]
+    assert manifest_oss_key(snapshot_id) in _uploads
     print("OK C6 OSS manifest rows == clip_count with x_json/y_json (local)")
 
     assert client.get("/api/datasets", headers=trainer_h).status_code == 200
     assert client.get(f"/api/datasets/{snapshot_id}", headers=trainer_h).status_code == 200
-    assert client.get(f"/api/datasets/{snapshot_id}/download", headers=trainer_h).status_code == 200
+    with patch("hmi.oss_signer.get_object_text", side_effect=_mock_get_object_text):
+        with patch("hmi.oss_signer.object_exists", side_effect=_mock_object_exists):
+            with patch("hmi.oss_signer.sign_key", side_effect=lambda k, **kw: f"https://mock/{k}"):
+                assert client.get(f"/api/datasets/{snapshot_id}/download", headers=trainer_h).status_code == 200
     assert client.post("/api/datasets", headers=trainer_h, json={"name": "x"}).status_code == 403
     assert client.post(
         "/api/taxonomy/versions",

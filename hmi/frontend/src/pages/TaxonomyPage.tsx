@@ -28,19 +28,26 @@ import {
 
   message,
 
+  Tabs,
+
 } from 'antd'
 
 import type { ColumnsType } from 'antd/es/table'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { api } from '../api'
 
 import type { TaxonomyNodeDetail, TaxonomyVersion } from '../api/types'
 
 import { TaxonomyTreeEditor } from '../components/TaxonomyTreeEditor'
+import { TaxonomyContextBar } from '../components/TaxonomyContextBar'
+import { TaxonomyInsightsPanel } from '../components/TaxonomyInsightsPanel'
+import { TaxonomyLineageBar } from '../components/TaxonomyLineageBar'
+import { TaxonomyProposalsPanel } from '../components/TaxonomyProposalsPanel'
+import { TaxonomyVersionMetaPanel } from '../components/TaxonomyVersionMetaPanel'
 
 import { useAuth } from '../auth/AuthContext'
 
@@ -49,6 +56,7 @@ import { canManageTaxonomy } from '../auth/roles'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 
 import { nodesToPayload, type TaxonomyLevelMeta } from '../utils/taxonomyTree'
+import { formatTaxonomyImpactWarning } from '../utils/taxonomyDisplay'
 
 
 
@@ -116,6 +124,10 @@ export function TaxonomyPage() {
   const { versionId } = useParams<{ versionId?: string }>()
 
   const navigate = useNavigate()
+
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const hubTab = searchParams.get('tab') || 'versions'
 
   const { user } = useAuth()
 
@@ -315,6 +327,11 @@ export function TaxonomyPage() {
 
   )
 
+  const publishedVersionId = useMemo(
+    () => versions.find((v) => v.status === 'published')?.id ?? null,
+    [versions],
+  )
+
 
 
   const onCreate = async () => {
@@ -410,23 +427,39 @@ export function TaxonomyPage() {
 
 
   const onPublish = async (row: TaxonomyVersion) => {
-
     try {
-
-      await api.publishTaxonomyVersion(row.id)
-
-      message.success('已发布')
-
-      await loadVersions()
-
-      if (versionId === row.id) await loadTree(row.id)
-
+      const impact = await api.getTaxonomyImpact(row.id)
+      Modal.confirm({
+        title: `确认发布 · ${row.version_code}`,
+        width: 480,
+        content: (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Typography.Text>
+              Clip 绑定 {impact.clip_counts.total} 条（已校核 {impact.clip_counts.reviewed}）
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              数据集契约锁定 {impact.dataset_filter_lock_count} · 标签引用{' '}
+              {impact.dataset_label_reference_count}
+            </Typography.Text>
+            {impact.warnings.map((w) => (
+              <Typography.Text key={w} type="warning">
+                {formatTaxonomyImpactWarning(w)}
+              </Typography.Text>
+            ))}
+          </Space>
+        ),
+        okText: '确认发布',
+        cancelText: '取消',
+        onOk: async () => {
+          await api.publishTaxonomyVersion(row.id)
+          message.success('已发布')
+          await loadVersions()
+          if (versionId === row.id) await loadTree(row.id)
+        },
+      })
     } catch (e) {
-
       message.error(apiErrorMessage(e, '发布失败'))
-
     }
-
   }
 
 
@@ -547,15 +580,11 @@ export function TaxonomyPage() {
 
           {isAdmin && row.status === 'draft' ? (
 
-            <Popconfirm title="确认发布此版本？" onConfirm={() => void onPublish(row)}>
+            <Button type="link" size="small" onClick={() => void onPublish(row)}>
 
-              <Button type="link" size="small">
+              发布
 
-                发布
-
-              </Button>
-
-            </Popconfirm>
+            </Button>
 
           ) : null}
 
@@ -637,7 +666,20 @@ export function TaxonomyPage() {
 
       />
 
+      <TaxonomyContextBar />
 
+      <Tabs
+        activeKey={hubTab}
+        onChange={(key) => setSearchParams(key === 'versions' ? {} : { tab: key })}
+        items={[
+          {
+            key: 'versions',
+            label: '版本',
+            children: (
+              <>
+      <ContentCard title="版本血缘">
+        <TaxonomyLineageBar versionId={publishedVersionId} />
+      </ContentCard>
 
       <ContentCard title="已发布标签树">
 
@@ -690,8 +732,29 @@ export function TaxonomyPage() {
         </ContentCard>
 
       ) : null}
-
-
+              </>
+            ),
+          },
+          {
+            key: 'insights',
+            label: '标签覆盖率',
+            children: (
+              <ContentCard title="标签覆盖率">
+                <TaxonomyInsightsPanel />
+              </ContentCard>
+            ),
+          },
+          {
+            key: 'proposals',
+            label: '提案队列',
+            children: (
+              <ContentCard title="标签树完善提案">
+                <TaxonomyProposalsPanel />
+              </ContentCard>
+            ),
+          },
+        ]}
+      />
 
       <Drawer
 
@@ -751,7 +814,15 @@ export function TaxonomyPage() {
 
         ) : (
 
-          <TaxonomyTreeEditor
+          <>
+            <TaxonomyVersionMetaPanel
+              versionId={versionId}
+              versions={versions}
+              isAdmin={Boolean(isAdmin)}
+              currentNodes={nodes}
+              dirty={dirty}
+            />
+            <TaxonomyTreeEditor
 
             versionId={versionId}
 
@@ -766,6 +837,7 @@ export function TaxonomyPage() {
             onEmptyLevelsChange={handleEmptyLevelsChange}
 
           />
+          </>
 
         )}
 

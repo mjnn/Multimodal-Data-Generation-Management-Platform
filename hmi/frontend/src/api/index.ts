@@ -48,6 +48,7 @@ import type {
   OssShortcut,
   OssShortcutsResponse,
   OssListResponse,
+  OssFilePreview,
   OssSyncPollerStatus,
 } from './types'
 
@@ -91,6 +92,12 @@ export const api = {
     fetchJson('/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ current_password, new_password }),
+    }),
+
+  deleteMyAccount: (password: string): Promise<{ ok: boolean }> =>
+    fetchJson('/auth/me', {
+      method: 'DELETE',
+      body: JSON.stringify({ password }),
     }),
 
   getDataSource: (): Promise<{ data_source: DataSourceMode }> =>
@@ -273,6 +280,9 @@ export const api = {
   getOssDownloadUrl: (key: string): Promise<{ url: string }> =>
     fetchJson(`/oss/download-url?${new URLSearchParams({ key })}`),
 
+  previewOssFile: (key: string): Promise<OssFilePreview> =>
+    fetchJson(`/oss/preview?${new URLSearchParams({ key })}`),
+
   getOssBagPipeline: (key: string, refresh = false): Promise<OssBagPipeline> =>
     fetchJson(
       `/oss/bag-pipeline?${new URLSearchParams({ key, ...(refresh ? { refresh: '1' } : {}) })}`,
@@ -282,6 +292,25 @@ export const api = {
   formatDateTime,
 
   listAdminUsers: (): Promise<AuthUser[]> => fetchJson('/admin/users'),
+
+  listAuditLogs: (opts?: {
+    action?: string
+    resource_type?: string
+    resource_id?: string
+    actor_id?: string
+    limit?: number
+    offset?: number
+  }): Promise<import('./types').AuditLogListResponse> =>
+    fetchJson(
+      `/admin/audit?${new URLSearchParams({
+        ...(opts?.action ? { action: opts.action } : {}),
+        ...(opts?.resource_type ? { resource_type: opts.resource_type } : {}),
+        ...(opts?.resource_id ? { resource_id: opts.resource_id } : {}),
+        ...(opts?.actor_id ? { actor_id: opts.actor_id } : {}),
+        limit: String(opts?.limit ?? 50),
+        offset: String(opts?.offset ?? 0),
+      })}`,
+    ),
 
   getSystemEnv: (): Promise<{
     path: string
@@ -320,6 +349,9 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+
+  deleteAdminUser: (userId: string): Promise<{ ok: boolean }> =>
+    fetchJson(`/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
 
   listTaxonomyVersions: (): Promise<TaxonomyVersion[]> => fetchJson('/taxonomy/versions'),
 
@@ -364,6 +396,67 @@ export const api = {
 
   archiveTaxonomyVersion: (versionId: string): Promise<TaxonomyVersion> =>
     fetchJson(`/taxonomy/versions/${encodeURIComponent(versionId)}/archive`, { method: 'POST' }),
+
+  getTaxonomyContext: (): Promise<import('./types').TaxonomyContext> =>
+    fetchJson('/taxonomy/context'),
+
+  getTaxonomyCoverage: (versionId: string): Promise<import('./types').TaxonomyCoverageResponse> =>
+    fetchJson(`/taxonomy/versions/${encodeURIComponent(versionId)}/coverage`),
+
+  getTaxonomyDiff: (versionId: string, against: string): Promise<import('./types').TaxonomyDiffResponse> =>
+    fetchJson(
+      `/taxonomy/versions/${encodeURIComponent(versionId)}/diff?against=${encodeURIComponent(against)}`,
+    ),
+
+  getTaxonomyImpact: (versionId: string): Promise<import('./types').TaxonomyImpactResponse> =>
+    fetchJson(`/taxonomy/versions/${encodeURIComponent(versionId)}/impact`),
+
+  getTaxonomyLineage: (versionId: string): Promise<import('./types').TaxonomyLineageResponse> =>
+    fetchJson(`/taxonomy/versions/${encodeURIComponent(versionId)}/lineage`),
+
+  listTaxonomyProposals: (opts?: { status?: string; limit?: number; offset?: number }): Promise<{
+    items: import('./types').TaxonomyProposal[]
+    total: number
+  }> => {
+    const q = new URLSearchParams()
+    if (opts?.status) q.set('status', opts.status)
+    if (opts?.limit != null) q.set('limit', String(opts.limit))
+    if (opts?.offset != null) q.set('offset', String(opts.offset))
+    const qs = q.toString()
+    return fetchJson(`/taxonomy/proposals${qs ? `?${qs}` : ''}`)
+  },
+
+  createTaxonomyProposal: (body: {
+    title: string
+    proposal_type?: string
+    target_label_id?: string | null
+    suggested_patch_json?: Record<string, unknown> | null
+    evidence: Record<string, unknown>
+    taxonomy_version_id?: string | null
+  }): Promise<import('./types').TaxonomyProposal> =>
+    fetchJson('/taxonomy/proposals', { method: 'POST', body: JSON.stringify(body) }),
+
+  patchTaxonomyProposal: (
+    proposalId: string,
+    body: { status: string; merged_version_id?: string | null },
+  ): Promise<import('./types').TaxonomyProposal> =>
+    fetchJson(`/taxonomy/proposals/${encodeURIComponent(proposalId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  getTaxonomyNodeUsage: (
+    labelId: string,
+    versionId?: string,
+  ): Promise<{
+    label_id: string
+    clip_with_label_count: number
+    clip_samples: Array<{ clip_id: string; run_id: string; value: string }>
+    dataset_reference_count: number
+  }> =>
+    fetchJson(
+      `/taxonomy/nodes/${encodeURIComponent(labelId)}/usage${versionId ? `?version_id=${encodeURIComponent(versionId)}` : ''}`,
+    ),
 
   getReviewQueue: (opts?: {
     status?: ReviewStatus
@@ -612,13 +705,37 @@ export const api = {
     name: string
     description?: string
     filter_json?: DatasetFilterJson
+    export_preset?: 'minimal' | 'full'
+    aug_recipe_id?: string
   }): Promise<DatasetSnapshot> =>
     fetchJson('/datasets', { method: 'POST', body: JSON.stringify(body) }),
 
+  deriveDataset: (
+    snapshotId: string,
+    body: {
+      name: string
+      description?: string
+      filter_json?: DatasetFilterJson
+      taxonomy_crop_label_ids?: string[]
+      aug_recipe_id?: string
+    },
+  ): Promise<DatasetSnapshot> =>
+    fetchJson(`/datasets/${encodeURIComponent(snapshotId)}/derive`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   previewDataset: (body: {
+    name?: string
     filter_json?: DatasetFilterJson
+    export_preset?: 'minimal' | 'full'
   }): Promise<DatasetPreviewResponse> =>
     fetchJson('/datasets/preview', { method: 'POST', body: JSON.stringify(body) }),
+
+  listAugRecipes: (opts?: { status?: string }): Promise<{ items: import('./types').AugRecipe[] }> =>
+    fetchJson(
+      `/datasets/aug-recipes${opts?.status ? `?status=${encodeURIComponent(opts.status)}` : ''}`,
+    ),
 
   getDataset: (snapshotId: string): Promise<DatasetSnapshot> =>
     fetchJson(`/datasets/${encodeURIComponent(snapshotId)}`),

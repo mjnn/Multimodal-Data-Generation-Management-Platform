@@ -43,7 +43,47 @@ DOC-M6,doc,M6,M6 implementation notes v1.0,done,100,TBD,P0,2026-07-23,2026-07-23
 M6.1,task,M6,field review DB + merge,done,100,TBD,P0,2026-07-23,2026-07-24,2026-07-23,2026-07-23,DOC-M6,field_review_db.py merge.py test_review_m61.py
 M6.2,task,M6,v2 task queue API,done,100,TBD,P0,2026-07-24,2026-07-25,2026-07-23,2026-07-23,M6.1,v2_tasks.py v2_router.py test_review_m62.py
 M6.3,task,M6,submit + clip status rollup,done,100,TBD,P0,2026-07-25,2026-07-26,2026-07-23,2026-07-23,M6.2,POST /api/review/v2/submit audit reopen clears field reviews
-M6.4,task,M6,ReviewWorkbenchPage,todo,0,TBD,P0,2026-07-26,2026-07-28,,,M6.2,single page dual mode clip card actions
-M6.5,task,M6,route replace remove old review UI,todo,0,TBD,P0,2026-07-28,2026-07-29,,,M6.4,drop ReviewQueue ReviewDetail
-M6.6,task,M6,M6 acceptance hardening,todo,0,TBD,P0,2026-07-29,2026-07-30,,,M6.3;M6.5,test_review_v2.py e2e/review-v2.spec.ts acceptance/M6.md
-M6,milestone,M6,M6 review workbench v2 exit,todo,0,TBD,P0,2026-07-23,2026-07-30,,,M6.6,replace clip-level form review UX
+M6.4,task,M6,ReviewWorkbenchPage,done,100,TBD,P0,2026-07-26,2026-07-28,2026-07-23,2026-07-30,M6.2,single page dual mode clip card actions
+M6.5,task,M6,route replace remove old review UI,done,100,TBD,P0,2026-07-28,2026-07-29,2026-07-30,2026-07-30,M6.4,drop ReviewQueue ReviewDetail
+M6.6,task,M6,M6 acceptance hardening,done,100,TBD,P0,2026-07-29,2026-07-30,2026-07-30,2026-07-30,M6.3;M6.5,test_review_v2.py e2e/review-v2.spec.ts acceptance/M6.md
+M6,milestone,M6,M6 review workbench v2 exit,done,100,TBD,P0,2026-07-23,2026-07-30,2026-07-23,2026-07-30,M6.6,replace clip-level form review UX
+DOC-M7,doc,M7,M7 implementation notes v1.0,done,100,TBD,P1,2026-07-30,2026-07-30,2026-07-30,2026-07-30,M6,docs/m7-implementation-notes.md + dataset-delivery-schema.md
+M7.1,task,M7,Dataset Schema contract doc,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-30,2026-07-30,DOC-M7,docs/dataset-delivery-schema.md sync with code
+M7.2,task,M7,build report + meta hardening,done,100,TBD,P1,2026-07-31,2026-08-01,2026-07-30,2026-07-30,M7.1,export.py build.py assemble skip reasons
+M7.3,task,M7,API + UI eligibility visibility,done,100,TBD,P1,2026-08-01,2026-08-02,2026-07-30,2026-07-30,M7.2,dataset_ready preview stats detail build report
+M7.4,task,M7,export preset minimal/full,done,100,TBD,P1,2026-08-02,2026-08-03,2026-07-30,2026-07-30,M7.2,filter export_preset zip size
+M7.5,task,M7,optional Parquet export,done,100,TBD,P2,2026-08-03,2026-08-05,2026-07-31,2026-07-31,M7.2,parquet_export.py test_dataset_m75.py acceptance/M7.5.md
+M7.8,task,M7,export advisor preview recommendation,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M7.5,export_advisor.py test_export_advisor_m78.py acceptance/M7.8.md
+M7.6,task,M7,training example + doc links,done,100,TBD,P1,2026-08-03,2026-08-04,2026-07-30,2026-07-30,M7.1,examples/load_dataset_snapshot.py
+M7.7,task,M7,M7 acceptance hardening,done,100,TBD,P1,2026-08-04,2026-08-05,2026-07-30,2026-07-30,M7.3;M7.4;M7.6,test_dataset_m7.py e2e acceptance/M7.md
+M7,milestone,M7,M7 dataset delivery hardening exit,done,100,TBD,P1,2026-07-30,2026-08-05,2026-07-30,2026-07-30,M7.7,Schema contract build report preset no PyTorch SLA
+DOC-M8,doc,M8,M8 implementation notes v1.0,done,100,TBD,P1,2026-07-30,2026-07-30,2026-07-30,2026-07-30,M7,docs/m8-implementation-notes.md + aug recipe schema
+M8.1,task,M8,Recipe Schema + manifest variant,done,100,TBD,P1,2026-08-06,2026-08-06,2026-07-30,2026-07-30,DOC-M8,dataset-augmentation-recipe-schema delivery schema 1.1
+M8.2,task,M8,balance oversample distribution,done,100,TBD,P1,2026-08-06,2026-08-08,2026-07-30,2026-07-30,M8.1,balance.py distribution.py virtual rows
+M8.3,task,M8,aug_recipe CRUD publish,done,100,TBD,P1,2026-08-07,2026-08-08,2026-07-30,2026-07-30,M8.1,aug_recipe_db.py API
+M8.4,task,M8,derive snapshot lineage,done,100,TBD,P1,2026-08-08,2026-08-09,2026-07-30,2026-07-30,M8.2;M8.3,derive.py POST datasets derive
+M8.5,task,M8,UI balance recipe lineage,done,100,TBD,P1,2026-08-09,2026-08-10,2026-07-30,2026-07-30,M8.4,wizard detail derive button
+M8.6,task,M8,apply_aug_recipe example,done,100,TBD,P1,2026-08-10,2026-08-10,2026-07-30,2026-07-30,M8.1,examples/apply_aug_recipe.py non-SLA
+M8.7,task,M8,M8 acceptance hardening,done,100,TBD,P1,2026-08-10,2026-08-11,2026-07-30,2026-07-30,M8.5;M8.6,test_dataset_m8.py e2e acceptance/M8.md
+M8,milestone,M8,M8 dataset sample expansion exit,done,100,TBD,P1,2026-07-30,2026-08-11,2026-07-30,2026-07-30,M8.7,balance recipe lineage no transform bake
+DOC-M9,doc,M9,M9 implementation notes v1.0,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M8,docs/m9-implementation-notes.md
+M9.1,task,M9,GET admin audit API + query_audit_logs,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,DOC-M9,audit.py admin/router test_audit_m9.py
+M9.4,task,M9,taxonomy R10 dataset hints,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.1,taxonomy_hint.py preview detail UI
+M9.5,task,M9,AdminAuditPage route menu,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.1,/admin/audit listAuditLogs
+M9.2,task,M9,PostgreSQL migration path,done,100,TBD,P2,2026-08-12,2026-08-15,2026-07-31,2026-07-31,M9.1,docs/postgresql-migration-path.md acceptance/M9.2.md
+M9.3,task,M9,sdk_v1 cloud full chain E2E,deferred,0,TBD,P1,2026-08-12,2026-08-15,,,M9.1,H-1 DataWorks env
+M9.6,task,M9,M9 acceptance hardening,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.4;M9.5,acceptance/M9.md npm build
+M9,milestone,M9,M9 deployment governance exit,done,100,TBD,P1,2026-07-31,2026-08-15,2026-07-31,2026-07-31,M9.6,audit API taxonomy hints PG cloud deferred
+DOC-M10,doc,M10,M10 implementation notes v1.0,done,100,TBD,P0,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9,docs/m10-implementation-notes.md R11-R15
+M10-U,task,M10,UI multi-option + DESIGN-M10,done,100,TBD,P0,2026-07-31,2026-08-01,2026-07-31,2026-07-31,DOC-M10,R-UI-M10-1 A-+B DESIGN-M10.md
+M10.1,task,M10,taxonomy context + coverage API,done,100,TBD,P0,2026-08-01,2026-08-02,2026-07-31,2026-07-31,DOC-M10,taxonomy/insights.py
+M10.2,task,M10,diff + impact + lineage API,done,100,TBD,P0,2026-08-02,2026-08-04,2026-07-31,2026-07-31,M10.1,taxonomy/diff.py impact.py
+M10.3,task,M10,proposal DB + API + audit,done,100,TBD,P1,2026-08-03,2026-08-05,2026-07-31,2026-07-31,M10.1,taxonomy_proposal table
+M10.4,task,M10,Taxonomy Hub tabs insights proposals,done,100,TBD,P0,2026-08-05,2026-08-07,2026-07-31,2026-07-31,M10-U;M10.1;M10.2;M10.3,TaxonomyPage refactor
+M10.5,task,M10,TaxonomyContextBar cross pages,done,100,TBD,P0,2026-08-06,2026-08-08,2026-07-31,2026-07-31,M10-U;M10.1,review dataset pipeline
+M10.6,task,M10,Dataset taxonomy lock + distribution,done,100,TBD,P1,2026-08-06,2026-08-08,2026-07-31,2026-07-31,M10-U;M10.1,DatasetListPage
+M10.7,task,M10,node usage + clip deep links,done,100,TBD,P1,2026-08-07,2026-08-09,2026-07-31,2026-07-31,M10.2,node_usage API
+M10.8,task,M10,similar clip to proposal entry,done,100,TBD,P2,2026-08-08,2026-08-10,2026-07-31,2026-07-31,M10.3;M10.7,SimilarDrawer
+M10.9,task,M10,M10 acceptance + E2E,done,100,TBD,P0,2026-08-10,2026-08-11,2026-07-31,2026-07-31,M10.4;M10.5;M10.6;M10.7,test_taxonomy_m10.py e2e/taxonomy-hub.spec.ts
+M10.10,task,M10,Hub diff impact lineage UI polish,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M10.4,LineageBar VersionMetaPanel publish impact modal
+M10,milestone,M10,M10 taxonomy semantic hub exit,done,100,TBD,P0,2026-07-31,2026-08-11,2026-07-31,2026-07-31,M10.9,hub context coverage diff proposal R11-R15

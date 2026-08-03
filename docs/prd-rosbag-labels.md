@@ -413,6 +413,11 @@ Base: `/api`；除注明外需 JWT。
 | G10 | P1 | Taxonomy | 校核后 taxonomy 升级是否强制重校 | **R10** |
 | G11 | P2 | UI | 帧级 diff 可视化深度 | MVP 仅 clip 级表单 + AI summary 侧栏 |
 | G12 | P2 | 性能 | 大数据集导出超时 | 异步 building + 分页导出 |
+| G13 | P1 | Taxonomy | 数据洞察统计来源 | **R11**（M10） |
+| G14 | P1 | Taxonomy | 场景挖掘提案能否自动改树 | **R12**（M10） |
+| G15 | P1 | Dataset | 是否默认锁定 taxonomy 版本 | **R13**（M10） |
+| G16 | P1 | Taxonomy | 重聚类是否在平台内算 | **R14**（M10） |
+| G17 | P2 | Taxonomy | 版本 lineage 如何存储 | **R15**（M10） |
 
 **P0 计数：0**（G1–G7 已关闭）
 
@@ -428,6 +433,11 @@ Base: `/api`；除注明外需 JWT。
 - **R8**：dataset 中 X（embedding）与 y（clip 标签）必须使用同一 `run_id`；创建向导默认 clip 的 `active_run_id`。
 - **R9**：校核保存采用乐观锁（`updated_at`）；409 冲突时提示刷新。
 - **R10**：taxonomy 升级不自动打回已 reviewed clip；校核记录保留原 `taxonomy_version_id`；UI 提示版本差异。
+- **R11**（M10）：Taxonomy 数据洞察（覆盖率、缺口、提案）为**只读观察层**；不得自动写 clip y 或 published 节点。
+- **R12**（M10）：`taxonomy_proposal` 合并路径为人工编辑 **draft** 后 publish（R3）；禁止自动 merge 到 published。
+- **R13**（M10）：Dataset 默认保持 R10（不锁定 taxonomy、允许多版本混导）；创建向导提供**显式锁定** `taxonomy_version_id` 选项。
+- **R14**（M10）：舱内场景**重挖掘**在平台外执行；平台提供提案 ingest API + 展示；第一层覆盖率为平台内统计。
+- **R15**（M10）：Taxonomy 版本 lineage 优先解析 `source_import=clone:{id}`；可增 `parent_version_id` 列。
 
 ---
 
