@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oms-multimodal-sdk"
-version = "0.3.0"
+version = "0.3.1"
 description = "ROS1 rosbag multimodal OMS labeling and fusion embedding SDK for Alibaba Cloud Qwen models"
 readme = "README.md"
 requires-python = ">=3.10"

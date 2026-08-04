@@ -1,6 +1,6 @@
 # OMS Multimodal SDK 文档
 
-> 版本：`0.3.0` · 包名：`oms-multimodal-sdk` · Python ≥ 3.10
+> 版本：`0.3.1` · 包名：`oms-multimodal-sdk` · Python ≥ 3.10
 
 ## 目录
 
@@ -29,7 +29,8 @@
 | 能力 | 模型 | SDK 方法 |
 |------|------|----------|
 | Rosbag 解析 & clip 切分 | 本地 | `iter_clips()` / `extract_bag()` |
-| 声学面板渲染 | 本地 | `render_acoustic_panel()` |
+| 声学面板渲染 | 本地 | `render_acoustic_panel()` / `render_acoustic_assets()` |
+| **Mel 矩阵导出** | **本地** | `compute_mel_matrix()` / `save_mel_matrix()` → `mel_matrix.csv` |
 | **Clip 预览 MP4** | **本地 ffmpeg** | `render_clip_preview_video()` / `encode_clip_mp4()` |
 | **音频 ASR 文本** | **qwen3-asr-flash** | `transcribe_clip()` / 流水线默认 |
 | OMS 场景理解 + 打标 | Qwen3.5-Omni-Plus | `label_clip()` / `process_bag()` |
@@ -42,7 +43,8 @@ rosbag (.bag)
     │
     ▼
 RosbagExtractor.iter_clips()
-    │  15–20s clip：多相机全量帧 + WAV + Omni 采样帧 + 声学面板 + 单路全帧 MP4
+    │  15–20s clip：多相机全量帧 + WAV + Omni 采样帧
+    │  + 声学面板 PNG + Mel 矩阵 (csv) + mel_feature_text + 单路全帧 MP4
     ▼
 AsrClient (qwen3-asr-flash) → clip.asr_text
     ▼
@@ -50,11 +52,14 @@ AsrClient (qwen3-asr-flash) → clip.asr_text
 │  OmniLabelClient    │  FusionEmbeddingClient│
 │  video + audio +    │  代表帧 + 声学面板 +  │
 │  ASR + events +     │  ASR + events +       │
+│  mel_feature_text + │  mel_feature_text +   │
 │  taxonomy prompt    │  scene_summary 文本   │
 └─────────┬───────────┴──────────┬───────────┘
           ▼                      ▼
     labels.jsonl         fusion_embeddings.jsonl
 ```
+
+Mel 矩阵默认随 extract 写出 `clips/{clip_id}/mel_matrix.csv`（及 `.meta.json`）。压缩后的 `mel_feature_text` 经 `Clip.speech_context_text()` 同时注入 **Omni 打标**与 **fusion embedding** 的 text 侧；PNG 仍作为 VL-embedding 的 image 输入。
 
 ---
 
@@ -244,6 +249,8 @@ client = OmsMultimodalClient(config=config)
 | `embedding_frames` | `list[FramePayload]` | 每路相机 1 张代表帧，最多 4 张（embedding 输入） |
 | `audio` | `AudioPayload \| None` | clip 级拼接 WAV |
 | `acoustic_panel_path` | `str \| None` | log 频谱 / Mel 谱 PNG 路径 |
+| `mel_matrix_path` | `str \| None` | Mel 矩阵 CSV 路径（默认导出） |
+| `mel_feature_text` | `str \| None` | 压缩 Mel 特征文本（打标 / 向量化 text 输入） |
 | `events` | `list[TextPayload]` | clip 时间范围内的事件文本 |
 | `duration_sec` | `float` | clip 时长 |
 
@@ -295,7 +302,8 @@ OmsMultimodalClient(
 | `label_clip(clip)` | 是 | 单 clip Omni 打标 |
 | `embed_clip(clip, extra_text=...)` | 是 | 单 clip fusion 向量 |
 | `process_clip(clip)` | 是 | 单 clip 打标 + embedding |
-| `render_acoustic_panel(wav_path, output_path)` | 否 | 独立渲染声学面板 |
+| `render_acoustic_panel(wav_path, output_path)` | 否 | 独立渲染声学面板 PNG |
+| `render_acoustic_assets(wav_path, panel_path, ...)` | 否 | PNG + Mel 矩阵 + feature text |
 | `resolve_bags(manifest_path)` | 否 | 静态方法，解析 manifest |
 
 ---
@@ -398,6 +406,15 @@ label_row, embedding_row = client.process_clip(clip)
 path = client.render_acoustic_panel("clip.wav", "panel.png")
 ```
 
+### `render_acoustic_assets(wav_path, output_dir, *, config=None) -> dict`
+
+一次写出声学面板 PNG、`mel_matrix.csv` / `.meta.json`，以及注入模型的 `mel_feature_text`：
+
+```python
+assets = client.render_acoustic_assets("clip.wav", "clips/demo")
+# assets["acoustic_panel_path"] / assets["mel_matrix_path"] / assets["mel_feature_text"]
+```
+
 ---
 
 ## 7. 配置类参考
@@ -460,11 +477,19 @@ class AcousticPanelConfig:
     fmax: float | None = None   # None = Nyquist
     target_width: int = 768
     target_height: int = 256
+    # Mel 矩阵 → 打标 / 向量化特征
+    export_mel_matrix: bool = True
+    mel_matrix_csv: bool = True
+    mel_matrix_npy: bool = False
+    mel_feature_max_frames: int = 32   # 时间轴下采样帧数上限
+    mel_feature_max_chars: int = 6000  # feature text 字符上限
 
     @classmethod
     def from_env(cls) -> AcousticPanelConfig: ...
     def to_dict(self) -> dict: ...
 ```
+
+环境变量：`ACOUSTIC_EXPORT_MEL_MATRIX`、`ACOUSTIC_MEL_MATRIX_CSV`、`ACOUSTIC_MEL_MATRIX_NPY`、`ACOUSTIC_MEL_FEATURE_MAX_FRAMES`、`ACOUSTIC_MEL_FEATURE_MAX_CHARS`。
 
 ---
 
@@ -501,7 +526,7 @@ for clip in extractor.iter_clips(acoustic_panel_config=AcousticPanelConfig()):
 | `oms_multimodal.rosbag_parser` | `Clip`, `RosbagExtractor`, `inspect_bag`, `TopicInfo` |
 | `oms_multimodal.omni_client` | `OmniLabelClient` |
 | `oms_multimodal.embedding_client` | `FusionEmbeddingClient` |
-| `oms_multimodal.acoustic_panel` | `AcousticPanelConfig`, `render_acoustic_panel` |
+| `oms_multimodal.acoustic_panel` | `AcousticPanelConfig`, `render_acoustic_panel`, `render_acoustic_assets`, `compute_mel_matrix`, `save_mel_matrix`, `mel_matrix_to_feature_text` |
 | `oms_multimodal.clip_video` | `ClipVideoConfig`, `encode_clip_mp4`, `render_clip_preview_video` |
 | `oms_multimodal.taxonomy` | `load_taxonomy`, `parse_label_json` |
 | `oms_multimodal.pipeline` | `LabelEmbeddingPipeline`, `resolve_bags` |
@@ -575,10 +600,13 @@ python -m oms_multimodal run --manifest rosbag/manifest.json
   "embedding_type": "fusion",
   "embedding": [0.01, -0.02],
   "inputs": {
-    "text": "事件文本\n场景摘要\n[audio_duration_sec=13.76]",
+    "text": "事件文本\n场景摘要\n[audio_duration_sec=13.76]\n[mel_feature ...]",
     "embedding_frame_count": 4,
     "acoustic_panel_path": ".../acoustic_panel.png",
     "acoustic_panel_config": {"panel_type": "mel", "n_mels": 128},
+    "mel_matrix_path": ".../mel_matrix.csv",
+    "mel_matrix_shape": [128, 256],
+    "mel_feature_text": "[mel_feature ...]",
     "clip_video_path": ".../clips/output_0000/clip_preview.mp4"
   }
 }
@@ -610,6 +638,9 @@ python -m oms_multimodal run --manifest rosbag/manifest.json
   "embedding_frame_count": 4,
   "acoustic_panel_path": ".../acoustic_panel.png",
   "acoustic_panel_config": {"panel_type": "mel", "n_mels": 128},
+  "mel_matrix_path": ".../mel_matrix.csv",
+  "mel_matrix_shape": [128, 256],
+  "mel_feature_text": "[mel_feature n_mels=128 ...]",
   "clip_video_path": ".../clips/output_0000/clip_preview.mp4"
 }
 ```

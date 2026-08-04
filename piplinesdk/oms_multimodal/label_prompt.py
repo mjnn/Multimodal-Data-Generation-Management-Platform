@@ -187,4 +187,5 @@ def build_omni_user_text(
         user_text += f"\n\nMultimodal text context:\n{speech_context}"
     elif event_text:
         user_text += f"\n\nEvent texts:\n{event_text}"
+    # speech_context 已含 Mel feature text（见 Clip.speech_context_text）
     return user_text

@@ -1,6 +1,12 @@
-"""将 clip 音频渲染为声学面板（STFT / Mel 频谱图），供 VL-embedding 作为图像输入。"""
+"""将 clip 音频渲染为声学面板（STFT / Mel 频谱图），并导出 Mel 矩阵文本特征。
+
+- PNG：供 VL-embedding 作为 image 输入
+- Mel 矩阵（csv/npy）+ feature text：供 Omni 打标与 fusion embedding 的 text 侧输入
+"""
 from __future__ import annotations
 
+import csv
+import json
 import os
 import wave
 from dataclasses import asdict, dataclass
@@ -13,9 +19,16 @@ from PIL import Image
 PanelType = Literal["stft", "mel"]
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class AcousticPanelConfig:
-    """声学面板渲染参数。"""
+    """声学面板 / Mel 矩阵渲染参数。"""
 
     panel_type: PanelType = "mel"
     n_fft: int = 2048
@@ -25,6 +38,13 @@ class AcousticPanelConfig:
     fmax: float | None = None
     target_width: int = 768
     target_height: int = 256
+    # Mel 矩阵导出（文本特征）
+    export_mel_matrix: bool = True
+    mel_matrix_csv: bool = True
+    mel_matrix_npy: bool = False
+    # 写入 label/embed 的文本侧：时间轴下采样帧数上限
+    mel_feature_max_frames: int = 32
+    mel_feature_max_chars: int = 6000
 
     @classmethod
     def from_env(cls) -> AcousticPanelConfig:
@@ -41,6 +61,11 @@ class AcousticPanelConfig:
             fmax=float(fmax_raw) if fmax_raw else None,
             target_width=int(os.getenv("ACOUSTIC_PANEL_WIDTH", "768")),
             target_height=int(os.getenv("ACOUSTIC_PANEL_HEIGHT", "256")),
+            export_mel_matrix=_env_bool("ACOUSTIC_EXPORT_MEL_MATRIX", True),
+            mel_matrix_csv=_env_bool("ACOUSTIC_MEL_MATRIX_CSV", True),
+            mel_matrix_npy=_env_bool("ACOUSTIC_MEL_MATRIX_NPY", False),
+            mel_feature_max_frames=int(os.getenv("ACOUSTIC_MEL_FEATURE_MAX_FRAMES", "32")),
+            mel_feature_max_chars=int(os.getenv("ACOUSTIC_MEL_FEATURE_MAX_CHARS", "6000")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -169,6 +194,229 @@ def _normalize_log_power(log_power: np.ndarray) -> np.ndarray:
     return np.clip((log_power - lo) / (hi - lo), 0.0, 1.0)
 
 
+def compute_mel_matrix(
+    wav_path: str | Path,
+    *,
+    config: AcousticPanelConfig | None = None,
+    log_power: bool = True,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """从 WAV 计算 Mel（或 STFT）功率矩阵。
+
+    Returns:
+        matrix: shape ``(n_bins, n_frames)``；默认 ``log1p`` 功率
+        meta: sample_rate / shape / panel_type 等
+    """
+    panel_config = config or AcousticPanelConfig()
+    wav_path = Path(wav_path)
+    signal, sample_rate = _load_mono_wav(wav_path)
+    power = _compute_spectrogram(signal, sample_rate, panel_config)
+    matrix = np.log1p(power).astype(np.float32) if log_power else power.astype(np.float32)
+    meta = {
+        "wav_path": str(wav_path.resolve()),
+        "sample_rate": sample_rate,
+        "panel_type": panel_config.panel_type,
+        "n_fft": panel_config.n_fft,
+        "hop_length": panel_config.hop_length,
+        "n_mels": panel_config.n_mels if panel_config.panel_type == "mel" else int(matrix.shape[0]),
+        "fmin": panel_config.fmin,
+        "fmax": panel_config.fmax if panel_config.fmax is not None else sample_rate / 2,
+        "shape": [int(matrix.shape[0]), int(matrix.shape[1])],
+        "log_power": log_power,
+        "dtype": "float32",
+    }
+    return matrix, meta
+
+
+def mel_matrix_to_feature_text(
+    matrix: np.ndarray,
+    *,
+    meta: dict[str, Any] | None = None,
+    config: AcousticPanelConfig | None = None,
+) -> str:
+    """将 Mel 矩阵压缩为可供 Omni / Embedding 文本侧使用的特征描述。
+
+    包含：全局统计 + 时间轴下采样后的每帧 band 能量摘要（非整表灌入）。
+    """
+    panel_config = config or AcousticPanelConfig()
+    meta = meta or {}
+    n_bins, n_frames = int(matrix.shape[0]), int(matrix.shape[1])
+    flat = matrix.reshape(-1)
+    stats_lines = [
+        "[Mel spectrogram matrix features]",
+        (
+            f"shape=({n_bins},{n_frames}) panel_type={meta.get('panel_type', panel_config.panel_type)} "
+            f"n_fft={meta.get('n_fft', panel_config.n_fft)} hop={meta.get('hop_length', panel_config.hop_length)} "
+            f"sr={meta.get('sample_rate', '')}"
+        ),
+        (
+            f"global: mean={float(flat.mean()):.4f} std={float(flat.std()):.4f} "
+            f"min={float(flat.min()):.4f} max={float(flat.max()):.4f} "
+            f"p25={float(np.percentile(flat, 25)):.4f} p50={float(np.percentile(flat, 50)):.4f} "
+            f"p75={float(np.percentile(flat, 75)):.4f}"
+        ),
+    ]
+
+    # 频带三分：低 / 中 / 高
+    if n_bins >= 3:
+        a, b = n_bins // 3, 2 * n_bins // 3
+        bands = {
+            "low": matrix[:a, :],
+            "mid": matrix[a:b, :],
+            "high": matrix[b:, :],
+        }
+        band_parts = []
+        for name, block in bands.items():
+            band_parts.append(
+                f"{name}_mean={float(block.mean()):.4f}/std={float(block.std()):.4f}"
+            )
+        stats_lines.append("bands: " + " ".join(band_parts))
+
+    max_frames = max(1, int(panel_config.mel_feature_max_frames))
+    if n_frames <= max_frames:
+        indices = list(range(n_frames))
+    else:
+        indices = [
+            int(round(i * (n_frames - 1) / (max_frames - 1))) for i in range(max_frames)
+        ]
+
+    # 每帧：低频/中频/高频均值（压缩文本，避免整表）
+    frame_lines: list[str] = ["time_frames (idx:low,mid,high):"]
+    for idx in indices:
+        col = matrix[:, idx]
+        if n_bins >= 3:
+            a, b = n_bins // 3, 2 * n_bins // 3
+            vals = (
+                float(col[:a].mean()),
+                float(col[a:b].mean()),
+                float(col[b:].mean()),
+            )
+            frame_lines.append(f"{idx}:{vals[0]:.3f},{vals[1]:.3f},{vals[2]:.3f}")
+        else:
+            frame_lines.append(f"{idx}:{float(col.mean()):.3f}")
+
+    text = "\n".join(stats_lines + frame_lines)
+    max_chars = max(500, int(panel_config.mel_feature_max_chars))
+    if len(text) > max_chars:
+        text = text[: max_chars - 20] + "\n...[truncated]"
+    return text
+
+
+def save_mel_matrix(
+    matrix: np.ndarray,
+    output_stem: str | Path,
+    *,
+    meta: dict[str, Any] | None = None,
+    config: AcousticPanelConfig | None = None,
+) -> dict[str, Any]:
+    """导出 Mel 矩阵为 csv（文本）与可选 npy；并写 meta json。
+
+    ``output_stem`` 例：``.../clips/{id}/mel_matrix`` →
+    ``mel_matrix.csv`` / ``mel_matrix.meta.json`` / 可选 ``mel_matrix.npy``。
+    """
+    panel_config = config or AcousticPanelConfig()
+    base = Path(output_stem)
+    if base.suffix:
+        base = base.with_suffix("")
+    base.parent.mkdir(parents=True, exist_ok=True)
+
+    meta = dict(meta or {})
+    meta.setdefault("shape", [int(matrix.shape[0]), int(matrix.shape[1])])
+
+    csv_path = Path(str(base) + ".csv")
+    npy_path = Path(str(base) + ".npy")
+    meta_path = Path(str(base) + ".meta.json")
+
+    out: dict[str, Any] = {
+        "shape": meta["shape"],
+        "meta_path": None,
+        "csv_path": None,
+        "npy_path": None,
+        "feature_text": mel_matrix_to_feature_text(matrix, meta=meta, config=panel_config),
+    }
+
+    if panel_config.mel_matrix_csv:
+        with csv_path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow([f"bin_{i}" for i in range(matrix.shape[0])])
+            # 行 = 时间帧，列 = mel bin（便于文本查看）
+            for t in range(matrix.shape[1]):
+                writer.writerow([f"{float(v):.6f}" for v in matrix[:, t]])
+        out["csv_path"] = str(csv_path.resolve())
+        meta["csv_layout"] = "rows=time_frames, cols=freq_bins"
+
+    if panel_config.mel_matrix_npy:
+        np.save(npy_path, matrix)
+        out["npy_path"] = str(npy_path.resolve())
+
+    meta["feature_text_preview_chars"] = len(out["feature_text"])
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    out["meta_path"] = str(meta_path.resolve())
+    return out
+
+
+def render_acoustic_assets(
+    wav_path: str | Path,
+    output_dir: str | Path,
+    *,
+    config: AcousticPanelConfig | None = None,
+    panel_filename: str = "acoustic_panel.png",
+    matrix_stem: str = "mel_matrix",
+) -> dict[str, Any]:
+    """一次计算：写 PNG 面板 +（可选）Mel 矩阵文件 + feature_text。"""
+    panel_config = config or AcousticPanelConfig()
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    matrix, meta = compute_mel_matrix(wav_path, config=panel_config, log_power=True)
+    panel_path = output_dir / panel_filename
+    # PNG 用归一化后的可视化（与历史行为一致）
+    normalized = _normalize_log_power(matrix)
+    rgb = _viridis_rgb(normalized)
+    image = Image.fromarray(rgb, mode="RGB")
+    image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+    image = image.resize(
+        (panel_config.target_width, panel_config.target_height),
+        Image.Resampling.BILINEAR,
+    )
+    image.save(panel_path, format="PNG")
+
+    result: dict[str, Any] = {
+        "acoustic_panel_path": str(panel_path.resolve()),
+        "mel_matrix_path": None,
+        "mel_matrix_npy_path": None,
+        "mel_matrix_meta_path": None,
+        "mel_feature_text": None,
+        "mel_matrix_shape": meta["shape"],
+        "acoustic_panel_config": panel_config.to_dict(),
+    }
+
+    if panel_config.export_mel_matrix and panel_config.panel_type == "mel":
+        saved = save_mel_matrix(
+            matrix,
+            output_dir / matrix_stem,
+            meta=meta,
+            config=panel_config,
+        )
+        result["mel_matrix_path"] = saved.get("csv_path")
+        result["mel_matrix_npy_path"] = saved.get("npy_path")
+        result["mel_matrix_meta_path"] = saved.get("meta_path")
+        result["mel_feature_text"] = saved.get("feature_text")
+    elif panel_config.export_mel_matrix:
+        # STFT 也可导出矩阵，文件名仍用 stem
+        saved = save_mel_matrix(
+            matrix,
+            output_dir / matrix_stem,
+            meta=meta,
+            config=panel_config,
+        )
+        result["mel_matrix_path"] = saved.get("csv_path")
+        result["mel_matrix_npy_path"] = saved.get("npy_path")
+        result["mel_matrix_meta_path"] = saved.get("meta_path")
+        result["mel_feature_text"] = saved.get("feature_text")
+
+    return result
+
+
 def render_acoustic_panel(
     wav_path: str | Path,
     output_path: str | Path,
@@ -194,20 +442,10 @@ def render_acoustic_panel(
     if target_height is not None:
         panel_config.target_height = target_height
 
-    wav_path = Path(wav_path)
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    signal, sample_rate = _load_mono_wav(wav_path)
-    spec = _compute_spectrogram(signal, sample_rate, panel_config)
-    normalized = _normalize_log_power(np.log1p(spec))
-
-    rgb = _viridis_rgb(normalized)
-    image = Image.fromarray(rgb, mode="RGB")
-    image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-    image = image.resize(
-        (panel_config.target_width, panel_config.target_height),
-        Image.Resampling.BILINEAR,
+    assets = render_acoustic_assets(
+        wav_path,
+        Path(output_path).parent,
+        config=panel_config,
+        panel_filename=Path(output_path).name,
     )
-    image.save(output_path, format="PNG")
-    return str(output_path.resolve())
+    return str(assets["acoustic_panel_path"])

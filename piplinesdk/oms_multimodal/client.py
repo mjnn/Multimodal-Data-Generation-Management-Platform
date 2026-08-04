@@ -6,7 +6,7 @@ from typing import Any, Iterator
 
 from dotenv import load_dotenv as _load_dotenv
 
-from .acoustic_panel import AcousticPanelConfig, render_acoustic_panel
+from .acoustic_panel import AcousticPanelConfig, render_acoustic_assets, render_acoustic_panel
 from .asr_client import AsrClient, AsrConfig
 from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_video
 from .config import BagProcessResult, ClientConfig, ClipConfig, ModelBackend, OutputConfig, StorageBackend
@@ -297,5 +297,19 @@ class OmsMultimodalClient:
         return render_acoustic_panel(
             wav_path,
             output_path,
+            config=config or self.acoustic_panel_config,
+        )
+
+    def render_acoustic_assets(
+        self,
+        wav_path: str | Path,
+        output_dir: str | Path,
+        *,
+        config: AcousticPanelConfig | None = None,
+    ) -> dict[str, Any]:
+        """渲染声学面板 PNG，并导出 Mel 矩阵 csv/文本特征。"""
+        return render_acoustic_assets(
+            wav_path,
+            output_dir,
             config=config or self.acoustic_panel_config,
         )
