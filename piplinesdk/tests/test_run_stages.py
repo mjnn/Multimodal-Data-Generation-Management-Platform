@@ -7,20 +7,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from oms_multimodal.capabilities.run_meta import write_run_json
-from oms_multimodal.capabilities.stages import (
-    ALL_STAGES,
-    DRIVER_STAGES,
-    UDF_STAGES,
-    parse_stages,
-    run_stages,
-)
-from oms_multimodal.capabilities.types import (
-    EmbedResult,
-    ExtractResult,
-    LabelResult,
-    RunContext,
-    TranscribeResult,
-)
+from oms_multimodal.capabilities.stages import ALL_STAGES, parse_stages, run_stages
+from oms_multimodal.capabilities.types import ExtractResult, RunContext
 
 
 class TestParseStages(unittest.TestCase):

@@ -24,13 +24,8 @@ from .asr_client import AsrClient, AsrConfig
 from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_video
 from .client import OmsMultimodalClient
 from .config import BagProcessResult, ClientConfig, ClipConfig, ModelBackend, OutputConfig
-from .resources import bundled_dataworks_doc_path, bundled_examples_dir, bundled_sdk_doc_path, bundled_taxonomy_path, resolve_taxonomy_path
-from .model_factory import (
-    create_asr_client,
-    create_embedding_client,
-    create_mc_runtime,
-    create_omni_client,
-)
+from .embedding_client import FusionEmbeddingClient
+from .resources import bundled_sdk_doc_path, bundled_taxonomy_path, resolve_taxonomy_path
 from .capabilities import (
     ALL_STAGES,
     CAPABILITY_IDS,
@@ -86,8 +81,6 @@ __all__ = [
     "AudioPayload",
     "BagProcessResult",
     "bundled_sdk_doc_path",
-    "bundled_dataworks_doc_path",
-    "bundled_examples_dir",
     "bundled_taxonomy_path",
     "ClientConfig",
     "Clip",
@@ -101,10 +94,6 @@ __all__ = [
     "STEP_TO_CAPABILITY",
     "UDF_STAGES",
     "apply_run_context_to_mc_config",
-    "create_asr_client",
-    "create_embedding_client",
-    "create_mc_runtime",
-    "create_omni_client",
     "embed_clips",
     "extract_clips",
     "infer_full",
@@ -124,8 +113,6 @@ __all__ = [
     "StagesResult",
     "TranscribeResult",
     "FusionEmbeddingClient",
-    "McBackendConfig",
-    "McRuntime",
     "LabelEmbeddingPipeline",
     "ModelBackend",
     "OmsMultimodalClient",
@@ -154,15 +141,3 @@ __all__ = [
     "taxonomy_prompt_block",
     "write_jsonl",
 ]
-
-
-def __getattr__(name: str):
-    if name == "McBackendConfig":
-        from .mc.config import McBackendConfig
-
-        return McBackendConfig
-    if name == "McRuntime":
-        from .mc.runtime import McRuntime
-
-        return McRuntime
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

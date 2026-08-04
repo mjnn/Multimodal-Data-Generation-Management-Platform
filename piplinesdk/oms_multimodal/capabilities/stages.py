@@ -71,6 +71,7 @@ def run_stages(
         result.extract_clip_rows = extracted.clip_rows
         result.stages_done.append("extract")
 
+    # stages_done: append when a capability call completes (no raise); errors still collected.
     if "asr" in wanted:
         tr = transcribe_clips(ctx, client)
         result.errors.extend(tr.errors)
