@@ -24,8 +24,39 @@ from .asr_client import AsrClient, AsrConfig
 from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_video
 from .client import OmsMultimodalClient
 from .config import BagProcessResult, ClientConfig, ClipConfig, ModelBackend, OutputConfig
-from .resources import bundled_sdk_doc_path, bundled_taxonomy_path, resolve_taxonomy_path
-from .embedding_client import FusionEmbeddingClient
+from .resources import bundled_dataworks_doc_path, bundled_examples_dir, bundled_sdk_doc_path, bundled_taxonomy_path, resolve_taxonomy_path
+from .model_factory import (
+    create_asr_client,
+    create_embedding_client,
+    create_mc_runtime,
+    create_omni_client,
+)
+from .capabilities import (
+    ALL_STAGES,
+    CAPABILITY_IDS,
+    DRIVER_STAGES,
+    STEP_TO_CAPABILITY,
+    UDF_STAGES,
+    EmbedResult,
+    ExtractResult,
+    InferFullResult,
+    LabelResult,
+    MediaInputMode,
+    RunContext,
+    StagesResult,
+    TranscribeResult,
+    apply_run_context_to_mc_config,
+    embed_clips,
+    extract_clips,
+    infer_full,
+    label_clips,
+    materialize_preview,
+    merge_asr_into_clips,
+    parse_stages,
+    run_stages,
+    transcribe_clips,
+    write_run_json,
+)
 from .exceptions import ApiError, ConfigurationError, OmsMultimodalError, ParseError
 from .omni_client import OmniLabelClient
 from .pipeline import LabelEmbeddingPipeline, resolve_bags, write_jsonl
@@ -47,6 +78,7 @@ from .taxonomy import load_taxonomy, parse_label_json, taxonomy_prompt_block
 
 __all__ = [
     "__version__",
+    "ALL_STAGES",
     "AcousticPanelConfig",
     "ApiError",
     "AsrClient",
@@ -54,6 +86,8 @@ __all__ = [
     "AudioPayload",
     "BagProcessResult",
     "bundled_sdk_doc_path",
+    "bundled_dataworks_doc_path",
+    "bundled_examples_dir",
     "bundled_taxonomy_path",
     "ClientConfig",
     "Clip",
@@ -62,7 +96,36 @@ __all__ = [
     "ConfigurationError",
     "encode_clip_mp4",
     "FramePayload",
+    "CAPABILITY_IDS",
+    "DRIVER_STAGES",
+    "STEP_TO_CAPABILITY",
+    "UDF_STAGES",
+    "apply_run_context_to_mc_config",
+    "create_asr_client",
+    "create_embedding_client",
+    "create_mc_runtime",
+    "create_omni_client",
+    "embed_clips",
+    "extract_clips",
+    "infer_full",
+    "label_clips",
+    "materialize_preview",
+    "merge_asr_into_clips",
+    "parse_stages",
+    "run_stages",
+    "transcribe_clips",
+    "write_run_json",
+    "EmbedResult",
+    "ExtractResult",
+    "InferFullResult",
+    "LabelResult",
+    "MediaInputMode",
+    "RunContext",
+    "StagesResult",
+    "TranscribeResult",
     "FusionEmbeddingClient",
+    "McBackendConfig",
+    "McRuntime",
     "LabelEmbeddingPipeline",
     "ModelBackend",
     "OmsMultimodalClient",
@@ -91,3 +154,15 @@ __all__ = [
     "taxonomy_prompt_block",
     "write_jsonl",
 ]
+
+
+def __getattr__(name: str):
+    if name == "McBackendConfig":
+        from .mc.config import McBackendConfig
+
+        return McBackendConfig
+    if name == "McRuntime":
+        from .mc.runtime import McRuntime
+
+        return McRuntime
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
