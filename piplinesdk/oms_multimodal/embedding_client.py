@@ -1,10 +1,10 @@
 """qwen3-vl-embedding 多模态融合向量客户端。
 
-将 clip 的代表帧 + 声学面板（log 频谱图）+ 事件文本 + Omni 场景摘要
-融合为单一 embedding 向量。
+将 clip 的代表帧 + 声学面板（Mel 谱 PNG）+ Mel 矩阵文本特征 + 事件/ASR 文本
++ Omni 场景摘要融合为单一 embedding 向量。
 
 注意：DashScope embedding API 不支持原始 audio 输入；
-clip 音频先渲染为声学面板 PNG，再作为 image 输入参与 fusion。
+clip 音频先渲染为声学面板 PNG（image）+ Mel 矩阵 feature text（text）。
 """
 from __future__ import annotations
 
@@ -111,6 +111,9 @@ class FusionEmbeddingClient:
                 "embedding_frame_count": len(image_frames),
                 "acoustic_panel_path": acoustic_panel_path,
                 "acoustic_panel_config": clip.acoustic_panel_config,
+                "mel_matrix_path": clip.mel_matrix_path,
+                "mel_matrix_shape": clip.mel_matrix_shape,
+                "mel_feature_text": clip.mel_feature_text,
                 "asr_text": clip.asr_text,
                 "asr_model": clip.asr_model,
                 "audio_path": clip.audio.audio_path if clip.audio else None,

@@ -23,7 +23,7 @@ from PIL import Image
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
-from .acoustic_panel import AcousticPanelConfig, render_acoustic_panel
+from .acoustic_panel import AcousticPanelConfig, render_acoustic_assets
 from .clip_video import ClipVideoConfig, render_clip_preview_video
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,8 @@ class Clip:
         embedding_frames: 每路相机的代表帧（≤4），供 fusion embedding 使用。
         audio: clip 时间范围内的完整音频。
         acoustic_panel_path: 由 clip 音频渲染的 log 频谱图，供 VL-embedding 使用。
+        mel_matrix_path: Mel 矩阵 csv（文本），供打标/向量化特征与下游分析。
+        mel_feature_text: 压缩后的 Mel 矩阵文本特征（注入 Omni / Embedding text）。
         events: clip 时间范围内的事件文本。
     """
 
@@ -119,6 +121,11 @@ class Clip:
     audio: AudioPayload | None = None
     acoustic_panel_path: str | None = None
     acoustic_panel_config: dict[str, Any] | None = None
+    mel_matrix_path: str | None = None
+    mel_matrix_npy_path: str | None = None
+    mel_matrix_meta_path: str | None = None
+    mel_matrix_shape: list[int] | None = None
+    mel_feature_text: str | None = None
     asr_text: str | None = None
     asr_model: str | None = None
     clip_video_path: str | None = None
@@ -136,13 +143,15 @@ class Clip:
         return "\n".join(parts)
 
     def speech_context_text(self) -> str:
-        """事件文本 + ASR 文本（供多模态文本侧输入）。"""
+        """事件文本 + ASR 文本 + Mel 矩阵特征（供多模态文本侧输入）。"""
         parts: list[str] = []
         if self.asr_text and self.asr_text.strip():
             parts.append(f"[ASR transcript]\n{self.asr_text.strip()}")
         fusion = self.fusion_text()
         if fusion:
             parts.append(f"[Event texts]\n{fusion}")
+        if self.mel_feature_text and self.mel_feature_text.strip():
+            parts.append(self.mel_feature_text.strip())
         return "\n\n".join(parts)
 
     def to_meta(self) -> dict[str, Any]:
@@ -162,6 +171,11 @@ class Clip:
             "audio_duration_sec": self.audio.duration_sec if self.audio else None,
             "acoustic_panel_path": self.acoustic_panel_path,
             "acoustic_panel_config": self.acoustic_panel_config,
+            "mel_matrix_path": self.mel_matrix_path,
+            "mel_matrix_npy_path": self.mel_matrix_npy_path,
+            "mel_matrix_meta_path": self.mel_matrix_meta_path,
+            "mel_matrix_shape": self.mel_matrix_shape,
+            "mel_feature_text": self.mel_feature_text,
             "asr_text": self.asr_text,
             "asr_model": self.asr_model,
             "clip_video_path": self.clip_video_path,
@@ -416,12 +430,26 @@ class RosbagExtractor:
                 output_path=self.work_dir / "clips" / clip_id / "audio.wav",
             )
             acoustic_panel_path: str | None = None
+            mel_matrix_path: str | None = None
+            mel_matrix_npy_path: str | None = None
+            mel_matrix_meta_path: str | None = None
+            mel_matrix_shape: list[int] | None = None
+            mel_feature_text: str | None = None
             if clip_audio:
-                acoustic_panel_path = render_acoustic_panel(
+                clip_dir = self.work_dir / "clips" / clip_id
+                assets = render_acoustic_assets(
                     clip_audio.audio_path,
-                    self.work_dir / "clips" / clip_id / "acoustic_panel.png",
+                    clip_dir,
                     config=panel_config,
+                    panel_filename="acoustic_panel.png",
+                    matrix_stem="mel_matrix",
                 )
+                acoustic_panel_path = assets.get("acoustic_panel_path")
+                mel_matrix_path = assets.get("mel_matrix_path")
+                mel_matrix_npy_path = assets.get("mel_matrix_npy_path")
+                mel_matrix_meta_path = assets.get("mel_matrix_meta_path")
+                mel_matrix_shape = assets.get("mel_matrix_shape")
+                mel_feature_text = assets.get("mel_feature_text")
 
             clip_video_path: str | None = None
             clip_video_meta: dict[str, Any] | None = None
@@ -446,6 +474,11 @@ class RosbagExtractor:
                     audio=clip_audio,
                     acoustic_panel_path=acoustic_panel_path,
                     acoustic_panel_config=panel_config.to_dict(),
+                    mel_matrix_path=mel_matrix_path,
+                    mel_matrix_npy_path=mel_matrix_npy_path,
+                    mel_matrix_meta_path=mel_matrix_meta_path,
+                    mel_matrix_shape=mel_matrix_shape,
+                    mel_feature_text=mel_feature_text,
                     events=clip_events,
                     source_topics=source_topics,
                 )

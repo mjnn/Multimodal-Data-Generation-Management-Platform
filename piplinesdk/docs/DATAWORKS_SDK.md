@@ -29,7 +29,7 @@
 依赖：在 DPE 镜像或节点 init 中安装 wheel：
 
 ```bash
-pip install oms_multimodal_sdk-0.3.0-py3-none-any.whl
+pip install oms_multimodal_sdk-0.3.2-py3-none-any.whl
 ```
 
 Python 核心逻辑（与 `dataworks/sdk_infer_node.py` 一致）：

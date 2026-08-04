@@ -9,9 +9,17 @@ Public API::
 """
 from __future__ import annotations
 
-__version__ = "0.3.0"
+__version__ = "0.3.2"
 
-from .acoustic_panel import AcousticPanelConfig, PanelType, render_acoustic_panel
+from .acoustic_panel import (
+    AcousticPanelConfig,
+    PanelType,
+    compute_mel_matrix,
+    mel_matrix_to_feature_text,
+    render_acoustic_assets,
+    render_acoustic_panel,
+    save_mel_matrix,
+)
 from .asr_client import AsrClient, AsrConfig
 from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_video
 from .client import OmsMultimodalClient
@@ -72,10 +80,14 @@ __all__ = [
     "default_omni_label_prompt",
     "OMNI_LABEL_PROMPT_FIELD_META",
     "parse_label_json",
+    "compute_mel_matrix",
+    "mel_matrix_to_feature_text",
+    "render_acoustic_assets",
     "render_acoustic_panel",
     "render_clip_preview_video",
     "resolve_bags",
     "resolve_taxonomy_path",
+    "save_mel_matrix",
     "taxonomy_prompt_block",
     "write_jsonl",
 ]
