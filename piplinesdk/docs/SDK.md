@@ -1,6 +1,6 @@
 # OMS Multimodal SDK 文档
 
-> 版本：`0.3.1` · 包名：`oms-multimodal-sdk` · Python ≥ 3.10
+> 版本：`0.3.2` · 包名：`oms-multimodal-sdk` · Python ≥ 3.10
 
 ## 目录
 

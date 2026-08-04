@@ -1,6 +1,6 @@
 # Pipeline SDK（OMS Multimodal）
 
-**包名**：`oms-multimodal-sdk` · **当前版本**：0.3.0
+**包名**：`oms-multimodal-sdk` · **当前版本**：0.3.2
 
 本目录为 **SDK 源码 monorepo**：Python 包 `oms_multimodal/`、构建配置、wheel 与对外文档。与 HMI 仓 `rosbag_to_labels_pipline/` 的 `sdk_v1` OSS、`aig_sdk__` MC 对齐。
 
@@ -8,7 +8,7 @@
 
 ```powershell
 cd piplinesdk
-pip install ./oms_multimodal_sdk-0.3.0-py3-none-any.whl
+pip install ./oms_multimodal_sdk-0.3.2-py3-none-any.whl
 
 # 开发（改 SDK 与 HMI 联调，仓库根）
 cd pipeline
@@ -32,7 +32,7 @@ cd piplinesdk
 Copy-Item docs\SDK.md oms_multimodal\bundled\SDK.md -Force
 python -m pip install build
 python -m build
-Copy-Item dist\oms_multimodal_sdk-0.3.0-py3-none-any.whl . -Force
+Copy-Item dist\oms_multimodal_sdk-0.3.2-py3-none-any.whl . -Force
 ```
 
 ## 能力一览
