@@ -12,6 +12,8 @@ from sdk_pipeline_driver_lib import (  # noqa: E402
     batch_summary,
     build_job_rows,
     chunk_output_dtypes,
+    content_hash_to_clip_id,
+    make_run_id,
     split_stages,
 )
 
@@ -44,6 +46,15 @@ class TestDriverLib(unittest.TestCase):
         )
         self.assertEqual(s["ok_count"], 1)
         self.assertEqual(s["fail_count"], 1)
+
+    def test_content_hash_to_clip_id_normalizes_digest(self) -> None:
+        self.assertEqual(content_hash_to_clip_id(" SHA256:AbC "), "sha256:abc")
+
+    def test_make_run_id_returns_uuid(self) -> None:
+        import uuid
+
+        run_id = make_run_id()
+        self.assertEqual(str(uuid.UUID(run_id)), run_id)
 
 
 if __name__ == "__main__":

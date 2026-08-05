@@ -1,6 +1,7 @@
 # pipeline/dataworks/sdk_pipeline_driver_lib.py
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 try:
@@ -19,6 +20,15 @@ except ImportError:  # pragma: no cover - DW paste without path
 def split_stages(raw: str | None) -> tuple[frozenset[str], frozenset[str]]:
     stages = parse_stages(raw)
     return stages & DRIVER_STAGES, stages & UDF_STAGES
+
+
+def content_hash_to_clip_id(hex_digest: str) -> str:
+    digest = hex_digest.strip().lower().removeprefix("sha256:")
+    return f"sha256:{digest}"
+
+
+def make_run_id() -> str:
+    return str(uuid.uuid4())
 
 
 def build_job_rows(bags: list[dict[str, Any]], *, ds: str) -> list[dict[str, str]]:
