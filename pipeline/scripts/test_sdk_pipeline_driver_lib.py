@@ -13,9 +13,11 @@ from sdk_pipeline_driver_lib import (  # noqa: E402
     build_job_rows,
     chunk_output_dtypes,
     content_hash_to_clip_id,
+    filter_already_completed,
     make_run_id,
     run_oss_prefix_from_relpath,
     split_stages,
+    trim_discovered_bags,
 )
 
 
@@ -60,6 +62,45 @@ class TestDriverLib(unittest.TestCase):
 
     def test_content_hash_to_clip_id_normalizes_digest(self) -> None:
         self.assertEqual(content_hash_to_clip_id(" SHA256:AbC "), "sha256:abc")
+
+    def test_filter_already_completed_skips_done_unless_forced(self) -> None:
+        bags = [
+            {"clip_id": "sha256:a", "bag_oss_key": "rosbags/a.bag"},
+            {"clip_id": "sha256:b", "bag_oss_key": "rosbags/b.bag"},
+        ]
+        self.assertEqual(
+            filter_already_completed(
+                bags,
+                completed_clip_ids={"sha256:a"},
+                force_rerun=False,
+            ),
+            [bags[1]],
+        )
+        self.assertEqual(
+            filter_already_completed(
+                bags,
+                completed_clip_ids={"sha256:a"},
+                force_rerun=True,
+            ),
+            bags,
+        )
+
+    def test_trim_discovered_bags_sorts_before_limit(self) -> None:
+        bags = [
+            {"bag_oss_key": "rosbags/z.bag"},
+            {"bag_oss_key": "rosbags/a.bag"},
+            {"bag_oss_key": "rosbags/m.bag"},
+        ]
+        self.assertEqual(
+            trim_discovered_bags(bags, max_bags=2),
+            [bags[1], bags[2]],
+        )
+
+    def test_trim_discovered_bags_zero_means_no_rows(self) -> None:
+        self.assertEqual(
+            trim_discovered_bags([{"bag_oss_key": "rosbags/a.bag"}], max_bags=0),
+            [],
+        )
 
     def test_make_run_id_returns_uuid(self) -> None:
         import uuid

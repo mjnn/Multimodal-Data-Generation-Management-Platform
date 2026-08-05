@@ -27,6 +27,28 @@ def content_hash_to_clip_id(hex_digest: str) -> str:
     return f"sha256:{digest}"
 
 
+def filter_already_completed(
+    bags: list[dict[str, Any]],
+    *,
+    completed_clip_ids: set[str],
+    force_rerun: bool,
+) -> list[dict[str, Any]]:
+    if force_rerun:
+        return list(bags)
+    return [bag for bag in bags if str(bag["clip_id"]) not in completed_clip_ids]
+
+
+def trim_discovered_bags(
+    bags: list[dict[str, Any]],
+    *,
+    max_bags: int | None,
+) -> list[dict[str, Any]]:
+    ordered = sorted(bags, key=lambda bag: str(bag["bag_oss_key"]))
+    if max_bags is None:
+        return ordered
+    return ordered[: max(0, max_bags)]
+
+
 def make_run_id() -> str:
     return str(uuid.uuid4())
 

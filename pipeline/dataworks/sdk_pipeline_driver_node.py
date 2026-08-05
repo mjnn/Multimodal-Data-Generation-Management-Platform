@@ -1,12 +1,14 @@
 # =============================================================================
 # DataWorks PyODPS3: SDK single-driver (discover + pipeline apply_chunk)
+# Production discovery uses two apply_chunk passes in this one Driver node:
+# (1) hash bag bytes on the OSS mount; (2) run selected SDK pipeline stages.
 # =============================================================================
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 from typing import Any
 
@@ -33,20 +35,16 @@ from sdk_pipeline_driver_lib import (
     batch_summary,
     build_job_rows,
     chunk_output_dtypes,
+    content_hash_to_clip_id,
+    filter_already_completed,
     make_run_id,
     run_oss_prefix_from_relpath,
     split_stages,
+    trim_discovered_bags,
 )
 
 
-def _pending_clip_id(bag_oss_key: str) -> str:
-    """Return a placeholder; production discovery must replace it with a content hash."""
-    stem = PurePosixPath(bag_oss_key).stem
-    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", stem).strip("._-") or "bag"
-    return f"sha256:pending_{safe_name.lower()}"
-
-
-def _bags_from_args() -> list[dict[str, str]]:
+def _explicit_bag_from_args() -> list[dict[str, str]] | None:
     bag_oss_key = get_dw_arg("bag_oss_key")
     clip_id = get_dw_arg("clip_id")
     run_id = get_dw_arg("run_id")
@@ -61,26 +59,114 @@ def _bags_from_args() -> list[dict[str, str]]:
                 "run_id": str(run_id),
             }
         ]
+    return None
 
-    # Skeleton-only list discovery. Use the explicit triplet for real execution
-    # until Driver discovery hashes bag bytes in a later task.
+
+def _debug_bag_keys_from_args() -> list[str]:
     raw_keys = get_dw_arg("bag_oss_keys", "") or ""
-    keys = [
+    return [
         key.strip()
         for key in re.split(r"[\r\n,]+", raw_keys)
         if key.strip().lower().endswith(".bag")
     ]
-    max_bags_raw = get_dw_arg("max_bags")
-    if max_bags_raw is not None:
-        keys = keys[: max(0, int(max_bags_raw))]
-    return [
-        {
-            "bag_oss_key": key,
-            "clip_id": _pending_clip_id(key),
-            "run_id": make_run_id(),
-        }
-        for key in keys
-    ]
+
+
+def _list_bag_keys_from_oss(
+    account: Any,
+    *,
+    oss_bucket: str,
+    cloud_region: str,
+) -> list[str]:
+    from oss_v2_dw import iter_object_keys, make_oss_client
+
+    client = make_oss_client(
+        access_key_id=str(account.access_id),
+        access_key_secret=str(account.secret_access_key),
+        region=cloud_region,
+        endpoint=get_dw_arg("oss_endpoint"),
+    )
+    return list(
+        iter_object_keys(
+            client,
+            bucket=oss_bucket,
+            prefix=get_dw_arg("scan_prefix", "rosbags/") or "rosbags/",
+            suffix=".bag",
+            max_count=int(get_dw_arg("max_scan", "1000") or "1000"),
+        )
+    )
+
+
+def _hash_chunk_output_dtypes() -> dict[str, str]:
+    return {
+        "clip_id": "string",
+        "bag_oss_key": "string",
+        "content_hash": "string",
+    }
+
+
+def _build_hash_chunk_udf(
+    *,
+    dpe_cpu: int,
+    dpe_memory: int,
+    oss_mount_url: str,
+    mount_path: str,
+    storage_options_dict: dict[str, str],
+):
+    def _hash_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        from pathlib import Path
+        import hashlib
+
+        rows_out: list[dict[str, str]] = []
+        for _, row in df.iterrows():
+            bag_oss_key = str(row["bag_oss_key"])
+            hasher = hashlib.sha256()
+            with (Path(mount_path) / bag_oss_key).open("rb") as bag_file:
+                while True:
+                    block = bag_file.read(1024 * 1024)
+                    if not block:
+                        break
+                    hasher.update(block)
+            content_hash = hasher.hexdigest()
+            rows_out.append(
+                {
+                    "clip_id": f"sha256:{content_hash}",
+                    "bag_oss_key": bag_oss_key,
+                    "content_hash": content_hash,
+                }
+            )
+        return pd.DataFrame(rows_out)
+
+    return wrap_dpe_udf(
+        _hash_chunk,
+        dpe_cpu=dpe_cpu,
+        dpe_memory=dpe_memory,
+        oss_mount_url=oss_mount_url,
+        mount_path=mount_path,
+        storage_options_dict=storage_options_dict,
+    )
+
+
+def _completed_clip_ids(
+    client: Any,
+    *,
+    table_prefix: str,
+    clip_ids: list[str],
+) -> set[str]:
+    """Find clips whose active SDK run is completed; failures are handled by caller."""
+    completed: set[str] = set()
+    for start in range(0, len(clip_ids), 50):
+        batch = clip_ids[start : start + 50]
+        quoted = ",".join("'" + cid.replace("'", "''") + "'" for cid in batch)
+        sql = (
+            f"SELECT d.clip_id FROM {table_prefix}dim_clip d "
+            f"JOIN {table_prefix}pipeline_run r "
+            "ON d.clip_id = r.clip_id AND d.active_run_id = r.run_id "
+            f"WHERE d.clip_id IN ({quoted}) AND r.status = 'completed'"
+        )
+        with client.execute_sql(sql).open_reader() as reader:
+            for record in reader:
+                completed.add(str(record[0]))
+    return completed
 
 
 def _build_pipeline_chunk_udf(
@@ -202,23 +288,6 @@ def main() -> None:
     stages_raw = get_dw_arg("stages")
     driver_stages, udf_stages = split_stages(stages_raw)
     ds = get_dw_arg("ds") or datetime.now(timezone.utc).strftime("%Y%m%d")
-    job_rows = build_job_rows(_bags_from_args(), ds=ds)
-    if not job_rows:
-        raise ValueError(
-            "no bags discovered; provide bag_oss_key+clip_id+run_id or bag_oss_keys"
-        )
-
-    print(
-        "DISCOVERED_ROWS_JSON="
-        + json.dumps(
-            {"driver_stages": sorted(driver_stages), "items": job_rows},
-            ensure_ascii=False,
-        )
-    )
-    if not udf_stages:
-        print("No UDF stages selected; skipping apply_chunk")
-        return
-
     account = o.account  # type: ignore[name-defined]
     oss_bucket = get_dw_arg("oss_bucket")
     if not oss_bucket:
@@ -229,6 +298,9 @@ def main() -> None:
     batch_rows = int(get_dw_arg("batch_rows", "1") or "1")
     if batch_rows < 1:
         raise ValueError("batch_rows must be >= 1")
+    hash_batch_rows = int(get_dw_arg("hash_batch_rows", "32") or "32")
+    if hash_batch_rows < 1:
+        raise ValueError("hash_batch_rows must be >= 1")
     dpe_cpu = int(get_dw_arg("dpe_cpu", "4") or "4")
     dpe_memory = int(get_dw_arg("dpe_memory_gb", "16") or "16")
     clip_min_sec = get_dw_float_arg("clip_min_sec", 15.0)
@@ -260,28 +332,140 @@ def main() -> None:
     import maxframe.dataframe as md
     from maxframe.session import new_session
 
-    input_df = md.DataFrame(pd.DataFrame(job_rows))
-    pipeline_udf = _build_pipeline_chunk_udf(
-        dpe_cpu=dpe_cpu,
-        dpe_memory=dpe_memory,
-        oss_mount_url=oss_internal_url(
-            cloud_region,
-            oss_bucket,
-            get_dw_arg("oss_mount_prefix", "") or "",
-        ),
-        mount_path=mount_path,
-        storage_options_dict=storage_options(get_dw_arg("oss_ram_role_arn"), account),
-        sdk_env=sdk_env,
-        udf_stages_frozen=frozenset(udf_stages),
-        clip_min_sec=clip_min_sec,
-        clip_max_sec=clip_max_sec,
-        sample_fps=sample_fps,
-        model_backend=model_backend,
-        cleanup_work=cleanup_work,
+    mount_url = oss_internal_url(
+        cloud_region,
+        oss_bucket,
+        get_dw_arg("oss_mount_prefix", "") or "",
     )
+    mount_storage = storage_options(get_dw_arg("oss_ram_role_arn"), account)
     session = new_session(o)  # type: ignore[name-defined]
     try:
         print(f"Logview: {session.get_logview_address()}")
+        explicit_bags = _explicit_bag_from_args()
+        if explicit_bags is not None:
+            discovered_bags: list[dict[str, Any]] = explicit_bags
+            print("DEBUG_OVERRIDE: using explicit clip_id/run_id/bag_oss_key")
+        else:
+            bag_keys = _debug_bag_keys_from_args()
+            if not bag_keys:
+                bag_keys = _list_bag_keys_from_oss(
+                    account,
+                    oss_bucket=oss_bucket,
+                    cloud_region=cloud_region,
+                )
+            if not bag_keys:
+                raise ValueError(
+                    "no bags discovered from OSS; set scan_prefix or bag_oss_keys"
+                )
+            hash_input_df = md.DataFrame(
+                pd.DataFrame([{"bag_oss_key": key} for key in bag_keys])
+            )
+            hash_udf = _build_hash_chunk_udf(
+                dpe_cpu=dpe_cpu,
+                dpe_memory=dpe_memory,
+                oss_mount_url=mount_url,
+                mount_path=mount_path,
+                storage_options_dict=mount_storage,
+            )
+            hash_result = (
+                hash_input_df.mf.apply_chunk(
+                    hash_udf,
+                    batch_rows=hash_batch_rows,
+                    output_type="dataframe",
+                    dtypes=_hash_chunk_output_dtypes(),
+                    skip_infer=True,
+                )
+                .execute()
+                .fetch()
+            )
+            discovered_bags = [
+                {
+                    "clip_id": content_hash_to_clip_id(str(row["content_hash"])),
+                    "bag_oss_key": str(row["bag_oss_key"]),
+                    "content_hash": str(row["content_hash"]),
+                }
+                for _, row in hash_result.iterrows()
+            ]
+
+        force_rerun = (get_dw_arg("force_rerun", "false") or "false").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        completed_clip_ids: set[str] = set()
+        if not force_rerun:
+            table_prefix = (
+                get_dw_arg("sdk_table_prefix")
+                or get_dw_arg("table_prefix")
+                or "aig_sdk__"
+            )
+            try:
+                completed_clip_ids = _completed_clip_ids(
+                    o,  # type: ignore[name-defined]
+                    table_prefix=table_prefix,
+                    clip_ids=[str(bag["clip_id"]) for bag in discovered_bags],
+                )
+            except Exception as exc:  # noqa: BLE001
+                # A first deployment may run before SDK tables exist. Discovery
+                # remains usable and mc_write can create/populate them later.
+                print(
+                    "WARNING: completed-run lookup failed; continuing without skip: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+        runnable_bags = filter_already_completed(
+            discovered_bags,
+            completed_clip_ids=completed_clip_ids,
+            force_rerun=force_rerun,
+        )
+        max_bags_raw = get_dw_arg("max_bags")
+        runnable_bags = trim_discovered_bags(
+            runnable_bags,
+            max_bags=None if max_bags_raw is None else int(max_bags_raw),
+        )
+        for bag in runnable_bags:
+            bag.setdefault("run_id", make_run_id())
+        job_rows = build_job_rows(runnable_bags, ds=ds)
+        print(
+            "DISCOVERED_ROWS_JSON="
+            + json.dumps(
+                {
+                    "driver_stages": sorted(driver_stages),
+                    "hashed_count": len(discovered_bags),
+                    "skipped_completed": len(discovered_bags) - len(
+                        filter_already_completed(
+                            discovered_bags,
+                            completed_clip_ids=completed_clip_ids,
+                            force_rerun=force_rerun,
+                        )
+                    ),
+                    "items": job_rows,
+                },
+                ensure_ascii=False,
+            )
+        )
+        if not job_rows:
+            print("No runnable bags after completed-run skip/max_bags")
+            return
+        if not udf_stages:
+            print("No UDF stages selected; skipping pipeline apply_chunk")
+            return
+
+        input_df = md.DataFrame(pd.DataFrame(job_rows))
+        pipeline_udf = _build_pipeline_chunk_udf(
+            dpe_cpu=dpe_cpu,
+            dpe_memory=dpe_memory,
+            oss_mount_url=mount_url,
+            mount_path=mount_path,
+            storage_options_dict=mount_storage,
+            sdk_env=sdk_env,
+            udf_stages_frozen=frozenset(udf_stages),
+            clip_min_sec=clip_min_sec,
+            clip_max_sec=clip_max_sec,
+            sample_fps=sample_fps,
+            model_backend=model_backend,
+            cleanup_work=cleanup_work,
+        )
         result = (
             input_df.mf.apply_chunk(
                 pipeline_udf,
