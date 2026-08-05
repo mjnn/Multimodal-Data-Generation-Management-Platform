@@ -4,11 +4,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .acoustic_panel import AcousticPanelConfig
 from .asr_client import AsrConfig
 from .clip_video import ClipVideoConfig
+
+if TYPE_CHECKING:
+    from .mc.config import McBackendConfig
 
 ModelBackend = Literal["api", "mc"]
 StorageBackend = Literal["local", "cloud"]
@@ -31,9 +34,10 @@ class ClientConfig:
     asr_config: AsrConfig | None = None
     clip_video_config: ClipVideoConfig | None = None
     load_dotenv: bool = True
-    # api: DashScope / MaaS 直连（当前默认；Omni 在 MC bigdata_modelset 未上架前必须用 api）
-    # mc: MaxCompute MaxFrame AI / 模型集（待 SDK 实现）
+    # api: DashScope / MaaS 直连；mc: MaxCompute MaxFrame AI / 模型集
     model_backend: ModelBackend = "api"
+    mc_odps_entry: Any | None = None
+    mc_config: McBackendConfig | None = None
     # local: 写入 HMI_RUNTIME_ROOT/oss 镜像；cloud: 处理后上传 OSS
     storage_backend: StorageBackend = "local"
 

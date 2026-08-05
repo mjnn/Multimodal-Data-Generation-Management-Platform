@@ -69,6 +69,13 @@ from .label_prompt import (
     default_omni_label_prompt,
     merge_omni_label_prompt,
 )
+from .model_factory import (
+    create_asr_client,
+    create_embedding_client,
+    create_mc_runtime,
+    create_omni_client,
+    validate_backend_config,
+)
 from .taxonomy import load_taxonomy, parse_label_json, taxonomy_prompt_block
 
 __all__ = [
@@ -131,6 +138,10 @@ __all__ = [
     "OMNI_LABEL_PROMPT_FIELD_META",
     "parse_label_json",
     "compute_mel_matrix",
+    "create_asr_client",
+    "create_embedding_client",
+    "create_mc_runtime",
+    "create_omni_client",
     "mel_matrix_to_feature_text",
     "render_acoustic_assets",
     "render_acoustic_panel",
@@ -139,5 +150,6 @@ __all__ = [
     "resolve_taxonomy_path",
     "save_mel_matrix",
     "taxonomy_prompt_block",
+    "validate_backend_config",
     "write_jsonl",
 ]

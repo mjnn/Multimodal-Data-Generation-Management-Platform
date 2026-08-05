@@ -138,7 +138,9 @@ def _build_pipeline_chunk_udf(
                         cleanup_work=cleanup_work,
                     )
                 finally:
-                    client.close()
+                    close = getattr(client, "close", None)
+                    if callable(close):
+                        close()
 
                 # Any capability error blocks Driver-side mc_write for this row.
                 ok = len(result.errors) == 0

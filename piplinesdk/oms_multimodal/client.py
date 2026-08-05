@@ -1,6 +1,7 @@
 """OmsMultimodalClient — SDK 主入口。"""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -12,6 +13,12 @@ from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_vi
 from .config import BagProcessResult, ClientConfig, ClipConfig, ModelBackend, OutputConfig, StorageBackend
 from .embedding_client import FusionEmbeddingClient
 from .exceptions import ConfigurationError
+from .model_factory import (
+    create_asr_client,
+    create_embedding_client,
+    create_mc_runtime,
+    create_omni_client,
+)
 from .omni_client import OmniLabelClient
 from .pipeline import LabelEmbeddingPipeline, resolve_bags, write_jsonl
 from .rosbag_parser import Clip, RosbagExtractor, TopicInfo, inspect_bag
@@ -69,6 +76,21 @@ class OmsMultimodalClient:
         self.model_backend: ModelBackend = model_backend or base.model_backend
         self.storage_backend: StorageBackend = storage_backend or base.storage_backend
         self.omni_label_prompt = base.omni_label_prompt
+        self._model_config = replace(
+            base,
+            api_key=self.api_key,
+            workspace_id=self.workspace_id,
+            region=self.region,
+            work_dir=self.work_dir,
+            omni_model=self.omni_model,
+            embedding_model=self.embedding_model,
+            embedding_dimension=self.embedding_dimension,
+            acoustic_panel_config=self.acoustic_panel_config,
+            asr_config=self.asr_config,
+            clip_video_config=self.clip_video_config,
+            model_backend=self.model_backend,
+            storage_backend=self.storage_backend,
+        )
         resolved_taxonomy_path = Path(taxonomy_path) if taxonomy_path else base.taxonomy_path
         if resolved_taxonomy_path is None:
             self.taxonomy_path = None
@@ -81,6 +103,7 @@ class OmsMultimodalClient:
         self._omni: OmniLabelClient | None = None
         self._embedding: FusionEmbeddingClient | None = None
         self._asr: AsrClient | None = None
+        self._mc_runtime: Any | None = None
 
     @property
     def taxonomy(self) -> dict[str, Any]:
@@ -106,40 +129,106 @@ class OmsMultimodalClient:
             )
         return self._pipeline
 
+    def _get_mc_runtime(self) -> Any:
+        if self._mc_runtime is None:
+            self._mc_runtime = create_mc_runtime(self._model_config)
+        return self._mc_runtime
+
     def _get_omni_client(self) -> OmniLabelClient:
-        if self.model_backend == "mc":
-            raise ConfigurationError(
-                "MODEL_BACKEND=mc is not implemented yet; use api until Omni is available in MC modelset"
-            )
         if self._omni is None:
-            self._omni = OmniLabelClient(
-                model=self.omni_model,
-                api_key=self.api_key,
-                workspace_id=self.workspace_id,
-                region=self.region,
-                omni_label_prompt=self.omni_label_prompt,
-            )
+            if self.model_backend == "mc":
+                self._omni = create_omni_client(
+                    backend="mc",
+                    config=self._model_config,
+                    mc_runtime=self._get_mc_runtime(),
+                    api_key=self.api_key,
+                    workspace_id=self.workspace_id,
+                    region=self.region,
+                )
+            else:
+                self._omni = OmniLabelClient(
+                    model=self.omni_model,
+                    api_key=self.api_key,
+                    workspace_id=self.workspace_id,
+                    region=self.region,
+                    omni_label_prompt=self.omni_label_prompt,
+                )
         return self._omni
 
     def _get_embedding_client(self) -> FusionEmbeddingClient:
         if self._embedding is None:
-            self._embedding = FusionEmbeddingClient(
-                model=self.embedding_model,
-                dimension=self.embedding_dimension,
-                api_key=self.api_key,
-            )
+            if self.model_backend == "mc":
+                self._embedding = create_embedding_client(
+                    backend="mc",
+                    config=self._model_config,
+                    mc_runtime=self._get_mc_runtime(),
+                    api_key=self.api_key,
+                )
+            else:
+                self._embedding = FusionEmbeddingClient(
+                    model=self.embedding_model,
+                    dimension=self.embedding_dimension,
+                    api_key=self.api_key,
+                )
         return self._embedding
 
     def _get_asr_client(self) -> AsrClient | None:
         if not self.asr_config.enabled:
             return None
         if self._asr is None:
-            self._asr = AsrClient(
-                config=self.asr_config,
-                api_key=self.api_key,
-                workspace_id=self.workspace_id,
-            )
+            if self.model_backend == "mc":
+                self._asr = create_asr_client(
+                    backend="mc",
+                    config=self._model_config,
+                    mc_runtime=self._get_mc_runtime(),
+                    asr_config=self.asr_config,
+                    api_key=self.api_key,
+                    workspace_id=self.workspace_id,
+                )
+            else:
+                self._asr = AsrClient(
+                    config=self.asr_config,
+                    api_key=self.api_key,
+                    workspace_id=self.workspace_id,
+                )
         return self._asr
+
+    def close(self) -> None:
+        """Release the shared MC runtime; safe to call more than once."""
+        runtime = self._mc_runtime
+        if runtime is None:
+            return
+        self._mc_runtime = None
+        self._pipeline = None
+        self._omni = None
+        self._embedding = None
+        self._asr = None
+        runtime.destroy()
+
+    def make_run_context(
+        self,
+        run_dir: str | Path,
+        *,
+        media_mode: str = "auto",
+        clip_id: str = "",
+        run_id: str = "",
+        oss_bucket: str = "",
+        oss_run_prefix: str = "",
+        cloud_region: str = "cn-shanghai",
+    ) -> Any:
+        """Build a capability run context using this client's work directory."""
+        from .capabilities.types import RunContext
+
+        return RunContext(
+            run_dir=Path(run_dir),
+            work_dir=self.work_dir,
+            clip_id=clip_id,
+            run_id=run_id,
+            media_mode=media_mode,
+            oss_bucket=oss_bucket,
+            oss_run_prefix=oss_run_prefix,
+            cloud_region=cloud_region,
+        )
 
     @staticmethod
     def resolve_bags(manifest_path: str | Path) -> list[Path]:
