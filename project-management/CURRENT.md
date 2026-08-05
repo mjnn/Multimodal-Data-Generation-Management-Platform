@@ -1,7 +1,7 @@
 # 当前进度指针（跨会话权威入口）
 
-> 最后更新：2026-07-31  
-> 更新人：Agent（M10.10 Hub diff/impact/lineage UI）
+> 最后更新：2026-08-05  
+> 更新人：Agent（Task 6 — 单 Driver 文档 + CURRENT）
 
 ---
 
@@ -10,15 +10,17 @@
 | 字段 | 当前值 |
 |------|--------|
 | 当前里程碑 | **M10 已出口** · Taxonomy 语义中枢 |
-| 推荐下一个工单 | **M7.5 全链 E2E** · 维护回归 · M9.3 待 DataWorks |
-| 禁止抢跑 | 无 P0 阻塞项 |
+| 推荐下一个工单 | **P0 DataWorks 探针**：`sdk_pipeline_driver`（`stages=extract,asr`，`batch_rows=1`）→ **M9.3 A-C**（P1 全链通过后） |
+| 禁止抢跑 | P0 mc-in-DPE 未过前勿宣称 M9.3 出口 |
 
 ---
 
 ## 新会话开场白
 
 ```text
-M8.5 派生向导已支持标签树裁剪（克隆 draft taxonomy + 导出 y 列过滤）、按标签筛选 clip、类别平衡；M9.3 待 DataWorks；可选 M7.5 zip 全链 E2E。
+SDK v1 主路径已切单节点 sdk_pipeline_driver（apply_chunk + stages）。代码 Task 1–5 已入库；runbook/CURRENT 已对齐。
+下一步：DataWorks P0 探针（mc ASR in DPE）→ P1 verify_sdk_v1_run → M9.3 A-C/H。
+多节点 sdk_* 工作流冻结，仅参考/回退。
 ```
 
 ---
@@ -37,9 +39,11 @@ M8.5 派生向导已支持标签树裁剪（克隆 draft taxonomy + 导出 y 列
 
 ---
 
-## 延期 / 可选
+## 进行中 / 可选
 
-| ID | 标题 |
-|----|------|
-| M9.3 | sdk_v1 cloud 全链验收 (H-1) |
-| M7.5 | Parquet 全链 E2E（创建→ready→zip 含 parquet） |
+| ID | 标题 | 状态 |
+|----|------|------|
+| M9.3 | sdk_v1 cloud 全链（H-1） | **in_progress** — 单 Driver 代码 done；**P0 DW 探针待跑**；A-C/H 待 P1 |
+| M7.5 | Parquet 全链 E2E | 可选 |
+
+**M9.3 入口**：`docs/sdk-v1-cloud-e2e-runbook.md` · `acceptance/M9.3.md` · 设计 `docs/superpowers/specs/2026-08-04-sdk-single-driver-apply-chunk-design.md`

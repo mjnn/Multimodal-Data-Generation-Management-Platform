@@ -134,6 +134,74 @@ pip install maxframe pyodps pandas alibabacloud_oss_v2 pyarrow
 
 
 
+### 5. SDK v1：`sdk_pipeline_driver` DPE 镜像（必装 `[mc]`）
+
+
+
+**推荐云上路径**为单节点 `sdk_pipeline_driver_node.py`：DPE chunk UDF 内 `import oms_multimodal` 并按 `MODEL_BACKEND=mc` 嵌套 MaxFrame AI。镜像 **必须** 安装带 MC extra 的 SDK，版本 **≥ 0.3.2**。
+
+
+
+在 `docker/dpe-deps/Dockerfile` 的 `pip install -r requirements.txt` 之后追加（二选一）：
+
+
+
+**A. PyPI / 镜像源（推荐生产登记前本地验证）**
+
+
+
+```dockerfile
+
+RUN conda run -n py311 pip install --no-cache-dir 'oms-multimodal-sdk[mc]>=0.3.2' && \
+
+    conda run -n py311 python -c "import oms_multimodal; print('sdk', oms_multimodal.__version__)"
+
+```
+
+
+
+**B. 本地 wheel（离线 / 未发布时）**
+
+
+
+```dockerfile
+
+# 本地先构建 wheel：cd piplinesdk && py -3 -m build
+
+COPY piplinesdk/dist/oms_multimodal_sdk-0.3.2-py3-none-any.whl /tmp/sdk.whl
+
+RUN conda run -n py311 pip install --no-cache-dir '/tmp/sdk.whl[mc]' && \
+
+    conda run -n py311 python -c "import oms_multimodal; print('sdk', oms_multimodal.__version__)"
+
+```
+
+
+
+**禁止** COPY 业务 `.py` 后在 DPE 内 subprocess。maxframe/pyodps 由 MaxCompute 平台提供，**勿**打进生产 DPE 镜像 unless 平台文档要求。
+
+
+
+工作流参数示例：
+
+
+
+```
+
+dpe_image=rosbag_sdk_dpe
+
+dpe_cpu=4
+
+dpe_memory_gb=16
+
+```
+
+
+
+节点模板：`pipeline/dataworks/sdk_pipeline_driver_node.py`（单 Driver + `apply_chunk`；多节点 `sdk_*_dpe_node.py` 已冻结，见 `dataworks/WORKFLOW.md`）
+
+
+
 ## 回退：不配 dpe_image
 
 

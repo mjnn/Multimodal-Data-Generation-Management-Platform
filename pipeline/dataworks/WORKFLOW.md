@@ -9,6 +9,16 @@
 **桶**：`rosbag-labels-pipeline-bucket2` · **路径前缀**：`clips/{clip_id}/runs/{run_id}/`  
 管线写 `parsed/` · `aligned/` · `ai/`；人工校核写顶层 `reviews/`（仅 HMI）。
 
+### SDK v1 单 Driver（推荐 · 2026-08 起）
+
+| 项 | 约定 |
+|----|------|
+| **唯一推荐节点** | `sdk_pipeline_driver_node.py` — discover → `apply_chunk`（`stages` / `batch_rows`）→ Driver `mc_write` + `dispatch` |
+| Runbook | `docs/sdk-v1-cloud-e2e-runbook.md` |
+| MC 表前缀 | `aig_sdk__` · OSS layout `sdk_v1` |
+
+**冻结（勿为新 run 编排）**：多节点 `sdk_extract` / `sdk_asr` / `sdk_preview` / `sdk_label` / `sdk_embed` / `sdk_upload` / `sdk_mc_write` / `sdk_dispatch` 及对应 `*_dpe_node.py`、`sdk_infer_node.py` — 代码保留作参考或紧急回退 only。
+
 ---
 
 ## 管线流程图（总览）
