@@ -6,12 +6,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
 import pandas as pd
 
+from pipeline_dispatch import (
+    DEFAULT_DISPATCH_OSS_KEY,
+    resolve_oss_http_endpoint,
+    utc_now_iso,
+    write_dispatch_to_oss,
+)
 from sdk_dpe_common import (
     apply_dpe_runtime_settings,
     collect_sdk_env_for_dpe,
@@ -22,6 +28,7 @@ from sdk_dpe_common import (
     storage_options,
     wrap_dpe_udf,
 )
+from sdk_mc_ingest import ingest_sdk_run
 from sdk_pipeline_driver_lib import (
     batch_summary,
     build_job_rows,
@@ -150,6 +157,7 @@ def _build_pipeline_chunk_udf(
                         "clip_id": clip_id,
                         "run_id": run_id,
                         "bag_oss_key": bag_oss_key,
+                        "ds": ds,
                         "ok": ok,
                         "error": error,
                         "stages_done": ",".join(result.stages_done),
@@ -166,6 +174,7 @@ def _build_pipeline_chunk_udf(
                         "clip_id": clip_id,
                         "run_id": run_id,
                         "bag_oss_key": bag_oss_key,
+                        "ds": ds,
                         "ok": False,
                         "error": f"{type(exc).__name__}: {exc}"[:500],
                         "stages_done": "",
@@ -288,6 +297,80 @@ def main() -> None:
             "BATCH_SUMMARY_JSON="
             + json.dumps(batch_summary(result_rows), ensure_ascii=False, default=str)
         )
+        ok_rows = [
+            row
+            for row in result_rows
+            if row.get("ok") is True
+            or row.get("ok") == 1
+            or str(row.get("ok")).lower() == "true"
+        ]
+        postprocess_stages = driver_stages & {"mc_write", "dispatch"}
+        if postprocess_stages and not ok_rows:
+            print(
+                "WARNING: no successful rows; skipping Driver stages "
+                + ",".join(sorted(postprocess_stages))
+            )
+
+        if "mc_write" in driver_stages:
+            table_prefix = (
+                get_dw_arg("sdk_table_prefix")
+                or get_dw_arg("table_prefix")
+                or "aig_sdk__"
+            )
+            for row in ok_rows:
+                ingest_sdk_run(
+                    o,  # type: ignore[name-defined]
+                    clip_id=str(row["clip_id"]),
+                    run_id=str(row["run_id"]),
+                    ds=str(row["ds"]),
+                    run_dir=Path(mount_path) / str(row["run_relpath"]),
+                    table_prefix=table_prefix,
+                    bag_oss_key=str(row["bag_oss_key"]),
+                )
+
+        if "dispatch" in driver_stages and ok_rows:
+            items = [
+                {
+                    "clip_id": str(row["clip_id"]),
+                    "run_id": str(row["run_id"]),
+                    "bag_oss_key": str(row["bag_oss_key"]),
+                    "ds": str(row["ds"]),
+                    "run_relpath": str(row["run_relpath"]),
+                }
+                for row in ok_rows
+            ]
+            payload: dict[str, Any] = {
+                "action": "run",
+                "layout_version": "sdk_v1",
+                "pipeline_version": "sdk_v1",
+                "batch_size": len(items),
+                "items": items,
+                "dispatched_at": utc_now_iso(),
+            }
+            if len(items) == 1:
+                payload.update(items[0])
+            dispatch_key = (
+                get_dw_arg("dispatch_oss_key", DEFAULT_DISPATCH_OSS_KEY)
+                or DEFAULT_DISPATCH_OSS_KEY
+            )
+            dispatch_endpoint = resolve_oss_http_endpoint(
+                cloud_region,
+                get_arg=get_dw_arg,
+                explicit_endpoint=get_dw_arg("oss_endpoint"),
+            )
+            write_dispatch_to_oss(
+                bucket_name=oss_bucket,
+                object_key=dispatch_key,
+                endpoint=dispatch_endpoint,
+                account=account,
+                payload=payload,
+                region=cloud_region,
+                get_arg=get_dw_arg,
+            )
+            print(
+                "DISPATCH_JSON="
+                + json.dumps(payload, ensure_ascii=False, default=str)
+            )
     except Exception:
         print(f"Logview: {session.get_logview_address()}")
         raise

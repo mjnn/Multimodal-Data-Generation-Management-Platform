@@ -55,6 +55,7 @@ def chunk_output_dtypes() -> dict[str, str]:
         "clip_id": "string",
         "run_id": "string",
         "bag_oss_key": "string",
+        "ds": "string",
         "ok": "boolean",
         "error": "string",
         "stages_done": "string",

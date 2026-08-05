@@ -34,7 +34,7 @@ class TestDriverLib(unittest.TestCase):
 
     def test_dtypes_keys(self) -> None:
         d = chunk_output_dtypes()
-        for k in ("clip_id", "ok", "error", "stages_done", "labels_relpath"):
+        for k in ("clip_id", "ds", "ok", "error", "stages_done", "labels_relpath"):
             self.assertIn(k, d)
 
     def test_summary(self) -> None:
