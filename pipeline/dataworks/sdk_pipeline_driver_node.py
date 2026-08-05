@@ -293,7 +293,9 @@ def main() -> None:
     if not oss_bucket:
         raise ValueError("Missing required parameter: oss_bucket")
     cloud_region = get_dw_arg("cloud_region", "cn_shanghai") or "cn_shanghai"
-    dpe_image = get_dw_arg("dpe_image")
+    dpe_image = (get_dw_arg("dpe_image") or "").strip()
+    if not dpe_image:
+        raise ValueError("Missing required parameter: dpe_image")
     mount_path = get_dw_arg("mount_path", get_dw_arg("dpe_mount_path", "/mnt/oss")) or "/mnt/oss"
     batch_rows = int(get_dw_arg("batch_rows", "1") or "1")
     if batch_rows < 1:

@@ -51,6 +51,15 @@ class TestSdkMcIngest(unittest.TestCase):
         self.assertIn("aig_sdk__fact_clip_embedding", sql)
         self.assertIn("'rosbags/explicit.bag'", sql)
         self.assertIn('"scene": "road"', sql)
+        for step_id in (
+            "sdk_discover",
+            "sdk_infer",
+            "sdk_upload",
+            "sdk_mc_write",
+            "sdk_dispatch",
+        ):
+            self.assertIn(f"'{step_id}'", sql)
+        self.assertIn("aig_sdk__pipeline_step", sql)
 
 
 if __name__ == "__main__":

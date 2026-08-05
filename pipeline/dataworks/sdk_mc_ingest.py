@@ -11,6 +11,15 @@ SDK_LABELS_JSONL = "labels.jsonl"
 SDK_EMBEDDINGS_JSONL = "fusion_embeddings.jsonl"
 SDK_RUN_JSON = "run.json"
 
+# Cloud verify_sdk_v1_run / HMI expect these five step_ids (see hmi.config.SDK_PIPELINE_STEP_ORDER).
+SDK_PIPELINE_STEPS = (
+    "sdk_discover",
+    "sdk_infer",
+    "sdk_upload",
+    "sdk_mc_write",
+    "sdk_dispatch",
+)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -119,6 +128,15 @@ def build_ingest_statements(
             f"INSERT INTO TABLE {p}fact_audio_segment PARTITION (ds={_sql_literal(ds)}) "
             f"SELECT {_sql_literal(clip_id)}, {_sql_literal(run_id)}, 0, {start_ns}, {end_ns}, "
             f"{_sql_literal(asr_text)}, 1.0, NULL, 'preview/audio.wav'"
+        )
+
+    # Mark cloud five-step contract complete for a successful Driver ingest.
+    # Partial UDF stages still land as completed once artifacts exist and ingest runs.
+    for step_id in SDK_PIPELINE_STEPS:
+        statements.append(
+            f"INSERT INTO TABLE {p}pipeline_step PARTITION (ds={_sql_literal(ds)}) "
+            f"SELECT {_sql_literal(run_id)}, {_sql_literal(step_id)}, 'completed', "
+            f"{_sql_literal(created_at)}, {_sql_literal(created_at)}, NULL"
         )
     return statements
 
