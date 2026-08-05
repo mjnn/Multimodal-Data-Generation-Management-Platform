@@ -71,7 +71,7 @@ M9.1,task,M9,GET admin audit API + query_audit_logs,done,100,TBD,P1,2026-07-31,2
 M9.4,task,M9,taxonomy R10 dataset hints,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.1,taxonomy_hint.py preview detail UI
 M9.5,task,M9,AdminAuditPage route menu,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.1,/admin/audit listAuditLogs
 M9.2,task,M9,PostgreSQL migration path,done,100,TBD,P2,2026-08-12,2026-08-15,2026-07-31,2026-07-31,M9.1,docs/postgresql-migration-path.md acceptance/M9.2.md
-M9.3,task,M9,sdk_v1 cloud full chain E2E,deferred,0,TBD,P1,2026-08-12,2026-08-15,,,M9.1,H-1 DataWorks env
+M9.3,task,M9,sdk_v1 cloud full chain E2E,in_progress,60,TBD,P1,2026-08-12,2026-08-15,2026-08-03,,M9.1,verify_sdk_v1_run runbook A-1~A-2 pass; A-C/H pending DW
 M9.6,task,M9,M9 acceptance hardening,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.4;M9.5,acceptance/M9.md npm build
 M9,milestone,M9,M9 deployment governance exit,done,100,TBD,P1,2026-07-31,2026-08-15,2026-07-31,2026-07-31,M9.6,audit API taxonomy hints PG cloud deferred
 DOC-M10,doc,M10,M10 implementation notes v1.0,done,100,TBD,P0,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9,docs/m10-implementation-notes.md R11-R15

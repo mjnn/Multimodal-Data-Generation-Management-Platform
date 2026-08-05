@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import type { SimilarItem } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
-import { canManageDatasets } from '../auth/roles'
+import { canBrowseTaxonomy } from '../auth/roles'
 import { resolveMediaUrl } from '../utils/mediaUrl'
 
 interface Props {
@@ -16,10 +16,9 @@ interface Props {
 export function SimilarDrawer({ open, compositeId, onClose }: Props) {
   const [items, setItems] = useState<SimilarItem[]>([])
   const [loading, setLoading] = useState(false)
-  const [creating, setCreating] = useState(false)
   const navigate = useNavigate()
   const { user } = useAuth()
-  const canPropose = canManageDatasets(user?.roles)
+  const canPropose = canBrowseTaxonomy(user?.roles)
 
   useEffect(() => {
     if (!open || !compositeId) return
@@ -40,22 +39,19 @@ export function SimilarDrawer({ open, compositeId, onClose }: Props) {
         canPropose && items.length > 0 ? (
           <Button
             type="link"
-            loading={creating}
             onClick={() => {
-              setCreating(true)
-              void api
-                .createTaxonomyProposal({
-                  title: `相似簇提案 · ${compositeId?.slice(0, 16) ?? 'clip'}`,
-                  proposal_type: 'scene_cluster',
-                  evidence: {
-                    source: 'similar',
-                    anchor_composite_id: compositeId,
-                    clip_ids: [...new Set(items.map((i) => i.clip_id))],
-                  },
-                })
-                .then(() => message.success('已创建标签树提案'))
-                .catch(() => message.error('创建提案失败'))
-                .finally(() => setCreating(false))
+              const clipIds = [...new Set(items.map((i) => i.clip_id))]
+              sessionStorage.setItem(
+                'taxonomy_proposal_evidence_draft',
+                [
+                  `相似簇证据（锚点 ${compositeId?.slice(0, 24) ?? ''}…）`,
+                  `相关 clip：${clipIds.slice(0, 12).join(', ')}${clipIds.length > 12 ? '…' : ''}`,
+                  '请基于已发布标签树编辑提案树，并补充业务说明。',
+                ].join('\n'),
+              )
+              message.info('已带入相似簇证据草稿，请在提案页完善并提交')
+              navigate('/taxonomy?tab=proposals')
+              onClose()
             }}
           >
             建议补充标签树

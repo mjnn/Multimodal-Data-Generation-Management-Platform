@@ -6,5 +6,7 @@ $user = ($lines | Where-Object { $_ -match '^ACR_USERNAME=' }) -replace '^ACR_US
 $pass = ($lines | Where-Object { $_ -match '^ACR_PASSWORD=' }) -replace '^ACR_PASSWORD=', ''
 if (-not $reg -or -not $user -or -not $pass) { throw 'Missing ACR credentials in .env' }
 $pass | docker login $reg --username $user --password-stdin
-docker push crpi-02k3y8iudey5q0vb.cn-shanghai.personal.cr.aliyuncs.com/mirror_ns/rosbag_to_labels_pipline_hmi:20260803-2
+$TAG = "20260804-2"
+$IMAGE = "crpi-02k3y8iudey5q0vb.cn-shanghai.personal.cr.aliyuncs.com/mirror_ns/rosbag_to_labels_pipline_hmi:$TAG"
+docker push $IMAGE
 docker push crpi-02k3y8iudey5q0vb.cn-shanghai.personal.cr.aliyuncs.com/mirror_ns/rosbag_to_labels_pipline_hmi:latest

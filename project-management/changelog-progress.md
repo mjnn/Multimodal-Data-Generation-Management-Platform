@@ -1,5 +1,20 @@
 # 进度变更日志（倒序）
 
+## 2026-08-03 — M9.3 原子 DataWorks 节点 + sdk_node_common
+
+- **节点**：`sdk_extract_node` · `sdk_asr_node` · `sdk_preview_node` · `sdk_label_node` · `sdk_embed_node`
+- **共享**：`pipeline/dataworks/sdk_node_common.py`（env 映射、RunContext、MC 校验）
+- **重构**：`sdk_infer_node` / `sdk_asr_node` 复用 common；`DATAWORKS_SDK.md` 节点表
+- **测试**：`test_sdk_atomic_nodes.py` + 既有 18 tests pass
+
+## 2026-08-03 — M9.3 sdk_v1 cloud E2E 验数 + SDK MC 后端
+
+- **SDK 0.3.1**：`MODEL_BACKEND=mc` MaxFrame 客户端骨架（`piplinesdk/oms_multimodal/mc/`）
+- **DataWorks**：`sdk_infer_node.py` 接 `mc_odps_entry=o`、工作流参数映射、`client.close()`
+- **验数**：`pipeline/scripts/verify_sdk_v1_run.py` · `test_verify_sdk_v1_m93.py`
+- **文档**：`docs/sdk-v1-cloud-e2e-runbook.md` · `acceptance/M9.3.md`
+- **CURRENT → M9.3 A-C 待 DataWorks**
+
 ## 2026-07-31 — M8.5 标签树裁剪（派生）
 
 - **后端**：`dataset/taxonomy_crop.py`；derive `taxonomy_crop_label_ids` → 克隆 draft taxonomy + `export_label_ids`；assemble 导出 y 列过滤

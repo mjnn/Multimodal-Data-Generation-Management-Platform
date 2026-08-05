@@ -1,5 +1,6 @@
 # Monorepo context: docker build -f hmi/deploy/Dockerfile .
-FROM m.daocloud.io/docker.io/library/python:3.12-slim
+# Pin digest so rebuilds reuse apt/ffmpeg layers when Debian CDN is flaky.
+FROM m.daocloud.io/docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 WORKDIR /app
 
@@ -16,9 +17,12 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --no-deps -e /app/piplinesdk
 
 COPY shared /app/shared
+# Bust only app COPY layers when tag changes (avoids re-running apt/pip).
+ARG APP_REVISION=dev
 COPY hmi/backend /app/hmi/backend
 COPY hmi/scripts /app/hmi/scripts
 COPY hmi/frontend/dist /app/hmi/frontend/dist
+RUN echo "app_revision=${APP_REVISION}" > /app/.build_revision
 
 ENV FRONTEND_DIST=/app/hmi/frontend/dist
 ENV PORT=8000

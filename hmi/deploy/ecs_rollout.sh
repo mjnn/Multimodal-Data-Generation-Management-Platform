@@ -30,7 +30,7 @@ append_if_missing HMI_LOCAL_SDK_POLL_INTERVAL_SEC 20
 append_if_missing HMI_MIRROR_ARTIFACTS_TO_OSS 0
 
 if grep -q '^IMAGE=' "$ENV_FILE"; then
-  sed -i 's|^IMAGE=.*|IMAGE=crpi-02k3y8iudey5q0vb.cn-shanghai.personal.cr.aliyuncs.com/mirror_ns/rosbag_to_labels_pipline_hmi:20260803-2|' "$ENV_FILE"
+  sed -i 's|^IMAGE=.*|IMAGE=crpi-02k3y8iudey5q0vb.cn-shanghai.personal.cr.aliyuncs.com/mirror_ns/rosbag_to_labels_pipline_hmi:20260804-2|' "$ENV_FILE"
 fi
 
 sed -i 's/\r$//' .env.runtime 2>/dev/null || true

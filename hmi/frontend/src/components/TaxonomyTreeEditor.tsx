@@ -27,6 +27,7 @@ import {
   parseLevelKey,
   removeLevel,
   renameLevel,
+  reorderTaxonomyLevels,
   toEditorTreeData,
   type TaxonomyLevelMeta,
 } from '../utils/taxonomyTree'
@@ -150,7 +151,15 @@ export function TaxonomyTreeEditor({
         message.error('层级 code 已存在')
         return
       }
-      onEmptyLevelsChange([...emptyLevels, { level_code: code, level_name: name }])
+      const maxSort = Math.max(
+        -1,
+        ...nodes.map((n) => n.sort_order),
+        ...emptyLevels.map((l) => l.sort_order ?? -1),
+      )
+      onEmptyLevelsChange([
+        ...emptyLevels,
+        { level_code: code, level_name: name, sort_order: maxSort + 1000 },
+      ])
     }
     setLevelModalOpen(false)
     setLevelEditing(null)
@@ -246,12 +255,37 @@ export function TaxonomyTreeEditor({
 
   const onDrop = (info: {
     dragNode: { key: Key }
-    node: { key: Key }
+    node: { key: Key; pos?: string }
     dropToGap: boolean
+    dropPosition: number
   }) => {
     const dragKey = String(info.dragNode.key)
     const dropKey = String(info.node.key)
-    if (dragKey.startsWith('level:') || dropKey.startsWith('level:')) return
+    const dragLevel = parseLevelKey(dragKey)
+    const dropLevel = parseLevelKey(dropKey)
+
+    // Reorder whole levels
+    if (dragLevel) {
+      if (!dropLevel || dragLevel === dropLevel) return
+      const codes = groups.map((g) => g.level_code)
+      if (!codes.includes(dragLevel) || !codes.includes(dropLevel)) return
+      const without = codes.filter((c) => c !== dragLevel)
+      let insertAt = without.indexOf(dropLevel)
+      if (insertAt < 0) return
+      const dropPosParts = String(info.node.pos || '').split('-')
+      const dropPosIndex = Number(dropPosParts[dropPosParts.length - 1] ?? 0)
+      const relative = info.dropPosition - dropPosIndex
+      // relative: -1 before, 0 inside, 1 after — levels only allow before/after
+      if (relative >= 0) insertAt += 1
+      without.splice(insertAt, 0, dragLevel)
+      const reordered = reorderTaxonomyLevels(nodes, emptyLevels, without)
+      onNodesChange(reordered.nodes)
+      onEmptyLevelsChange(reordered.emptyLevels)
+      return
+    }
+
+    // Reorder leaves within the same level
+    if (dropLevel) return
     const dragLeaf = nodes.find((n) => n.label_id === dragKey)
     const dropLeaf = nodes.find((n) => n.label_id === dropKey)
     if (!dragLeaf || !dropLeaf || dragLeaf.level_code !== dropLeaf.level_code) return
@@ -266,13 +300,40 @@ export function TaxonomyTreeEditor({
     const insertAt = info.dropToGap ? dropIndex + 1 : dropIndex
     without.splice(insertAt, 0, dragLeaf)
     const sortMap = new Map(without.map((n, i) => [n.label_id, i]))
+    const levelIndex = groups.findIndex((g) => g.level_code === levelCode)
+    const band = Math.max(0, levelIndex) * 1000
     onNodesChange(
       nodes.map((n) =>
         n.level_code === levelCode && sortMap.has(n.label_id)
-          ? { ...n, sort_order: sortMap.get(n.label_id)! }
+          ? { ...n, sort_order: band + sortMap.get(n.label_id)! }
           : n,
       ),
     )
+  }
+
+  const allowDrop = (info: {
+    dragNode: { key: Key }
+    dropNode: { key: Key }
+    dropPosition: number
+  }) => {
+    const dragKey = String(info.dragNode.key)
+    const dropKey = String(info.dropNode.key)
+    const dragLevel = parseLevelKey(dragKey)
+    const dropLevel = parseLevelKey(dropKey)
+
+    if (dragLevel) {
+      // Levels can only be reordered relative to other levels (not nested inside)
+      return Boolean(dropLevel) && info.dropPosition !== 0
+    }
+
+    if (dropLevel) {
+      // Don't drop a leaf onto/beside a level root as a sibling of all levels
+      return false
+    }
+
+    const dragLeaf = nodes.find((n) => n.label_id === dragKey)
+    const dropLeaf = nodes.find((n) => n.label_id === dropKey)
+    return Boolean(dragLeaf && dropLeaf && dragLeaf.level_code === dropLeaf.level_code)
   }
 
   const onTreeSelect = (keys: Key[]) => {
@@ -406,7 +467,7 @@ export function TaxonomyTreeEditor({
 
       {canEdit && (
         <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-          支持层级与标签增删改；同级标签可拖动调整顺序。保存后生效。
+          支持层级与标签增删改；可拖动整个层级调整顺序，同级标签也可拖动排序。保存后生效。
         </Typography.Paragraph>
       )}
 
@@ -416,6 +477,7 @@ export function TaxonomyTreeEditor({
         defaultExpandAll
         blockNode
         draggable={canEdit ? { icon: false } : false}
+        allowDrop={canEdit ? allowDrop : undefined}
         titleRender={titleRender}
         onSelect={onTreeSelect}
         onDrop={onDrop}

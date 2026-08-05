@@ -13,7 +13,7 @@ import { ReviewQueueOverview, ReviewQueueOverviewButton } from '../components/Re
 import { ReviewTaskPanel } from '../components/ReviewTaskPanel'
 
 import { TaxonomyContextBar } from '../components/TaxonomyContextBar'
-import { ContentCard, PageHeader, PageStack } from '../components/ui'
+import { ContentCard, FromAuditBackLink, PageHeader, PageStack, useFromAudit } from '../components/ui'
 
 import { useReviewV2Session } from '../hooks/useReviewV2Session'
 
@@ -235,6 +235,8 @@ function ReviewWorkbenchContent({
 
 
 
+  const fromAudit = useFromAudit()
+
   const backTo = isConfidenceMode ? '/review/confidence' : '/review/tasks'
 
   const backLabel = isConfidenceMode ? '← 返回置信度校核' : '← 返回任务领取'
@@ -251,7 +253,13 @@ function ReviewWorkbenchContent({
 
         description={description}
 
-        extra={<Link to={backTo}>{backLabel}</Link>}
+        extra={
+          fromAudit ? (
+            <FromAuditBackLink />
+          ) : (
+            <Link to={backTo}>{backLabel}</Link>
+          )
+        }
 
       />
 

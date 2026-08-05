@@ -6,6 +6,7 @@ export const STANDARD_ROLES: AppRole[] = [
   'dataset_manager',
   'model_trainer',
   'pipeline_manager',
+  'taxonomy_manager',
 ]
 
 export const ALL_ROLES: AppRole[] = [...STANDARD_ROLES, 'anonymous']
@@ -16,6 +17,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   dataset_manager: '数据集管理员',
   model_trainer: '模型训练员',
   pipeline_manager: '管线管理员',
+  taxonomy_manager: '标签树管理员',
   anonymous: '匿名用户',
 }
 
@@ -37,7 +39,12 @@ export function canManageUsers(userRoles: string[] | undefined): boolean {
 }
 
 export function canManageTaxonomy(userRoles: string[] | undefined): boolean {
-  return hasAnyRole(userRoles, ['admin'])
+  return hasAnyRole(userRoles, ['admin', 'taxonomy_manager'])
+}
+
+/** 标签树 Hub（版本 / 覆盖率 / 提案队列）只读浏览：任意标准业务角色。 */
+export function canBrowseTaxonomy(userRoles: string[] | undefined): boolean {
+  return canBrowseClips(userRoles)
 }
 
 export function canAccessReview(userRoles: string[] | undefined): boolean {

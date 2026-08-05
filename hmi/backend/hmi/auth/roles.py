@@ -11,8 +11,11 @@ STANDARD_ROLES = frozenset(
         "dataset_manager",
         "model_trainer",
         "pipeline_manager",
+        "taxonomy_manager",
     }
 )
+
+TAXONOMY_MANAGER_ROLES = frozenset({"admin", "taxonomy_manager"})
 
 DEFAULT_REGISTRATION_ROLES = [ROLE_ANONYMOUS]
 

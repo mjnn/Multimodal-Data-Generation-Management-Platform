@@ -48,6 +48,7 @@ PATH 未生效时用完整路径。odpscmd 需要 **Java 8+**（本机 Temurin J
 | Connectivity check | `python scripts/e2e_precheck.py` |
 | Apply DDL | `python scripts/apply_mc_ddl.py` |
 | Verify full pipeline run | `python scripts/verify_pipeline_run.py` |
+| Verify **SDK v1** run | `python scripts/verify_sdk_v1_run.py` |
 | Reset test OSS+MC | `python scripts/reset_cloud_test_env.py` (--dry-run first) |
 | Upload bag | `scripts/upload_clip_to_oss.py` or ossutil `cp` |
 | Upload taxonomy | `python scripts/upload_taxonomy_to_oss.py` |

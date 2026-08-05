@@ -271,7 +271,7 @@ export interface OssBagPipeline {
   message?: string | null
 }
 
-export type TaxonomyStatus = 'draft' | 'published' | 'archived'
+export type TaxonomyStatus = 'draft' | 'published' | 'archived' | 'proposal'
 
 export type TaxonomyArchiveReason = 'superseded' | 'user'
 
@@ -307,6 +307,7 @@ export interface TaxonomyTreeResponse {
   version: TaxonomyVersion
   nodes: TaxonomyNodeDetail[]
   tree: LabelTaxonomyNode[]
+  linked_proposal?: TaxonomyProposal | null
 }
 
 export interface TaxonomyContext {
@@ -717,12 +718,36 @@ export interface AuditLogListResponse {
 
 export type DatasetExportPreset = 'minimal' | 'full'
 
+export type StringDistributionMatch = 'exact' | 'range'
+
+export interface StringDistributionBucket {
+  id: string
+  match: StringDistributionMatch
+  value?: string
+  min?: string
+  max?: string
+  weight?: number
+}
+
+export type LabelDistributionConfig =
+  | {
+      label_id: string
+      kind: 'enum'
+      weights: Record<string, number | undefined>
+    }
+  | {
+      label_id: string
+      kind: 'string'
+      buckets: StringDistributionBucket[]
+    }
+
 export interface DatasetFilterJson {
   review_status?: string
   include_pending_review?: boolean
   clip_ids?: string[] | null
   taxonomy_version_id?: string | null
   label_filters?: Record<string, string | boolean> | null
+  label_distribution?: LabelDistributionConfig | null
   sample_size?: number | null
   export_preset?: DatasetExportPreset | null
   balance_by_label?: string | null

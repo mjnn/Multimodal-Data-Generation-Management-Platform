@@ -258,7 +258,8 @@ PRD 实体说明见 **[`prd-rosbag-labels.md`](prd-rosbag-labels.md) §5**。
 | 包名 | `oms-multimodal-sdk`（目录 `piplinesdk/`） |
 | 安装 | `cd hmi && pip install -r requirements-dev.txt`（editable SDK） |
 | 环境 | 仓库根 `.env`：`DASHSCOPE_API_KEY`、`DASHSCOPE_WORKSPACE_ID` 等 |
-| 文档 | [`piplinesdk/README.md`](../piplinesdk/README.md) · [`piplinesdk/docs/SDK.md`](../piplinesdk/docs/SDK.md) |
+| 文档 | [`piplinesdk/README.md`](../piplinesdk/README.md) · [`piplinesdk/docs/SDK.md`](../piplinesdk/docs/SDK.md) · [`piplinesdk/docs/DATAWORKS_SDK.md`](../piplinesdk/docs/DATAWORKS_SDK.md) |
+| 本地 MC 联调 | [`pipeline/local_sdk_mc_test/`](../pipeline/local_sdk_mc_test/)（`.env` = 工作流参数，同级节点业务代码） |
 
 ```powershell
 python -m oms_multimodal inspect --bag path\to\output.bag

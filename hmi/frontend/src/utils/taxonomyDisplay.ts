@@ -4,6 +4,7 @@ export const TAXONOMY_STATUS_LABEL: Record<TaxonomyStatus, string> = {
   draft: '草稿',
   published: '已发布',
   archived: '已归档',
+  proposal: '提案中',
 }
 
 export function formatTaxonomyVersionLabel(v: {
@@ -16,6 +17,7 @@ export function formatTaxonomyVersionLabel(v: {
     v.status === 'published' || (v.status === 'archived' && v.archive_reason === 'superseded')
   if (released) return `${code}（已发布）`
   if (v.status === 'draft') return `${code}（草稿）`
+  if (v.status === 'proposal') return `${code}（提案中）`
   if (v.status === 'archived') return `${code}（已归档）`
   return code
 }

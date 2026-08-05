@@ -255,7 +255,7 @@ export function TaxonomyInsightsPanel() {
           current: tablePage,
           pageSize: tablePageSize,
           showSizeChanger: true,
-          pageSizeOptions: [10, 15, 20, 50],
+          pageSizeOptions: ['10', '15', '20', '50'],
           showTotal: (total) => `共 ${total} 条`,
           onChange: (page, pageSize) => {
             setTablePage(page)

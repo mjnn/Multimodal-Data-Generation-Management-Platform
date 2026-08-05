@@ -412,6 +412,10 @@ body {
   padding: var(--space-xl);
 }
 
+.content-card__body:has(.ant-table-wrapper) {
+  overflow-x: auto;
+}
+
 .content-card__body--flush {
   padding: 0;
 }

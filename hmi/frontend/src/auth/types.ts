@@ -4,6 +4,7 @@ export type AppRole =
   | 'dataset_manager'
   | 'model_trainer'
   | 'pipeline_manager'
+  | 'taxonomy_manager'
   | 'anonymous'
 
 export type AuthUser = {

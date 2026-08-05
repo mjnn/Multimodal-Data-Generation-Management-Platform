@@ -9,14 +9,15 @@ from typing import Any, Iterable
 
 from hmi.app_db import _utc_now_iso, db_conn
 
-TAXONOMY_STATUSES = frozenset({"draft", "published", "archived"})
+TAXONOMY_STATUSES = frozenset({"draft", "published", "archived", "proposal"})
+EDITABLE_TAXONOMY_STATUSES = frozenset({"draft", "proposal"})
 
 
 _TAXONOMY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS label_taxonomy_version (
   id TEXT PRIMARY KEY,
   version_code TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL CHECK (status IN ('draft','published','archived')),
+  status TEXT NOT NULL CHECK (status IN ('draft','published','archived','proposal')),
   published_at TEXT,
   created_by TEXT REFERENCES app_user(id),
   source_import TEXT,
@@ -43,6 +44,41 @@ CREATE TABLE IF NOT EXISTS label_taxonomy_node (
 CREATE INDEX IF NOT EXISTS idx_taxonomy_node_version
   ON label_taxonomy_node (taxonomy_version_id, sort_order);
 """
+
+
+def _migrate_taxonomy_proposal_status(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='label_taxonomy_version'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    if "'proposal'" in row[0]:
+        return
+    conn.executescript(
+        """
+        CREATE TABLE label_taxonomy_version_new (
+          id TEXT PRIMARY KEY,
+          version_code TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL CHECK (status IN ('draft','published','archived','proposal')),
+          published_at TEXT,
+          created_by TEXT REFERENCES app_user(id),
+          source_import TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          archive_reason TEXT
+        );
+        INSERT INTO label_taxonomy_version_new (
+          id, version_code, status, published_at, created_by, source_import,
+          created_at, updated_at, archive_reason
+        )
+        SELECT
+          id, version_code, status, published_at, created_by, source_import,
+          created_at, updated_at, archive_reason
+        FROM label_taxonomy_version;
+        DROP TABLE label_taxonomy_version;
+        ALTER TABLE label_taxonomy_version_new RENAME TO label_taxonomy_version;
+        """
+    )
 
 
 def _migrate_taxonomy_archive_reason(conn: sqlite3.Connection) -> None:
@@ -79,6 +115,7 @@ def ensure_taxonomy_schema() -> None:
     with sqlite3.connect(APP_DB_PATH) as conn:
         conn.executescript(_TAXONOMY_SCHEMA)
         _migrate_taxonomy_archive_reason(conn)
+        _migrate_taxonomy_proposal_status(conn)
         conn.commit()
 
 
@@ -236,8 +273,8 @@ def list_versions(
 
 
 def list_pipeline_taxonomy_versions() -> list[dict[str, Any]]:
-    """Versions selectable for pipeline Job3 (draft, current published, historical published)."""
-    return list_versions()
+    """Versions selectable for pipeline Job3 (excludes user-submitted proposal versions)."""
+    return [v for v in list_versions() if v.get("status") != "proposal"]
 
 
 def get_published_version() -> dict[str, Any] | None:
@@ -256,7 +293,7 @@ def resolve_taxonomy_version_for_label_ids(
         return get_published_version()
 
     preferred = str(preferred_version_id or "").strip() or None
-    status_rank = {"published": 3, "draft": 2, "archived": 1}
+    status_rank = {"published": 3, "draft": 2, "archived": 1, "proposal": 0}
     best_version: dict[str, Any] | None = None
     best_key: tuple[int, int, int, int] = (-1, -1, -1, -1)
 
@@ -294,6 +331,8 @@ def taxonomy_version_display_label(version: dict[str, Any]) -> str:
         return f"{code}（已发布）"
     if status == "draft":
         return f"{code}（草稿）"
+    if status == "proposal":
+        return f"{code}（提案中）"
     if status == "archived":
         return f"{code}（已归档）"
     return code
@@ -311,6 +350,18 @@ def resolve_taxonomy_display_for_version_id(version_id: str | None) -> str | Non
     if code:
         return code
     return None
+
+
+def require_editable_version(version_id: str, conn: sqlite3.Connection) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT * FROM label_taxonomy_version WHERE id = ?",
+        (version_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"taxonomy version not found: {version_id}")
+    if row["status"] not in EDITABLE_TAXONOMY_STATUSES:
+        raise ValueError(f"taxonomy version is not editable: {row['status']}")
+    return row
 
 
 def require_draft_version(version_id: str, conn: sqlite3.Connection) -> sqlite3.Row:
@@ -362,7 +413,7 @@ def count_nodes(version_id: str) -> int:
 
 
 def replace_nodes(version_id: str, nodes: list[dict[str, Any]]) -> int:
-    """Replace all nodes for a draft version. Returns inserted count."""
+    """Replace all nodes for a draft or proposal version. Returns inserted count."""
     if not nodes:
         raise ValueError("nodes list must not be empty")
 
@@ -373,7 +424,7 @@ def replace_nodes(version_id: str, nodes: list[dict[str, Any]]) -> int:
         raise ValueError("duplicate label_id in nodes batch")
 
     with db_conn() as conn:
-        require_draft_version(version_id, conn)
+        require_editable_version(version_id, conn)
         conn.execute(
             "DELETE FROM label_taxonomy_node WHERE taxonomy_version_id = ?",
             (version_id,),
@@ -445,6 +496,32 @@ def clone_nodes(source_version_id: str, target_version_id: str) -> int:
             }
         )
     return replace_nodes(target_version_id, payload)
+
+
+def promote_proposal_to_draft(version_id: str) -> dict[str, Any]:
+    """Promote proposal → draft after manager review."""
+    now = _utc_now_iso()
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM label_taxonomy_version WHERE id = ?",
+            (version_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"taxonomy version not found: {version_id}")
+        if row["status"] != "proposal":
+            raise ValueError(f"taxonomy version is not proposal: {row['status']}")
+        conn.execute(
+            """
+            UPDATE label_taxonomy_version
+            SET status = 'draft', updated_at = ?
+            WHERE id = ?
+            """,
+            (now, version_id),
+        )
+
+    version = get_version(version_id)
+    assert version is not None
+    return version
 
 
 def publish_version(version_id: str) -> dict[str, Any]:

@@ -1,19 +1,19 @@
 # 进度看板
 
-> 最后更新：2026-07-31
+> 最后更新：2026-08-03
 
 ## Todo
 
 | ID | 标题 | 里程碑 |
 |----|------|--------|
-| M9.3 | sdk_v1 cloud 全链验收 (H-1) | M9 |
+| M9.3-A-C | sdk_v1 cloud 验数（DataWorks 跑完后） | M9 |
 | M7.5-E2E | Parquet 全链 zip E2E | M7.5 |
 
 ## Doing
 
 | ID | 标题 | 备注 |
 |----|------|------|
-| — | — | — |
+| M9.3 | sdk_v1 cloud 全链 | verify_sdk_v1_run + runbook；A-1~A-2 ✓ |
 
 ## Done
 

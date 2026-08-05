@@ -80,6 +80,19 @@ def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str,
     return user
 
 
+def require_taxonomy_manager(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    roles = user.get("roles") or []
+    if not any(r in roles for r in ("admin", "taxonomy_manager")):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "403_FORBIDDEN",
+                "message": "标签树管理需要管理员或标签树管理员权限",
+            },
+        )
+    return user
+
+
 def require_oss_access(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     roles = user.get("roles") or []
     if not any(r in roles for r in ("admin", "dataset_manager")):

@@ -27,7 +27,7 @@
 | ID | 标题 | 状态 |
 |----|------|------|
 | M9.2 | PostgreSQL 迁移路径 | **docs only** — 见 §4 |
-| M9.3 | sdk_v1 cloud 全链验收 | **H-1** — 需 DataWorks + OSS/MC 环境 |
+| M9.3 | sdk_v1 cloud 全链验收 | **in_progress** — `verify_sdk_v1_run.py` + runbook；cloud run 待 DW |
 
 ### 1.3 明确不做
 

@@ -49,6 +49,7 @@ class DatasetFilterBody(BaseModel):
     clip_ids: list[str] | None = None
     taxonomy_version_id: str | None = None
     label_filters: dict[str, Any] | None = None
+    label_distribution: dict[str, Any] | None = None
     sample_size: int | None = Field(default=None, ge=1, le=MAX_CLIP_COUNT)
     export_preset: str | None = None
     balance_by_label: str | None = None

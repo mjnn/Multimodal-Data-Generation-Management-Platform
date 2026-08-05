@@ -1,25 +1,55 @@
-"""Taxonomy version clone lineage (M10)."""
+"""Taxonomy version clone / proposal lineage (M10)."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from hmi.taxonomy_db import get_version, list_versions
+from hmi.taxonomy_proposal_db import get_proposal_by_taxonomy_version
 
 
 def _parent_from_source(source_import: str | None) -> str | None:
+    """Resolve direct parent version id from source_import.
+
+    Conventions:
+    - ``clone:{version_id}`` — clone_version / tree_revision proposals
+    - ``...base_id={version_id}...`` — legacy / explicit proposal markers
+    """
     if not source_import:
         return None
-    prefix = "clone:"
-    if source_import.startswith(prefix):
-        return source_import[len(prefix) :].strip() or None
+    s = str(source_import).strip()
+    if s.startswith("clone:"):
+        return s[len("clone:") :].strip() or None
+    marker = "base_id="
+    if marker in s:
+        part = s.split(marker, 1)[1]
+        return part.split(":")[0].strip() or None
     return None
+
+
+def _parent_from_proposal(version_id: str) -> str | None:
+    """Fallback: proposal suggested_patch_json.base_version_id when source_import lacks clone:."""
+    proposal = get_proposal_by_taxonomy_version(version_id)
+    if not proposal:
+        return None
+    patch = proposal.get("suggested_patch_json") or {}
+    if not isinstance(patch, dict):
+        return None
+    base = str(patch.get("base_version_id") or "").strip()
+    return base or None
+
+
+def resolve_parent_version_id(version: dict[str, Any]) -> str | None:
+    parent = _parent_from_source(version.get("source_import"))
+    if parent:
+        return parent
+    return _parent_from_proposal(str(version["id"]))
 
 
 def list_child_version_ids(version_id: str) -> list[str]:
     children: list[str] = []
     for v in list_versions(include_archived=True):
-        parent = _parent_from_source(v.get("source_import"))
+        parent = resolve_parent_version_id(v)
         if parent == version_id:
             children.append(str(v["id"]))
     return children
@@ -31,7 +61,7 @@ def build_version_lineage(version_id: str) -> dict[str, Any]:
         raise ValueError("taxonomy version not found")
 
     by_id = {str(v["id"]): v for v in list_versions(include_archived=True)}
-    parent_id = _parent_from_source(version.get("source_import"))
+    parent_id = resolve_parent_version_id(version)
     ancestors: list[dict[str, Any]] = []
     cursor = parent_id
     seen: set[str] = set()
@@ -45,7 +75,7 @@ def build_version_lineage(version_id: str) -> dict[str, Any]:
                 "status": v.get("status"),
             }
         )
-        cursor = _parent_from_source(v.get("source_import"))
+        cursor = resolve_parent_version_id(v)
 
     descendants: list[dict[str, Any]] = []
 

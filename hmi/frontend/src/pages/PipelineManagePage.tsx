@@ -170,10 +170,13 @@ export function PipelineManagePage() {
   }, [needsPoll, loadExecutions])
 
   const onTableChange = (pagination: TablePaginationConfig) => {
-    if (pagination.current != null) setPage(pagination.current)
-    if (pagination.pageSize != null) {
+    if (pagination.pageSize != null && pagination.pageSize !== pageSize) {
       setPageSize(pagination.pageSize)
       setPage(1)
+      return
+    }
+    if (pagination.current != null && pagination.current !== page) {
+      setPage(pagination.current)
     }
   }
 

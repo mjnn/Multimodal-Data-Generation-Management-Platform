@@ -39,19 +39,23 @@ export function TaxonomyVersionMetaPanel({
 
   const version = useMemo(() => versions.find((v) => v.id === versionId), [versions, versionId])
 
-  const compareOptions = useMemo(
-    () =>
-      versions
-        .filter((v) => v.id !== versionId && v.status !== 'archived')
-        .map((v) => ({
-          value: v.id,
-          label:
-            v.id === parentVersionId
-              ? `${formatTaxonomyVersionLabel(v)}（直接父版本）`
-              : formatTaxonomyVersionLabel(v),
-        })),
-    [versions, versionId, parentVersionId],
-  )
+  const compareOptions = useMemo(() => {
+    const eligible = versions.filter((v) => {
+      if (v.id === versionId) return false
+      if (v.id === parentVersionId) return true
+      if (v.status === 'archived') {
+        return v.archive_reason === 'superseded'
+      }
+      return true
+    })
+    return eligible.map((v) => ({
+      value: v.id,
+      label:
+        v.id === parentVersionId
+          ? `${formatTaxonomyVersionLabel(v)}（提案基线 / 直接父版本）`
+          : formatTaxonomyVersionLabel(v),
+    }))
+  }, [versions, versionId, parentVersionId])
 
   useEffect(() => {
     void api
@@ -226,7 +230,7 @@ export function TaxonomyVersionMetaPanel({
                   </Space>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
                     相对参照版本，展示当前版本的节点新增、删除与字段变更；编辑标签树后会即时更新（含未保存修改）。
-                    默认与克隆来源（直接父版本）对比；若选已发布版，会包含历史版本间的结构差异。
+                    默认与直接父版本对比（提案版本即创建时选择的已发布基线）；可手动改选其他版本。
                   </Typography.Paragraph>
                   {dirty ? (
                     <Tag color="orange" style={{ marginTop: 4 }}>
@@ -276,7 +280,13 @@ export function TaxonomyVersionMetaPanel({
                         <Table
                           size="small"
                           rowKey="label_id"
-                          pagination={false}
+                          pagination={{
+                            pageSize: 10,
+                            showSizeChanger: true,
+                            pageSizeOptions: ['10', '20', '50'],
+                            showTotal: (total) => `共 ${total} 条`,
+                            hideOnSinglePage: true,
+                          }}
                           columns={changedColumns}
                           dataSource={diff.changed}
                         />

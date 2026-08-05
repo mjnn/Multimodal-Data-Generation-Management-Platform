@@ -5,10 +5,24 @@ import { taxonomySchemaDetailNodes } from './taxonomySchemaView'
 export type TaxonomyLevelMeta = {
   level_code: string
   level_name: string
+  /** Display order among levels (lower first). Persisted via node sort_order bands when saving. */
+  sort_order?: number
 }
 
 export type TaxonomyLevelGroup = TaxonomyLevelMeta & {
   nodes: TaxonomyNodeDetail[]
+}
+
+const LEVEL_SORT_BAND = 1000
+
+function levelSortKey(group: TaxonomyLevelGroup): number {
+  if (typeof group.sort_order === 'number' && Number.isFinite(group.sort_order)) {
+    return group.sort_order
+  }
+  if (group.nodes.length > 0) {
+    return Math.min(...group.nodes.map((n) => n.sort_order))
+  }
+  return Number.MAX_SAFE_INTEGER
 }
 
 export function groupTaxonomyLevels(
@@ -34,7 +48,50 @@ export function groupTaxonomyLevels(
   for (const group of map.values()) {
     group.nodes.sort((a, b) => a.sort_order - b.sort_order || a.label_id.localeCompare(b.label_id))
   }
-  return [...map.values()].sort((a, b) => a.level_code.localeCompare(b.level_code))
+  return [...map.values()].sort((a, b) => {
+    const ka = levelSortKey(a)
+    const kb = levelSortKey(b)
+    if (ka !== kb) return ka - kb
+    return a.level_code.localeCompare(b.level_code)
+  })
+}
+
+/** Reorder levels and rewrite node/emptyLevel sort_order so the order persists after save. */
+export function reorderTaxonomyLevels(
+  nodes: TaxonomyNodeDetail[],
+  emptyLevels: TaxonomyLevelMeta[],
+  orderedLevelCodes: string[],
+): { nodes: TaxonomyNodeDetail[]; emptyLevels: TaxonomyLevelMeta[] } {
+  const codeSet = new Set(orderedLevelCodes)
+  const groups = groupTaxonomyLevels(nodes, emptyLevels)
+  const remaining = groups.map((g) => g.level_code).filter((c) => !codeSet.has(c))
+  const finalOrder = [
+    ...orderedLevelCodes.filter((c) => groups.some((g) => g.level_code === c)),
+    ...remaining,
+  ]
+
+  const nextNodes = nodes.map((n) => {
+    const levelIndex = finalOrder.indexOf(n.level_code)
+    if (levelIndex < 0) return n
+    const siblings = nodes
+      .filter((x) => x.level_code === n.level_code)
+      .sort((a, b) => a.sort_order - b.sort_order || a.label_id.localeCompare(b.label_id))
+    const localIndex = siblings.findIndex((x) => x.label_id === n.label_id)
+    return {
+      ...n,
+      sort_order: levelIndex * LEVEL_SORT_BAND + Math.max(0, localIndex),
+    }
+  })
+
+  const nextEmpty = emptyLevels.map((l) => {
+    const levelIndex = finalOrder.indexOf(l.level_code)
+    return {
+      ...l,
+      sort_order: levelIndex >= 0 ? levelIndex * LEVEL_SORT_BAND : l.sort_order,
+    }
+  })
+
+  return { nodes: nextNodes, emptyLevels: nextEmpty }
 }
 
 export function toEditorTreeData(
@@ -68,16 +125,16 @@ export function nodesToPayload(nodes: TaxonomyNodeDetail[]): TaxonomyNodeInput[]
   return nodes
     .filter((n) => n.is_active !== false)
     .map((n) => ({
-    label_id: n.label_id,
-    level_code: n.level_code,
-    level_name: n.level_name,
-    name: n.name,
-    definition: n.definition,
-    dtype: n.dtype,
-    value_schema: n.value_schema,
-    sort_order: n.sort_order,
-    is_active: n.is_active,
-  }))
+      label_id: n.label_id,
+      level_code: n.level_code,
+      level_name: n.level_name,
+      name: n.name,
+      definition: n.definition,
+      dtype: n.dtype,
+      value_schema: n.value_schema,
+      sort_order: n.sort_order,
+      is_active: n.is_active,
+    }))
 }
 
 export function parseLevelKey(key: string): string | null {
@@ -96,7 +153,7 @@ export function renameLevel(
       : n,
   )
   const updatedEmpty = emptyLevels.map((l) =>
-    l.level_code === oldCode ? next : l,
+    l.level_code === oldCode ? { ...next, sort_order: l.sort_order } : l,
   )
   return { nodes: updatedNodes, emptyLevels: updatedEmpty }
 }

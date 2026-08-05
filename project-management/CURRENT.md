@@ -1,7 +1,7 @@
 # 当前进度指针（跨会话权威入口）
 
 > 最后更新：2026-08-05  
-> 更新人：Agent（Task 6 — 单 Driver 文档 + CURRENT）
+> 更新人：Agent（P0 前置已就绪，待 DW 跑探针）
 
 ---
 
@@ -10,8 +10,9 @@
 | 字段 | 当前值 |
 |------|--------|
 | 当前里程碑 | **M10 已出口** · Taxonomy 语义中枢 |
-| 推荐下一个工单 | **P0 DataWorks 探针**：`sdk_pipeline_driver`（`stages=extract,asr`，`batch_rows=1`）→ **M9.3 A-C**（P1 全链通过后） |
-| 禁止抢跑 | P0 mc-in-DPE 未过前勿宣称 M9.3 出口 |
+| 推荐下一个工单 | **P0 DataWorks 探针**：粘贴 `bundled/sdk_pipeline_driver_node.py` + `workflow-params-sdk-pipeline-p0.example` |
+| 本机前置 | **已就绪**：bucket2 bag+taxonomy、`aig_sdk__*` DDL、`e2e_precheck` OK、Driver bundle 已生成 |
+| 禁止抢跑 | P0 mc-in-DPE 未过前勿宣称 M9.3 出口；`dpe_image` 须含 `oms-multimodal-sdk[mc]` |
 
 ---
 

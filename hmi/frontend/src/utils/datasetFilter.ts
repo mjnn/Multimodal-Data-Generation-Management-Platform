@@ -1,25 +1,51 @@
-import type { DatasetFilterJson } from '../api/types'
-import type { LabelFilters } from '../components/DatasetLabelFilterForm'
-
-export function cleanLabelFilters(labelFilters: LabelFilters): LabelFilters {
-  return Object.fromEntries(
-    Object.entries(labelFilters).filter(([, v]) => v !== '' && v != null),
-  ) as LabelFilters
-}
+import type { DatasetFilterJson, LabelDistributionConfig } from '../api/types'
 
 export function buildFilterJson(
-  labelFilters: LabelFilters,
+  labelDistribution: LabelDistributionConfig | null,
   sampleSize?: number | null,
   extra?: Partial<DatasetFilterJson>,
 ): DatasetFilterJson {
-  const cleaned = cleanLabelFilters(labelFilters)
   const filter: DatasetFilterJson = {
     review_status: 'reviewed',
     include_pending_review: false,
     ...extra,
   }
-  if (Object.keys(cleaned).length > 0) {
-    filter.label_filters = cleaned
+  if (labelDistribution?.label_id) {
+    if (labelDistribution.kind === 'enum') {
+      const weights: Record<string, number> = {}
+      for (const [k, v] of Object.entries(labelDistribution.weights)) {
+        if (v != null && v > 0) weights[k] = v
+      }
+      filter.label_distribution = {
+        label_id: labelDistribution.label_id,
+        kind: 'enum',
+        weights,
+      }
+    } else {
+      const buckets = labelDistribution.buckets
+        .filter(
+          (b) =>
+            b.weight != null &&
+            b.weight > 0 &&
+            ((b.match === 'exact' && b.value?.trim()) ||
+              (b.match === 'range' && (b.min?.trim() || b.max?.trim()))),
+        )
+        .map((b) => ({
+          id: b.id,
+          match: b.match,
+          value: b.value?.trim() || undefined,
+          min: b.min?.trim() || undefined,
+          max: b.max?.trim() || undefined,
+          weight: b.weight,
+        }))
+      if (buckets.length > 0) {
+        filter.label_distribution = {
+          label_id: labelDistribution.label_id,
+          kind: 'string',
+          buckets,
+        }
+      }
+    }
   }
   if (sampleSize != null && sampleSize > 0) {
     filter.sample_size = sampleSize
@@ -30,7 +56,7 @@ export function buildFilterJson(
 /** Merge parent snapshot filter with derive wizard overrides (balance + clip label filter + export crop). */
 export function buildDeriveFilterJson(
   parent: DatasetFilterJson,
-  labelFilters: LabelFilters,
+  labelFilters: Record<string, string | boolean>,
   balance: {
     balance_by_label?: string | null
     min_per_class?: number | null
@@ -40,7 +66,9 @@ export function buildDeriveFilterJson(
   },
   exportLabelIds?: string[] | null,
 ): DatasetFilterJson {
-  const cleaned = cleanLabelFilters(labelFilters)
+  const cleaned = Object.fromEntries(
+    Object.entries(labelFilters).filter(([, v]) => v !== '' && v != null),
+  ) as Record<string, string | boolean>
   const merged: DatasetFilterJson = {
     ...parent,
     balance_by_label: balance.balance_by_label?.trim() || null,

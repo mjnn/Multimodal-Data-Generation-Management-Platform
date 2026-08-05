@@ -122,18 +122,172 @@ def main() -> None:
         headers=headers,
         json={
             "title": "M10 test proposal",
-            "proposal_type": "scene_cluster",
-            "evidence": {"clip_ids": [], "source": "test"},
+            "base_version_id": cov_version["id"],
+            "evidence": {"source": "test", "note": "admin tree revision evidence"},
+            "nodes": [
+                {
+                    "label_id": "L1.1.weather",
+                    "level_code": "L1",
+                    "name": "Weather",
+                    "dtype": "enum",
+                    "value_schema": {"values": ["sunny", "rainy", "fog"]},
+                    "sort_order": 0,
+                    "is_active": True,
+                },
+            ],
         },
     )
     assert proposal.status_code == 201, proposal.text
     pid = proposal.json()["id"]
+    assert proposal.json().get("taxonomy_version_id")
     print("OK POST proposal")
 
     listed = client.get("/api/taxonomy/proposals", headers=headers)
     assert listed.status_code == 200
     assert listed.json()["total"] >= 1
     print("OK GET proposals")
+
+    reviewer_name = f"m10_reviewer_{suffix}"
+    if get_user_by_username(reviewer_name) is None:
+        create_user(reviewer_name, "reviewpass123", roles=["reviewer"])
+    reviewer_h = {"Authorization": f"Bearer {_login(client, reviewer_name, 'reviewpass123')}"}
+    reviewer_list = client.get("/api/taxonomy/proposals", headers=reviewer_h)
+    assert reviewer_list.status_code == 200, reviewer_list.text
+    print("OK reviewer GET proposals read-only")
+
+    user_proposal = client.post(
+        "/api/taxonomy/proposals",
+        headers=reviewer_h,
+        json={
+            "title": "M10 tree revision proposal",
+            "base_version_id": cov_version["id"],
+            "evidence": {"source": "test", "note": "rename weather display name based on review notes"},
+            "nodes": [
+                {
+                    "label_id": "L1.1.weather",
+                    "level_code": "L1",
+                    "name": "Weather Renamed",
+                    "dtype": "enum",
+                    "value_schema": {"values": ["sunny", "rainy"]},
+                    "sort_order": 0,
+                    "is_active": True,
+                },
+            ],
+        },
+    )
+    assert user_proposal.status_code == 201, user_proposal.text
+    proposal_body = user_proposal.json()
+    assert proposal_body.get("taxonomy_version_id"), proposal_body
+    assert proposal_body.get("proposal_type") == "tree_revision"
+    prop_vid = proposal_body["taxonomy_version_id"]
+    prop_tree = client.get(f"/api/taxonomy/versions/{prop_vid}/tree", headers=reviewer_h)
+    assert prop_tree.status_code == 200, prop_tree.text
+    assert prop_tree.json()["version"]["status"] == "proposal"
+    auto_code = prop_tree.json()["version"]["version_code"]
+    assert str(auto_code).startswith("proposal-"), auto_code
+    assert prop_tree.json().get("linked_proposal") is not None
+    print("OK reviewer POST proposal materializes proposal version")
+
+    custom_code = f"m10-custom-proposal-{suffix}"
+    custom_proposal = client.post(
+        "/api/taxonomy/proposals",
+        headers=reviewer_h,
+        json={
+            "title": "M10 custom version_code",
+            "base_version_id": cov_version["id"],
+            "version_code": custom_code,
+            "evidence": {"source": "test", "note": "user-supplied version code"},
+            "nodes": [
+                {
+                    "label_id": "L1.1.weather",
+                    "level_code": "L1",
+                    "name": "Weather Custom",
+                    "dtype": "enum",
+                    "value_schema": {"values": ["sunny"]},
+                    "sort_order": 0,
+                    "is_active": True,
+                },
+            ],
+        },
+    )
+    assert custom_proposal.status_code == 201, custom_proposal.text
+    custom_vid = custom_proposal.json()["taxonomy_version_id"]
+    custom_tree = client.get(f"/api/taxonomy/versions/{custom_vid}/tree", headers=reviewer_h)
+    assert custom_tree.status_code == 200, custom_tree.text
+    assert custom_tree.json()["version"]["version_code"] == custom_code
+    print("OK proposal uses caller-supplied version_code")
+
+    dup_code = client.post(
+        "/api/taxonomy/proposals",
+        headers=reviewer_h,
+        json={
+            "title": "duplicate version_code",
+            "base_version_id": cov_version["id"],
+            "version_code": custom_code,
+            "evidence": {"source": "test", "note": "should conflict"},
+            "nodes": [
+                {
+                    "label_id": "L1.1.weather",
+                    "level_code": "L1",
+                    "name": "Weather",
+                    "sort_order": 0,
+                    "is_active": True,
+                },
+            ],
+        },
+    )
+    assert dup_code.status_code == 409, dup_code.text
+    print("OK duplicate proposal version_code → 409")
+
+    prop_lineage = client.get(f"/api/taxonomy/versions/{prop_vid}/lineage", headers=reviewer_h)
+    assert prop_lineage.status_code == 200, prop_lineage.text
+    lineage_body = prop_lineage.json()
+    assert lineage_body.get("parent_version_id") == cov_version["id"], lineage_body
+    assert any(n.get("id") == cov_version["id"] for n in lineage_body.get("lineage_chain") or [])
+    print("OK proposal lineage parent is base published version")
+
+    missing_evidence = client.post(
+        "/api/taxonomy/proposals",
+        headers=reviewer_h,
+        json={
+            "title": "missing evidence",
+            "base_version_id": cov_version["id"],
+            "evidence": {"source": "test"},
+            "nodes": [
+                {
+                    "label_id": "L1.1.weather",
+                    "level_code": "L1",
+                    "name": "Weather",
+                    "sort_order": 0,
+                    "is_active": True,
+                },
+            ],
+        },
+    )
+    assert missing_evidence.status_code == 422, missing_evidence.text
+    print("OK evidence note required")
+
+    tax_mgr_name = f"m10_taxonomy_mgr_{suffix}"
+    if get_user_by_username(tax_mgr_name) is None:
+        create_user(tax_mgr_name, "taxmgrpass123", roles=["taxonomy_manager"])
+    tax_mgr_h = {"Authorization": f"Bearer {_login(client, tax_mgr_name, 'taxmgrpass123')}"}
+    tax_draft = client.post(
+        "/api/taxonomy/versions",
+        headers=tax_mgr_h,
+        json={"version_code": f"m10_taxmgr_{suffix}"},
+    )
+    assert tax_draft.status_code == 201, tax_draft.text
+    print("OK taxonomy_manager POST version")
+
+    approve = client.post(
+        f"/api/taxonomy/proposals/{proposal_body['id']}/approve-draft",
+        headers=tax_mgr_h,
+    )
+    assert approve.status_code == 200, approve.text
+    approved = approve.json()
+    assert approved["proposal"]["status"] == "merged"
+    assert approved["version"]["status"] == "draft"
+    print("OK approve proposal to draft")
 
     patched = client.patch(
         f"/api/taxonomy/proposals/{pid}",

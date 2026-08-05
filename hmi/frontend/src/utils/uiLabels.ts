@@ -14,6 +14,10 @@ export function formatAuditResourceType(type: string): string {
   return AUDIT_RESOURCE_TYPE_LABELS[type] ?? type
 }
 
+export const AUDIT_RESOURCE_TYPE_FILTER_OPTIONS = Object.entries(AUDIT_RESOURCE_TYPE_LABELS).map(
+  ([value, label]) => ({ value, label }),
+)
+
 export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
   open: '待处理',
   merged: '已合并',
@@ -25,10 +29,12 @@ export function formatProposalStatus(status: string): string {
 }
 
 export const PROPOSAL_TYPE_LABELS: Record<string, string> = {
+  tree_revision: '标签树修订',
+  new_node: '新增节点',
+  extend_enum: '修改枚举',
+  deprecate_node: '删除节点',
+  rename_label: '修改标签名称',
   scene_cluster: '相似簇',
-  new_node: '新建节点',
-  extend_enum: '扩展枚举',
-  deprecate_node: '废弃节点',
   other: '其他',
 }
 

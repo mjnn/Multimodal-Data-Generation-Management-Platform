@@ -10,8 +10,17 @@ from typing import Any
 from hmi.app_db import _utc_now_iso, db_conn
 
 PROPOSAL_TYPES = frozenset(
-    {"new_node", "extend_enum", "deprecate_node", "scene_cluster", "other"}
+    {
+        "tree_revision",
+        "new_node",
+        "extend_enum",
+        "deprecate_node",
+        "rename_label",
+        "scene_cluster",
+        "other",
+    }
 )
+USER_PROPOSAL_TYPES = frozenset({"tree_revision"})
 PROPOSAL_STATUSES = frozenset({"open", "merged", "rejected"})
 
 _SCHEMA = """
@@ -19,7 +28,7 @@ CREATE TABLE IF NOT EXISTS taxonomy_proposal (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   proposal_type TEXT NOT NULL CHECK (proposal_type IN (
-    'new_node','extend_enum','deprecate_node','scene_cluster','other'
+    'tree_revision','new_node','extend_enum','deprecate_node','rename_label','scene_cluster','other'
   )),
   target_label_id TEXT,
   suggested_patch_json TEXT,
@@ -33,7 +42,46 @@ CREATE TABLE IF NOT EXISTS taxonomy_proposal (
 );
 CREATE INDEX IF NOT EXISTS idx_taxonomy_proposal_status
   ON taxonomy_proposal (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_taxonomy_proposal_version
+  ON taxonomy_proposal (taxonomy_version_id);
 """
+
+
+def _migrate_proposal_type_enum(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='taxonomy_proposal'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    if "tree_revision" in row[0]:
+        return
+    conn.executescript(
+        """
+        CREATE TABLE taxonomy_proposal_new (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          proposal_type TEXT NOT NULL CHECK (proposal_type IN (
+            'tree_revision','new_node','extend_enum','deprecate_node','rename_label','scene_cluster','other'
+          )),
+          target_label_id TEXT,
+          suggested_patch_json TEXT,
+          evidence_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','merged','rejected')),
+          taxonomy_version_id TEXT REFERENCES label_taxonomy_version(id),
+          merged_version_id TEXT REFERENCES label_taxonomy_version(id),
+          created_by TEXT REFERENCES app_user(id),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO taxonomy_proposal_new SELECT * FROM taxonomy_proposal;
+        DROP TABLE taxonomy_proposal;
+        ALTER TABLE taxonomy_proposal_new RENAME TO taxonomy_proposal;
+        CREATE INDEX IF NOT EXISTS idx_taxonomy_proposal_status
+          ON taxonomy_proposal (status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_taxonomy_proposal_version
+          ON taxonomy_proposal (taxonomy_version_id);
+        """
+    )
 
 
 def ensure_taxonomy_proposal_schema() -> None:
@@ -42,6 +90,7 @@ def ensure_taxonomy_proposal_schema() -> None:
     APP_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(APP_DB_PATH) as conn:
         conn.executescript(_SCHEMA)
+        _migrate_proposal_type_enum(conn)
         conn.commit()
 
 
@@ -139,6 +188,37 @@ def get_proposal(proposal_id: str) -> dict[str, Any] | None:
     with db_conn() as conn:
         row = conn.execute(
             "SELECT * FROM taxonomy_proposal WHERE id = ?", (proposal_id,)
+        ).fetchone()
+    return _row_to_proposal(row) if row else None
+
+
+def get_open_proposal_for_version(version_id: str) -> dict[str, Any] | None:
+    ensure_taxonomy_proposal_schema()
+    with db_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM taxonomy_proposal
+            WHERE taxonomy_version_id = ? AND status = 'open'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (version_id,),
+        ).fetchone()
+    return _row_to_proposal(row) if row else None
+
+
+def get_proposal_by_taxonomy_version(version_id: str) -> dict[str, Any] | None:
+    """Latest proposal that materialized this taxonomy version (any status)."""
+    ensure_taxonomy_proposal_schema()
+    with db_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM taxonomy_proposal
+            WHERE taxonomy_version_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (version_id,),
         ).fetchone()
     return _row_to_proposal(row) if row else None
 

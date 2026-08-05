@@ -25,6 +25,7 @@ DEFAULT_FILTER: dict[str, Any] = {
     "clip_ids": None,
     "taxonomy_version_id": None,
     "label_filters": None,
+    "label_distribution": None,
     "sample_size": None,
     "export_preset": "minimal",
     "balance_by_label": None,

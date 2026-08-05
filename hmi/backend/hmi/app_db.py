@@ -22,12 +22,14 @@ VALID_ROLES = frozenset(
         "dataset_manager",
         "model_trainer",
         "pipeline_manager",
+        "taxonomy_manager",
         "anonymous",
     }
 )
 
 _ROLE_CHECK = (
-    "'admin','reviewer','dataset_manager','model_trainer','pipeline_manager','anonymous'"
+    "'admin','reviewer','dataset_manager','model_trainer','pipeline_manager',"
+    "'taxonomy_manager','anonymous'"
 )
 
 _SCHEMA = f"""
@@ -83,7 +85,7 @@ def _migrate_app_user_role_enum(conn: sqlite3.Connection) -> None:
     if not row or not row[0]:
         return
     ddl = row[0]
-    if "pipeline_manager" in ddl and "anonymous" in ddl:
+    if "taxonomy_manager" in ddl:
         return
     conn.executescript(
         f"""

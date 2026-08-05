@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from functools import lru_cache
 
 import oss2
@@ -48,12 +49,18 @@ def sign_image(
 
 
 def upload_rosbag_bytes(filename: str, data: bytes) -> str:
+    """Upload one bag to cloud OSS under a content-unique prefix.
+
+    Path: ``{oss_data_prefix}/{stem}__{sha256[:12]}/{filename}``.
+    Same basename + different bytes must not share a key (browser multi-upload).
+    """
     s = get_settings()
     stem = filename
     if stem.lower().endswith(".bag"):
         stem = stem[:-4]
-    # rosbags/{collection_dir}/output.bag — use filename stem as folder
-    object_key = f"{s['oss_data_prefix'].strip('/')}/{stem}/{filename}"
+    # basename-only stem when filename has no dirs; nested paths keep full stem slug
+    digest = hashlib.sha256(data).hexdigest()[:12]
+    object_key = f"{s['oss_data_prefix'].strip('/')}/{stem}__{digest}/{filename}"
     bucket = _bucket()
     bucket.put_object(object_key, data, headers={"Content-Type": "application/octet-stream"})
     return object_key

@@ -23,7 +23,7 @@ import type {
   ReviewAssignmentItem,
   ReviewAssignmentReviewer,
 } from '../api/types'
-import { ContentCard } from '../components/ui'
+import { ContentCard, FromAuditBackLink } from '../components/ui'
 
 function buildCheckableTree(nodes: LabelTaxonomyNode[]): DataNode[] {
   return nodes.map((group) => ({
@@ -268,6 +268,9 @@ export function ReviewAssignmentAdminPage() {
 
   return (
     <div data-testid="review-assignment-admin-page">
+      <div style={{ marginBottom: 8 }}>
+        <FromAuditBackLink />
+      </div>
       <ContentCard title="新建派发任务">
         <Form
           form={form}

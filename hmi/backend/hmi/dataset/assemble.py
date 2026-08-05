@@ -101,6 +101,23 @@ def normalize_filter(filter_json: dict[str, Any] | None) -> dict[str, Any]:
     base["export_taxonomy_version_id"] = (
         str(export_taxonomy_version_id).strip() if export_taxonomy_version_id else None
     )
+    label_distribution = base.get("label_distribution")
+    if isinstance(label_distribution, dict):
+        lid = str(label_distribution.get("label_id") or "").strip()
+        if lid:
+            kind = str(label_distribution.get("kind") or "enum").strip()
+            cleaned: dict[str, Any] = {"label_id": lid, "kind": kind}
+            if kind == "string":
+                buckets = label_distribution.get("buckets")
+                cleaned["buckets"] = buckets if isinstance(buckets, list) else []
+            else:
+                weights = label_distribution.get("weights")
+                cleaned["weights"] = weights if isinstance(weights, dict) else {}
+            base["label_distribution"] = cleaned
+        else:
+            base["label_distribution"] = None
+    else:
+        base["label_distribution"] = None
     return base
 
 
@@ -149,6 +166,11 @@ def build_report_from_skipped(
 
 
 def apply_sample(reviews: list[dict[str, Any]], filt: dict[str, Any]) -> list[dict[str, Any]]:
+    from hmi.dataset.label_distribution import apply_label_distribution_sample
+
+    distributed = apply_label_distribution_sample(reviews, filt)
+    if distributed is not None:
+        return distributed
     sample_size = filt.get("sample_size")
     if not sample_size:
         return reviews

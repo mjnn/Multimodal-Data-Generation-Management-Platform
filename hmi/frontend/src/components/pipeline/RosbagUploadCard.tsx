@@ -1,11 +1,25 @@
-import { DeleteOutlined, InboxOutlined, PlayCircleOutlined } from '@ant-design/icons'
+/**
+ * 管线管理 · Rosbag 暂存与批量执行入口。
+ *
+ * - 多选 .bag / 「选择采集文件夹」/ 拖入目录树 → 暂存区
+ * - 文件夹场景会递归收集 .bag，列表展示相对路径
+ * - 确认参数后 multipart 上传；File.name 带相对路径，后端按内容哈希分目录落盘
+ */
+import { DeleteOutlined, FolderOpenOutlined, InboxOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { Button, Descriptions, List, Modal, Progress, Space, Typography, Upload, message } from 'antd'
 import type { UploadProps } from 'antd'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, type DragEvent } from 'react'
 import { api } from '../../api'
 import type { PipelineRunSettings, TaxonomyArchiveReason } from '../../api/types'
 import { useDataSourceMode } from '../../context/DataSourceModeContext'
 import { apiErrorMessage } from '../../utils/apiError'
+import {
+  collectBagsFromDataTransfer,
+  fileForUpload,
+  isBagFileName,
+  toStagedBag,
+  type StagedBagFile,
+} from '../../utils/rosbagStaging'
 import { formatTaxonomyVersionLabel } from '../../utils/taxonomyDisplay'
 
 type TaxonomyVersionOption = {
@@ -69,19 +83,21 @@ type Props = {
   onUploaded?: () => void
 }
 
-type StagedBag = {
-  uid: string
-  file: File
-}
-
-function isBagFile(name: string): boolean {
-  return name.toLowerCase().endsWith('.bag')
-}
+type StagedBag = StagedBagFile & { uid: string }
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function stagingKey(item: Pick<StagedBag, 'relativePath' | 'file'>): string {
+  return `${item.relativePath}::${item.file.size}`
+}
+
+function dataTransferHasDirectory(dt: DataTransfer | null): boolean {
+  if (!dt?.items?.length) return false
+  return Array.from(dt.items).some((item) => Boolean(item.webkitGetAsEntry?.()?.isDirectory))
 }
 
 type UploadProgressState = {
@@ -94,6 +110,7 @@ export function RosbagUploadCard({ onUploaded }: Props) {
   const { bumpDataRevision, dataSource } = useDataSourceMode()
   const [staging, setStaging] = useState<StagedBag[]>([])
   const [uploading, setUploading] = useState(false)
+  const [parsingFolders, setParsingFolders] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null)
   const [paramsOpen, setParamsOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -101,21 +118,45 @@ export function RosbagUploadCard({ onUploaded }: Props) {
     settings: PipelineRunSettings
     taxonomyVersions: TaxonomyVersionOption[]
   } | null>(null)
-  const warnedInvalidRef = useRef(false)
+  const fileBatchRef = useRef<{ total: number; bags: number; done: number } | null>(null)
+  /** Skip antd beforeUpload when we already handled a folder drop via FileSystemEntry walk. */
+  const skipAntdDropBatchRef = useRef(false)
 
   const stagingTotalBytes = useMemo(
     () => staging.reduce((sum, item) => sum + item.file.size, 0),
     [staging],
   )
 
-  const addToStaging = useCallback((file: File, uid: string) => {
+  const mergeIntoStaging = useCallback((items: StagedBagFile[]) => {
+    if (!items.length) {
+      message.warning('未找到 .bag 文件（请选择含 bag 的采集文件夹或其时间戳子目录）')
+      return
+    }
     setStaging((prev) => {
-      const dup = prev.some((s) => s.file.name === file.name && s.file.size === file.size)
-      if (dup) {
-        message.info(`${file.name} 已在暂存区`)
-        return prev
+      const seen = new Set(prev.map((s) => stagingKey(s)))
+      const next = [...prev]
+      let added = 0
+      let skipped = 0
+      for (const item of items) {
+        const key = stagingKey(item)
+        if (seen.has(key)) {
+          skipped += 1
+          continue
+        }
+        seen.add(key)
+        next.push({
+          uid: `${key}::${item.file.lastModified}::${Math.random().toString(36).slice(2, 8)}`,
+          file: item.file,
+          relativePath: item.relativePath,
+        })
+        added += 1
       }
-      return [...prev, { uid, file }]
+      if (added > 0) {
+        message.success(`已加入暂存 ${added} 个 .bag${skipped ? `（跳过重复 ${skipped}）` : ''}`)
+      } else if (skipped > 0) {
+        message.info('所选 bag 均已在暂存区')
+      }
+      return next
     })
   }, [])
 
@@ -128,21 +169,65 @@ export function RosbagUploadCard({ onUploaded }: Props) {
   }, [])
 
   const beforeUpload: UploadProps['beforeUpload'] = (file, fileList) => {
-    if (!isBagFile(file.name)) {
-      if (!warnedInvalidRef.current) {
-        const invalidCount = fileList.filter((item) => !isBagFile(item.name)).length
-        if (invalidCount > 0) {
-          message.warning(`已跳过 ${invalidCount} 个非 .bag 文件`)
-        }
-        warnedInvalidRef.current = true
-        window.setTimeout(() => {
-          warnedInvalidRef.current = false
-        }, 0)
+    if (skipAntdDropBatchRef.current) {
+      if (fileList.indexOf(file) === fileList.length - 1) {
+        skipAntdDropBatchRef.current = false
       }
       return Upload.LIST_IGNORE
     }
-    addToStaging(file as File, file.uid)
-    return false
+    const total = fileList.length
+    if (!fileBatchRef.current || fileBatchRef.current.total !== total) {
+      fileBatchRef.current = { total, bags: 0, done: 0 }
+    }
+    const batch = fileBatchRef.current
+    batch.done += 1
+    if (isBagFileName(file.name)) {
+      batch.bags += 1
+      const staged = toStagedBag(file as File)
+      setStaging((prev) => {
+        if (prev.some((s) => stagingKey(s) === stagingKey(staged))) return prev
+        return [
+          ...prev,
+          {
+            uid: `${stagingKey(staged)}::${file.uid}`,
+            file: staged.file,
+            relativePath: staged.relativePath,
+          },
+        ]
+      })
+    }
+    if (batch.done === batch.total) {
+      if (batch.bags > 0) {
+        message.success(`已解析 ${batch.bags} 个 .bag（共扫描 ${batch.total} 个文件）`)
+      } else {
+        message.warning('未找到 .bag 文件（请选择含 bag 的采集文件夹或其时间戳子目录）')
+      }
+      fileBatchRef.current = null
+    }
+    return Upload.LIST_IGNORE
+  }
+
+  const onZoneDragOver = (event: DragEvent) => {
+    if (dataTransferHasDirectory(event.dataTransfer)) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+  }
+
+  const onZoneDrop = (event: DragEvent) => {
+    if (!dataTransferHasDirectory(event.dataTransfer)) return
+    event.preventDefault()
+    event.stopPropagation()
+    skipAntdDropBatchRef.current = true
+    const dt = event.dataTransfer
+    setParsingFolders(true)
+    void collectBagsFromDataTransfer(dt)
+      .then((bags) => mergeIntoStaging(bags))
+      .catch(() => {
+        skipAntdDropBatchRef.current = false
+        message.error('解析拖入文件夹失败')
+      })
+      .finally(() => setParsingFolders(false))
   }
 
   const openParamsModal = async () => {
@@ -170,7 +255,7 @@ export function RosbagUploadCard({ onUploaded }: Props) {
     const expectedTotal = stagingTotalBytes
     setUploadProgress({ percent: 0, loaded: 0, total: expectedTotal })
     try {
-      const result = await api.createPipelineExecution(staging.map((s) => s.file), {
+      const result = await api.createPipelineExecution(staging.map((s) => fileForUpload(s)), {
         onUploadProgress: ({ loaded, total, percent }) => {
           setUploadProgress({
             percent,
@@ -195,24 +280,37 @@ export function RosbagUploadCard({ onUploaded }: Props) {
   }
 
   const localOnly = dataSource === 'local'
+  const busy = uploading || parsingFolders
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Upload.Dragger
-        accept=".bag"
-        multiple
-        showUploadList={false}
-        beforeUpload={beforeUpload}
-        disabled={uploading}
-      >
-        <p className="ant-upload-drag-icon">
-          <InboxOutlined />
-        </p>
-        <Typography.Text strong>添加 ROSbag 到暂存区</Typography.Text>
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
-          选择或拖入多个 .bag，先进入下方暂存列表；确认执行参数后才会写入 oss/rosbags/ 并加入 SDK 执行队列
-        </Typography.Paragraph>
-      </Upload.Dragger>
+      <div onDragOver={onZoneDragOver} onDrop={onZoneDrop}>
+        <Upload.Dragger
+          accept=".bag"
+          multiple
+          showUploadList={false}
+          beforeUpload={beforeUpload}
+          disabled={busy}
+        >
+          <p className="ant-upload-drag-icon">
+            <InboxOutlined />
+          </p>
+          <Typography.Text strong>添加 ROSbag 到暂存区</Typography.Text>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+            可多选 .bag，或拖入采集根目录 / 多个时间戳文件夹（自动递归找 .bag）。同名不同内容按内容哈希分目录保存。
+          </Typography.Paragraph>
+        </Upload.Dragger>
+      </div>
+
+      <Upload directory multiple showUploadList={false} beforeUpload={beforeUpload} disabled={busy}>
+        <Button icon={<FolderOpenOutlined />} loading={parsingFolders} disabled={busy}>
+          选择采集文件夹（递归解析 .bag）
+        </Button>
+      </Upload>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        例如选择 <code>0804caiji</code>
+        ：会解析其下每个时间戳子目录中的 bag。可多次点选以加入多个文件夹；也可一次拖入多个文件夹。
+      </Typography.Text>
 
       {staging.length > 0 ? (
         <>
@@ -232,27 +330,30 @@ export function RosbagUploadCard({ onUploaded }: Props) {
                       size="small"
                       danger
                       icon={<DeleteOutlined />}
-                      disabled={uploading}
+                      disabled={busy}
                       onClick={() => removeStaged(item.uid)}
                     >
                       移除
                     </Button>,
                   ]}
                 >
-                  <List.Item.Meta title={item.file.name} description={formatBytes(item.file.size)} />
+                  <List.Item.Meta
+                    title={item.relativePath}
+                    description={formatBytes(item.file.size)}
+                  />
                 </List.Item>
               )}
             />
           </div>
           <Space wrap>
-            <Button onClick={clearStaging} disabled={uploading}>
+            <Button onClick={clearStaging} disabled={busy}>
               清空暂存
             </Button>
             <Button
               type="primary"
               icon={<PlayCircleOutlined />}
               loading={uploading}
-              disabled={!localOnly}
+              disabled={!localOnly || parsingFolders}
               onClick={() => void openParamsModal()}
             >
               确认执行管线
@@ -266,7 +367,7 @@ export function RosbagUploadCard({ onUploaded }: Props) {
         </>
       ) : (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          暂存区为空，请先添加 .bag 文件
+          暂存区为空，请添加 .bag 或选择采集文件夹
         </Typography.Text>
       )}
 
@@ -323,7 +424,9 @@ export function RosbagUploadCard({ onUploaded }: Props) {
             />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {formatBytes(uploadProgress.loaded)} / {formatBytes(uploadProgress.total)}
-              {staging.length === 1 ? ` · ${staging[0]?.file.name}` : ` · 共 ${staging.length} 个文件`}
+              {staging.length === 1
+                ? ` · ${staging[0]?.relativePath}`
+                : ` · 共 ${staging.length} 个文件`}
             </Typography.Text>
           </Space>
         ) : (

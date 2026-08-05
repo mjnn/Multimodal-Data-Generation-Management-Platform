@@ -40,7 +40,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { api } from '../api'
 
-import type { TaxonomyNodeDetail, TaxonomyVersion } from '../api/types'
+import type { TaxonomyNodeDetail, TaxonomyProposal, TaxonomyVersion } from '../api/types'
 
 import { TaxonomyTreeEditor } from '../components/TaxonomyTreeEditor'
 import { TaxonomyContextBar } from '../components/TaxonomyContextBar'
@@ -53,7 +53,7 @@ import { useAuth } from '../auth/AuthContext'
 
 import { canManageTaxonomy } from '../auth/roles'
 
-import { ContentCard, PageHeader, PageStack } from '../components/ui'
+import { ContentCard, FromAuditBackLink, FROM_AUDIT_PARAM, FROM_AUDIT_VALUE, PageHeader, PageStack, useFromAudit } from '../components/ui'
 
 import { nodesToPayload, type TaxonomyLevelMeta } from '../utils/taxonomyTree'
 import { formatTaxonomyImpactWarning } from '../utils/taxonomyDisplay'
@@ -63,6 +63,8 @@ import { formatTaxonomyImpactWarning } from '../utils/taxonomyDisplay'
 const STATUS_COLOR: Record<string, string> = {
 
   draft: 'processing',
+
+  proposal: 'warning',
 
   published: 'success',
 
@@ -75,6 +77,8 @@ const STATUS_COLOR: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
 
   draft: '草稿',
+
+  proposal: '提案中',
 
   published: '已发布',
 
@@ -133,6 +137,8 @@ export function TaxonomyPage() {
 
   const isAdmin = canManageTaxonomy(user?.roles)
 
+  const fromAudit = useFromAudit()
+
 
 
   const [versions, setVersions] = useState<TaxonomyVersion[]>([])
@@ -146,6 +152,8 @@ export function TaxonomyPage() {
   const [emptyLevels, setEmptyLevels] = useState<TaxonomyLevelMeta[]>([])
 
   const [selectedVersion, setSelectedVersion] = useState<TaxonomyVersion | null>(null)
+
+  const [linkedProposal, setLinkedProposal] = useState<TaxonomyProposal | null>(null)
 
   const [dirty, setDirty] = useState(false)
 
@@ -213,6 +221,8 @@ export function TaxonomyPage() {
 
       setSelectedVersion(data.version)
 
+      setLinkedProposal(data.linked_proposal ?? null)
+
       setNodes(data.nodes.filter((n) => n.is_active !== false))
 
       setEmptyLevels([])
@@ -224,6 +234,8 @@ export function TaxonomyPage() {
       message.error('加载标签树失败')
 
       setSelectedVersion(null)
+
+      setLinkedProposal(null)
 
       setNodes([])
 
@@ -256,6 +268,8 @@ export function TaxonomyPage() {
     } else {
 
       setSelectedVersion(null)
+
+      setLinkedProposal(null)
 
       setNodes([])
 
@@ -324,6 +338,14 @@ export function TaxonomyPage() {
     () => (isAdmin ? versions.filter((v) => v.status === 'draft') : []),
 
     [versions, isAdmin],
+
+  )
+
+  const proposalVersions = useMemo(
+
+    () => versions.filter((v) => v.status === 'proposal'),
+
+    [versions],
 
   )
 
@@ -484,6 +506,32 @@ export function TaxonomyPage() {
 
   }
 
+  const onApproveProposal = async (proposalId: string) => {
+    try {
+      const result = await api.approveTaxonomyProposalDraft(proposalId)
+      message.success('已通过审核，提案版本已转为草稿')
+      await loadVersions()
+      if (result.version?.id) {
+        openVersion(result.version.id)
+      } else if (versionId) {
+        await loadTree(versionId)
+      }
+    } catch (e) {
+      message.error(apiErrorMessage(e, '审核失败'))
+    }
+  }
+
+  const onRejectProposal = async (proposalId: string) => {
+    try {
+      await api.patchTaxonomyProposal(proposalId, { status: 'rejected' })
+      message.success('已拒绝提案')
+      await loadVersions()
+      if (versionId) navigate('/taxonomy')
+    } catch (e) {
+      message.error(apiErrorMessage(e, '拒绝失败'))
+    }
+  }
+
 
 
   const onSaveAll = async () => {
@@ -614,7 +662,7 @@ export function TaxonomyPage() {
 
           ) : null}
 
-          {isAdmin && row.status !== 'archived' ? (
+          {isAdmin && row.status !== 'archived' && row.status !== 'proposal' ? (
 
             <Popconfirm title="确认删除此版本？" onConfirm={() => void onArchive(row)}>
 
@@ -646,22 +694,25 @@ export function TaxonomyPage() {
 
         title="标签树管理"
 
-        description="浏览已发布标签树；管理员可新建草稿、在查看页编辑后发布。"
+        description={
+          isAdmin
+            ? '浏览已发布标签树；管理员或标签树管理员可新建草稿、在查看页编辑后发布。'
+            : '浏览已发布标签树、标签覆盖率与提案队列（只读）。'
+        }
 
         icon={<ApartmentOutlined />}
 
         extra={
-
-          isAdmin ? (
-
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-
-              新建版本
-
-            </Button>
-
+          fromAudit || isAdmin ? (
+            <Space wrap>
+              <FromAuditBackLink />
+              {isAdmin ? (
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+                  新建版本
+                </Button>
+              ) : null}
+            </Space>
           ) : undefined
-
         }
 
       />
@@ -670,7 +721,17 @@ export function TaxonomyPage() {
 
       <Tabs
         activeKey={hubTab}
-        onChange={(key) => setSearchParams(key === 'versions' ? {} : { tab: key })}
+        onChange={(key) => {
+          const next = new URLSearchParams()
+          if (key !== 'versions') next.set('tab', key)
+          if (searchParams.get(FROM_AUDIT_PARAM) === FROM_AUDIT_VALUE) {
+            next.set(FROM_AUDIT_PARAM, FROM_AUDIT_VALUE)
+          }
+          setSearchParams(next)
+          if (key === 'versions') {
+            void loadVersions()
+          }
+        }}
         items={[
           {
             key: 'versions',
@@ -695,11 +756,53 @@ export function TaxonomyPage() {
 
           dataSource={releasedVersions}
 
-          pagination={{ pageSize: 10 }}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50'],
+            showTotal: (total) => `共 ${total} 条`,
+          }}
 
         />
 
       </ContentCard>
+
+
+
+      {proposalVersions.length > 0 ? (
+
+        <ContentCard title="提案中版本">
+
+          <Typography.Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12 }}>
+
+            由用户提案自动生成的标签树预览；管理员或标签树管理员审核通过后将转为草稿。
+
+          </Typography.Paragraph>
+
+          <Table
+
+            rowKey="id"
+
+            size="small"
+
+            loading={versionsLoading}
+
+            columns={versionColumns}
+
+            dataSource={proposalVersions}
+
+            pagination={{
+              pageSize: 10,
+              showSizeChanger: true,
+              pageSizeOptions: ['10', '20', '50'],
+              showTotal: (total) => `共 ${total} 条`,
+            }}
+
+          />
+
+        </ContentCard>
+
+      ) : null}
 
 
 
@@ -725,7 +828,12 @@ export function TaxonomyPage() {
 
             dataSource={draftVersions}
 
-            pagination={{ pageSize: 5 }}
+            pagination={{
+              pageSize: 10,
+              showSizeChanger: true,
+              pageSizeOptions: ['10', '20', '50'],
+              showTotal: (total) => `共 ${total} 条`,
+            }}
 
           />
 
@@ -749,7 +857,7 @@ export function TaxonomyPage() {
             label: '提案队列',
             children: (
               <ContentCard title="标签树完善提案">
-                <TaxonomyProposalsPanel />
+                <TaxonomyProposalsPanel onProposalChanged={() => void loadVersions()} />
               </ContentCard>
             ),
           },
@@ -802,6 +910,32 @@ export function TaxonomyPage() {
 
             </Button>
 
+          ) : isAdmin && selectedVersion?.status === 'proposal' && linkedProposal?.status === 'open' ? (
+
+            <Space>
+
+              <Button size="small" onClick={() => void onRejectProposal(linkedProposal.id)}>
+
+                拒绝
+
+              </Button>
+
+              <Button
+
+                type="primary"
+
+                size="small"
+
+                onClick={() => void onApproveProposal(linkedProposal.id)}
+
+              >
+
+                通过并转为草稿
+
+              </Button>
+
+            </Space>
+
           ) : null
 
         }
@@ -815,6 +949,11 @@ export function TaxonomyPage() {
         ) : (
 
           <>
+            {selectedVersion?.status === 'proposal' ? (
+              <Typography.Paragraph type="warning" style={{ marginBottom: 12 }}>
+                此为提案中版本，只读预览。{linkedProposal ? `关联提案：${linkedProposal.title}` : ''}
+              </Typography.Paragraph>
+            ) : null}
             <TaxonomyVersionMetaPanel
               versionId={versionId}
               versions={versions}

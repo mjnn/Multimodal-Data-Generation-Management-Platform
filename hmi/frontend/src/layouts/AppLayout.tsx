@@ -21,7 +21,7 @@ import {
   canAccessOss,
   canAccessPipeline,
   canAccessReview,
-  canManageTaxonomy,
+  canBrowseTaxonomy,
   canManageUsers,
   canSwitchDataSource,
 } from '../auth/roles'
@@ -117,6 +117,9 @@ export function AppLayout() {
   const navItems: MenuProps['items'] = useMemo(() => {
     const roles = user?.roles
     const browse: MenuProps['items'] = [{ key: '/', icon: <DatabaseOutlined />, label: '数据总览' }]
+    if (canBrowseTaxonomy(roles)) {
+      browse.push({ key: '/taxonomy', icon: <ApartmentOutlined />, label: '标签树' })
+    }
 
     const workflow: MenuProps['items'] = []
     if (canAccessPipeline(roles)) {
@@ -133,9 +136,6 @@ export function AppLayout() {
     }
 
     const admin: MenuProps['items'] = []
-    if (canManageTaxonomy(roles)) {
-      admin.push({ key: '/taxonomy', icon: <ApartmentOutlined />, label: '标签树' })
-    }
     if (canManageUsers(roles)) {
       admin.push({ key: '/admin/users', icon: <TeamOutlined />, label: '用户管理' })
       admin.push({ key: '/admin/audit', icon: <AuditOutlined />, label: '审计日志' })

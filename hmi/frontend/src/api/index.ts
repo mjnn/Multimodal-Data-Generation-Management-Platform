@@ -428,11 +428,11 @@ export const api = {
 
   createTaxonomyProposal: (body: {
     title: string
-    proposal_type?: string
-    target_label_id?: string | null
-    suggested_patch_json?: Record<string, unknown> | null
+    base_version_id: string
     evidence: Record<string, unknown>
-    taxonomy_version_id?: string | null
+    nodes: import('./types').TaxonomyNodeInput[]
+    /** Optional; omit/blank → server generates ``proposal-{hex}``. */
+    version_code?: string | null
   }): Promise<import('./types').TaxonomyProposal> =>
     fetchJson('/taxonomy/proposals', { method: 'POST', body: JSON.stringify(body) }),
 
@@ -443,6 +443,13 @@ export const api = {
     fetchJson(`/taxonomy/proposals/${encodeURIComponent(proposalId)}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
+    }),
+
+  approveTaxonomyProposalDraft: (
+    proposalId: string,
+  ): Promise<{ proposal: import('./types').TaxonomyProposal; version: import('./types').TaxonomyVersion | null }> =>
+    fetchJson(`/taxonomy/proposals/${encodeURIComponent(proposalId)}/approve-draft`, {
+      method: 'POST',
     }),
 
   getTaxonomyNodeUsage: (

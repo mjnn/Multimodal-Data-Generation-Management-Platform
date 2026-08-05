@@ -159,6 +159,8 @@ def _run_sdk_and_ingest(
     from oms_multimodal.config import ClientConfig
 
     client_cfg = ClientConfig.from_env(taxonomy_path=_taxonomy_path())
+    # Local / ECS pipeline worker always uses DashScope API; ignore MODEL_BACKEND=mc.
+    client_cfg.model_backend = "api"
     for key, val in _client_config_overrides().items():
         setattr(client_cfg, key, val)
     client = OmsMultimodalClient(config=client_cfg, work_dir=work_run / "work")

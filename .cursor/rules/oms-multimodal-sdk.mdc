@@ -13,13 +13,17 @@ alwaysApply: false
 - HMI 开发依赖：`hmi/requirements-dev.txt`（`-e ../piplinesdk`）
 - 仓库布局：`docs/REPO_LAYOUT.md`
 
-## 单包能力（DataWorks 节点应调 SDK，勿拆旧 Job2–4 逻辑）
-| 阶段 | 方法 / 模块 | 后端 |
-|------|-------------|------|
-| 解析 + clip + MP4 + 声学面板 | `RosbagExtractor` / `extract_bag` | 本地 |
-| ASR | `AsrClient` | **API** `qwen3-asr-flash` |
-| OMS 打标 | `OmniLabelClient` | **API** MaaS `qwen3.5-omni-plus` |
-| 融合向量 | `FusionEmbeddingClient` | **API** `qwen3-vl-embedding` |
+## 单包能力（DataWorks 多节点：一节点一 capability）
+| 阶段 | SDK 函数 | 后端 |
+|------|----------|------|
+| 解析 clip + MP4 | `extract_clips(ctx, bag)` | 本地 |
+| ASR | `transcribe_clips(ctx, client)` | api / mc |
+| OMS 打标 | `label_clips(ctx, client)` | api / mc |
+| 融合向量 | `embed_clips(ctx, client)` | api / mc |
+| preview 整理 | `materialize_preview(ctx)` | 本地 |
+| **复合**（单节点便利） | `infer_full` / `process_bag` | 同上 |
+
+Handoff：`run_dir/clips_index.jsonl` + `_sdk_work/`。`RunContext.media_mode`：`local`（upload 前）| `oss`（upload 后）。
 
 ## 入口
 ```python
@@ -31,11 +35,11 @@ CLI：`python -m oms_multimodal run --bag ...` · 仅本地：`--extract-only`
 
 ## 环境变量（Secrets 勿进 repo）
 - 必需：`DASHSCOPE_API_KEY` · Omni 必需：`DASHSCOPE_WORKSPACE_ID`
-- **`MODEL_BACKEND=api`**（默认）— MC `bigdata_modelset` **尚无 Omni**，打标必须 API
-- **`MODEL_BACKEND=mc`** — 预留；当前 Omni 会 `ConfigurationError`，待 SDK 实现 MC 客户端
+- **`MODEL_BACKEND=api`**（默认）— DashScope / MaaS 直连
+- **`MODEL_BACKEND=mc`** — MaxFrame + `bigdata_modelset`；需 `pip install oms-multimodal-sdk[mc]`、`mc_odps_entry=o`；Omni 未上架前设 **`MC_OMNI_FALLBACK_MODEL`**（如 `qwen3.6-plus`）
 
 ## DataWorks
-- 节点草稿：`pipeline/dataworks/sdk_infer_node.py`
+- 节点草稿：`pipeline/dataworks/sdk_infer_node.py`（`model_backend=api|mc`，mc 传 `mc_odps_entry=o`，默认 `mc_image_mode=base64`）
 - 产物对齐 **sdk_v1** 后接 upload / `ingest_sdk_run_to_mc` / `publish_sdk_dispatch`
 
 ## 与本 HMI 仓
