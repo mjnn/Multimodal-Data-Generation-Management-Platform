@@ -1,5 +1,5 @@
 # =============================================================================
-# DataWorks PyODPS3: SDK single-driver skeleton (discover + echo apply_chunk)
+# DataWorks PyODPS3: SDK single-driver (discover + pipeline apply_chunk)
 # =============================================================================
 
 from __future__ import annotations
@@ -14,8 +14,10 @@ import pandas as pd
 
 from sdk_dpe_common import (
     apply_dpe_runtime_settings,
+    collect_sdk_env_for_dpe,
     configure_dpe_engine,
     get_dw_arg,
+    get_dw_float_arg,
     oss_internal_url,
     storage_options,
     wrap_dpe_udf,
@@ -30,7 +32,7 @@ from sdk_pipeline_driver_lib import (
 
 
 def _pending_clip_id(bag_oss_key: str) -> str:
-    """Return an echo-only placeholder; production discovery must hash bag bytes."""
+    """Return a placeholder; production discovery must replace it with a content hash."""
     stem = PurePosixPath(bag_oss_key).stem
     safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", stem).strip("._-") or "bag"
     return f"sha256:pending_{safe_name.lower()}"
@@ -52,8 +54,8 @@ def _bags_from_args() -> list[dict[str, str]]:
             }
         ]
 
-    # Skeleton-only list discovery. These pending IDs are safe only because Task 3
-    # runs an echo UDF; production execution must hash bag bytes before SDK stages.
+    # Skeleton-only list discovery. Use the explicit triplet for real execution
+    # until Driver discovery hashes bag bytes in a later task.
     raw_keys = get_dw_arg("bag_oss_keys", "") or ""
     keys = [
         key.strip()
@@ -73,37 +75,109 @@ def _bags_from_args() -> list[dict[str, str]]:
     ]
 
 
-def _build_echo_chunk_udf(
+def _build_pipeline_chunk_udf(
     *,
     dpe_cpu: int,
     dpe_memory: int,
     oss_mount_url: str,
     mount_path: str,
     storage_options_dict: dict[str, str],
+    sdk_env: dict[str, str],
+    udf_stages_frozen: frozenset[str],
+    clip_min_sec: float,
+    clip_max_sec: float,
+    sample_fps: float,
+    model_backend: str,
+    cleanup_work: bool,
 ):
-    def _echo_chunk(df: pd.DataFrame) -> pd.DataFrame:
-        out: list[dict[str, Any]] = []
+    def _pipeline_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        import os
+        from pathlib import Path
+
+        from oms_multimodal import ClipConfig, OmsMultimodalClient, run_stages
+
+        for key, value in sdk_env.items():
+            if value:
+                os.environ[key] = str(value)
+
+        rows_out: list[dict[str, Any]] = []
         for _, row in df.iterrows():
+            clip_id = str(row["clip_id"])
+            run_id = str(row["run_id"])
+            bag_oss_key = str(row["bag_oss_key"])
             run_relpath = str(row["run_relpath"])
-            out.append(
-                {
-                    "clip_id": str(row["clip_id"]),
-                    "run_id": str(row["run_id"]),
-                    "bag_oss_key": str(row["bag_oss_key"]),
-                    "ok": True,
-                    "error": "",
-                    "stages_done": "echo",
-                    "run_relpath": run_relpath,
-                    "labels_relpath": f"{run_relpath}/labels.jsonl",
-                    "embeddings_relpath": f"{run_relpath}/fusion_embeddings.jsonl",
-                    "videos_relpath": f"{run_relpath}/clip_videos.jsonl",
-                    "preview_ok": False,
-                }
-            )
-        return pd.DataFrame(out)
+            ds = str(row["ds"])
+            try:
+                bag_path = Path(mount_path) / bag_oss_key
+                run_out = Path(mount_path) / run_relpath
+                run_out.mkdir(parents=True, exist_ok=True)
+                client = OmsMultimodalClient(
+                    work_dir=run_out / "_sdk_work",
+                    load_dotenv=False,
+                )
+                try:
+                    ctx = client.make_run_context(
+                        run_out,
+                        media_mode="local",
+                        clip_id=clip_id,
+                        run_id=run_id,
+                    )
+                    result = run_stages(
+                        ctx,
+                        bag_path,
+                        client,
+                        stages=udf_stages_frozen,
+                        clip_config=ClipConfig(
+                            min_sec=clip_min_sec,
+                            max_sec=clip_max_sec,
+                            sample_fps=sample_fps,
+                        ),
+                        bag_oss_key=bag_oss_key,
+                        ds=ds,
+                        model_backend=model_backend,
+                        cleanup_work=cleanup_work,
+                    )
+                finally:
+                    client.close()
+
+                # Any capability error blocks Driver-side mc_write for this row.
+                ok = len(result.errors) == 0
+                error = str(result.errors[0])[:500] if result.errors else ""
+                rows_out.append(
+                    {
+                        "clip_id": clip_id,
+                        "run_id": run_id,
+                        "bag_oss_key": bag_oss_key,
+                        "ok": ok,
+                        "error": error,
+                        "stages_done": ",".join(result.stages_done),
+                        "run_relpath": run_relpath,
+                        "labels_relpath": f"{run_relpath}/labels.jsonl",
+                        "embeddings_relpath": f"{run_relpath}/fusion_embeddings.jsonl",
+                        "videos_relpath": f"{run_relpath}/clip_videos.jsonl",
+                        "preview_ok": bool(result.preview_ok),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                rows_out.append(
+                    {
+                        "clip_id": clip_id,
+                        "run_id": run_id,
+                        "bag_oss_key": bag_oss_key,
+                        "ok": False,
+                        "error": f"{type(exc).__name__}: {exc}"[:500],
+                        "stages_done": "",
+                        "run_relpath": run_relpath,
+                        "labels_relpath": f"{run_relpath}/labels.jsonl",
+                        "embeddings_relpath": f"{run_relpath}/fusion_embeddings.jsonl",
+                        "videos_relpath": f"{run_relpath}/clip_videos.jsonl",
+                        "preview_ok": False,
+                    }
+                )
+        return pd.DataFrame(rows_out)
 
     return wrap_dpe_udf(
-        _echo_chunk,
+        _pipeline_chunk,
         dpe_cpu=dpe_cpu,
         dpe_memory=dpe_memory,
         oss_mount_url=oss_mount_url,
@@ -119,7 +193,7 @@ def main() -> None:
     job_rows = build_job_rows(_bags_from_args(), ds=ds)
     if not job_rows:
         raise ValueError(
-            "no bags discovered; provide bag_oss_key+clip_id+run_id or echo-only bag_oss_keys"
+            "no bags discovered; provide bag_oss_key+clip_id+run_id or bag_oss_keys"
         )
 
     print(
@@ -145,6 +219,28 @@ def main() -> None:
         raise ValueError("batch_rows must be >= 1")
     dpe_cpu = int(get_dw_arg("dpe_cpu", "4") or "4")
     dpe_memory = int(get_dw_arg("dpe_memory_gb", "16") or "16")
+    clip_min_sec = get_dw_float_arg("clip_min_sec", 15.0)
+    clip_max_sec = get_dw_float_arg("clip_max_sec", 20.0)
+    sample_fps = get_dw_float_arg("sample_fps", 1.0)
+    cleanup_work = (get_dw_arg("cleanup_work", "false") or "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    sdk_env = collect_sdk_env_for_dpe(account)
+    # Workflow secret args override account-derived values; project/endpoint
+    # fall back to the current Driver ODPS entry when available.
+    odps_env_values = {
+        "ODPS_ACCESS_ID": get_dw_arg("odps_access_id"),
+        "ODPS_ACCESS_KEY": get_dw_arg("odps_access_key"),
+        "ODPS_PROJECT": get_dw_arg("odps_project") or getattr(o, "project", ""),  # type: ignore[name-defined]
+        "ODPS_ENDPOINT": get_dw_arg("odps_endpoint") or getattr(o, "endpoint", ""),  # type: ignore[name-defined]
+    }
+    for env_name, value in odps_env_values.items():
+        if value:
+            sdk_env[env_name] = str(value)
+    model_backend = sdk_env["MODEL_BACKEND"]
 
     apply_dpe_runtime_settings(dpe_image)
     configure_dpe_engine()
@@ -153,7 +249,7 @@ def main() -> None:
     from maxframe.session import new_session
 
     input_df = md.DataFrame(pd.DataFrame(job_rows))
-    echo_udf = _build_echo_chunk_udf(
+    pipeline_udf = _build_pipeline_chunk_udf(
         dpe_cpu=dpe_cpu,
         dpe_memory=dpe_memory,
         oss_mount_url=oss_internal_url(
@@ -163,13 +259,20 @@ def main() -> None:
         ),
         mount_path=mount_path,
         storage_options_dict=storage_options(get_dw_arg("oss_ram_role_arn"), account),
+        sdk_env=sdk_env,
+        udf_stages_frozen=frozenset(udf_stages),
+        clip_min_sec=clip_min_sec,
+        clip_max_sec=clip_max_sec,
+        sample_fps=sample_fps,
+        model_backend=model_backend,
+        cleanup_work=cleanup_work,
     )
     session = new_session(o)  # type: ignore[name-defined]
     try:
         print(f"Logview: {session.get_logview_address()}")
         result = (
             input_df.mf.apply_chunk(
-                echo_udf,
+                pipeline_udf,
                 batch_rows=batch_rows,
                 output_type="dataframe",
                 dtypes=chunk_output_dtypes(),

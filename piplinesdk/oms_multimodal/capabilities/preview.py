@@ -37,5 +37,4 @@ def materialize_preview(ctx: RunContext) -> Path:
             wav = clip_dir / "audio.wav"
             if wav.is_file():
                 shutil.copy2(wav, preview_dir / "audio.wav")
-            return preview_dir
     return preview_dir
