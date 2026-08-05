@@ -12,3 +12,6 @@ venv/
 
 # Secrets
 .env
+
+# Local example outputs
+examples/_out/

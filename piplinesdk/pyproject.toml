@@ -34,6 +34,12 @@ dependencies = [
 ]
 [project.optional-dependencies]
 dev = ["build", "twine"]
+# MaxCompute / MaxFrame AI Function 后端（本机联调与 DPE 镜像安装用）
+mc = [
+    "maxframe>=2.0.0",
+    "pyodps>=0.11.0",
+    "oss2>=2.18.0",
+]
 
 [project.scripts]
 oms-multimodal = "oms_multimodal.cli:main"

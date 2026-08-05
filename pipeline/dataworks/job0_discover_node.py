@@ -161,6 +161,54 @@ def _hash_bag_file(bag_path: Path) -> str:
     return hasher.hexdigest()
 
 
+_UPLOAD_MARKER_FILES = (".upload_complete", "upload_complete.json", "upload_manifest.json")
+
+
+def _upload_run_id_from_key(object_key: str, uploads_prefix: str) -> str | None:
+    prefix = uploads_prefix.strip("/") + "/"
+    key = object_key.strip("/")
+    if not key.startswith(prefix.strip("/")):
+        return None
+    rest = key[len(prefix.strip("/")) :].lstrip("/")
+    if not rest or "/" not in rest:
+        return None
+    return rest.split("/", 1)[0] or None
+
+
+def _group_upload_runs_on_mount(
+    pending: list[dict[str, str]],
+    *,
+    mount_root: Path,
+    uploads_prefix: str,
+    allow_legacy_flat: bool,
+) -> list[dict[str, Any]]:
+    prefix = uploads_prefix if uploads_prefix.endswith("/") else uploads_prefix + "/"
+    grouped: dict[str, dict[str, Any]] = {}
+    for bag in pending:
+        object_key = str(bag.get("object_key") or "")
+        clip_id = str(bag.get("clip_id") or "")
+        upload_run_id = _upload_run_id_from_key(object_key, prefix)
+        if upload_run_id is None:
+            if not allow_legacy_flat:
+                continue
+            upload_run_id = f"solo-{clip_id[-16:]}"
+        grouped.setdefault(
+            upload_run_id,
+            {"upload_run_id": upload_run_id, "bags": [], "complete": False},
+        )
+        grouped[upload_run_id]["bags"].append(dict(bag))
+    runs: list[dict[str, Any]] = []
+    for upload_run_id, run in grouped.items():
+        if upload_run_id.startswith("solo-"):
+            run["complete"] = True
+        else:
+            upload_dir = mount_root / prefix.strip("/") / upload_run_id
+            run["complete"] = any((upload_dir / name).is_file() for name in _UPLOAD_MARKER_FILES)
+        runs.append(run)
+    runs.sort(key=lambda item: str(item.get("upload_run_id") or ""))
+    return runs
+
+
 def _discover_bags_on_mount(
     *,
     mount_root: Path,
@@ -218,6 +266,12 @@ def main() -> None:
     cloud_region = get_arg("cloud_region", "cn_shanghai") or "cn_shanghai"
     table_prefix = get_arg("table_prefix", "aig_rosbag__")
     scan_prefix = get_arg("scan_prefix", "") or ""
+    uploads_prefix = get_arg("uploads_prefix", "rosbags/uploads/") or "rosbags/uploads/"
+    allow_legacy_flat = str(get_arg("allow_legacy_flat", "false") or "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     clip_id_format = get_arg("clip_id_format", "sha256:{hex}")
     bag_suffix = get_arg("bag_suffix", ".bag")
     max_scan = get_int_arg("max_scan", 200)
@@ -272,7 +326,14 @@ def main() -> None:
             clip_id_format=str(row["clip_id_format"]),
             max_scan=int(row["max_scan"]),
         )
-        return {"discovered_json": json.dumps(pending, ensure_ascii=False)}
+        upload_runs = _group_upload_runs_on_mount(
+            pending,
+            mount_root=Path(mount_path),
+            uploads_prefix=uploads_prefix,
+            allow_legacy_flat=allow_legacy_flat,
+        )
+        payload = {"pending": pending, "upload_runs": upload_runs}
+        return {"discovered_json": json.dumps(payload, ensure_ascii=False)}
 
     try:
         print(f"Logview: {session.get_logview_address()}")
@@ -283,7 +344,13 @@ def main() -> None:
             result_type="expand",
         )
         row = result_df.execute().fetch().iloc[0]
-        pending = json.loads(str(row["discovered_json"]))
+        discover_payload = json.loads(str(row["discovered_json"]))
+        if isinstance(discover_payload, list):
+            pending = discover_payload
+            upload_runs_raw: list[dict[str, Any]] = []
+        else:
+            pending = discover_payload.get("pending") or []
+            upload_runs_raw = discover_payload.get("upload_runs") or []
     except Exception:
         print(f"Logview: {session.get_logview_address()}")
         raise
@@ -303,10 +370,12 @@ def main() -> None:
     now = _utc_now_iso()
     new_rows: list[list[Any]] = []
     discovered: list[dict[str, str]] = []
+    new_clip_ids: set[str] = set()
     for item in pending:
         clip_id = str(item["clip_id"])
         if clip_id in existing:
             continue
+        new_clip_ids.add(clip_id)
         discovered.append(
             {
                 "clip_id": clip_id,
@@ -327,6 +396,26 @@ def main() -> None:
             ]
         )
 
+    upload_runs_out: list[dict[str, Any]] = []
+    for upload_run in upload_runs_raw:
+        if not upload_run.get("complete"):
+            continue
+        new_bags = [
+            dict(bag)
+            for bag in (upload_run.get("bags") or [])
+            if str(bag.get("clip_id") or "") in new_clip_ids
+        ]
+        if not new_bags:
+            continue
+        upload_runs_out.append(
+            {
+                "upload_run_id": str(upload_run.get("upload_run_id") or ""),
+                "complete": True,
+                "new_count": len(new_bags),
+                "bags": new_bags,
+            }
+        )
+
     if dry_run:
         print(f"Job0 dry_run: would insert {len(new_rows)} clip(s)")
         for item in discovered:
@@ -338,11 +427,56 @@ def main() -> None:
 
     print(
         f"Job0 done: scanned={len(pending)} new={len(discovered)} "
-        f"prefix={scan_prefix!r} table={dim_table}"
+        f"upload_runs={len(upload_runs_out)} prefix={scan_prefix!r} table={dim_table}"
     )
+    for upload_run in upload_runs_out:
+        print(
+            f"UPLOAD_RUN id={upload_run['upload_run_id']} new_clips={upload_run['new_count']}"
+        )
     for item in discovered:
         print(f"DISCOVERED clip_id={item['clip_id']} oss_key={item['object_key']}")
     print(f"DISCOVERED_JSON={json.dumps(discovered, ensure_ascii=False)}")
+
+    write_discover = str(get_arg("write_discover_oss", "true") or "true").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    if write_discover and not dry_run:
+        try:
+            from pipeline_dispatch import (
+                DEFAULT_DISCOVER_OSS_KEY,
+                resolve_oss_http_endpoint,
+                write_discover_manifest_to_oss,
+            )
+
+            discover_key = get_arg("discover_oss_key", DEFAULT_DISCOVER_OSS_KEY) or DEFAULT_DISCOVER_OSS_KEY
+            endpoint = resolve_oss_http_endpoint(cloud_region, get_arg=get_arg)
+            manifest = {
+                "discovered_at": now,
+                "scan_prefix": scan_prefix,
+                "uploads_prefix": uploads_prefix,
+                "scanned": len(pending),
+                "new_count": len(discovered),
+                "items": discovered,
+                "pending": pending,
+                "upload_runs": upload_runs_out,
+            }
+            write_discover_manifest_to_oss(
+                bucket_name=oss_bucket,
+                object_key=discover_key,
+                endpoint=endpoint,
+                account=account,
+                payload=manifest,
+                region=cloud_region,
+                get_arg=get_arg,
+            )
+            print(f"Job0 discover manifest: oss://{oss_bucket}/{discover_key}")
+        except ImportError:
+            print(
+                "WARN: pipeline_dispatch not bundled; skip discover OSS manifest. "
+                "Bundle job0_discover or set write_discover_oss=false."
+            )
 
 
 main()

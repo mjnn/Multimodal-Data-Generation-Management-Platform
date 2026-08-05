@@ -1,0 +1,42 @@
+# DataWorks · sdk_pipeline_driver · P0 探针参数
+# 节点代码：粘贴 pipeline/dataworks/bundled/sdk_pipeline_driver_node.py（整文件）
+# 生成：py -3 pipeline/scripts/bundle_sdk_pipeline_driver.py
+#
+# 工作流「参数」面板：参数名 / 参数值分两格填写（不要写 key=value 同一格）
+
+# --- 必填 ---
+oss_bucket=rosbag-labels-pipeline-bucket2
+oss_ram_role_arn=acs:ram::1413495213520409:role/maxframe-rosbag-oss
+# 须为已登记、且含 oms-multimodal-sdk[mc]≥0.3.2 + rosbags 的 DPE 镜像名。
+# 若仅有 Job1 镜像 sq_maxframe（无 SDK），P0 会在 UDF import 阶段失败 → 先按 custom-dpe-image.md 建 SDK 镜像。
+dpe_image=sq_maxframe
+cloud_region=cn_shanghai
+mount_path=/mnt/oss
+ds=20260805
+
+# --- P0 探针（extract + mc ASR）---
+stages=extract,asr
+model_backend=mc
+mc_image_mode=base64
+batch_rows=1
+max_bags=1
+force_rerun=true
+mc_modelset_project=bigdata_public_modelset
+# Omni/ASR 未上架时可选降级模型
+# mc_omni_fallback_model=qwen3.6-plus
+
+# --- 显式单 bag（推荐探针；跳过扫描）---
+bag_oss_key=rosbags/2026-06-05_13-27-07/output.bag
+clip_id=sha256:3cd012197d1f2112f51c7414500bb9770a143d1bbd1e1a2aaa84d9eccb51fc7b
+# run_id 留空则节点内自动生成；填了可复跑同路径
+# run_id=
+
+# --- 资源 ---
+dpe_cpu=4
+dpe_memory_gb=16
+sdk_table_prefix=aig_sdk__
+
+# --- P0 失败时同节点降级（不改代码）---
+# model_backend=api
+# dashscope_api_key=<Secret>
+# dashscope_workspace_id=<workspace>

@@ -53,7 +53,14 @@ flowchart TB
 
 ## 3. DataWorks 工作流参数
 
-节点代码：**整文件粘贴** `pipeline/dataworks/sdk_pipeline_driver_node.py`。
+节点代码：**整文件粘贴** 打包产物（含 helpers，勿只贴源文件）：
+
+```powershell
+py -3 pipeline\scripts\bundle_sdk_pipeline_driver.py
+# → pipeline/dataworks/bundled/sdk_pipeline_driver_node.py
+```
+
+P0 参数模板：`pipeline/dataworks/workflow-params-sdk-pipeline-p0.example`。
 
 ### 3.1 必填 / 通用
 

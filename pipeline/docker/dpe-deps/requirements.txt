@@ -1,2 +1,3 @@
 rosbags>=0.10.0
 pyyaml>=6.0.0
+# SDK v1 节点（sdk_extract_dpe 等）额外在 Dockerfile 中安装 wheel，见 custom-dpe-image.md § SDK DPE

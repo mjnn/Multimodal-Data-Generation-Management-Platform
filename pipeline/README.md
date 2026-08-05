@@ -10,7 +10,7 @@ MaxCompute / OSS / DataWorks 管线与 **SDK v1** 上云脚本。HMI 见 [`../hm
 | `sql/maxcompute/` | `aig_sdk__` / `aig_rosbag__` DDL |
 | `clips/` | 本地 clip + rosbag（Job1 开发） |
 | `data/` | `parse_records.db`、`timeline.db` |
-| `scripts/` | `ingest_sdk_run_to_mc`、`publish_sdk_dispatch`、`verify_pipeline_run`、bundle |
+| `scripts/` | `ingest_sdk_run_to_mc`、`publish_sdk_dispatch`、**`verify_sdk_v1_run`**、bundle |
 
 ## 配置
 

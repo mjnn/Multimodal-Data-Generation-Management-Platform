@@ -15,6 +15,14 @@ def bundled_sdk_doc_path() -> Path:
     return BUNDLED_DIR / "SDK.md"
 
 
+def bundled_dataworks_doc_path() -> Path:
+    return BUNDLED_DIR / "DATAWORKS_SDK.md"
+
+
+def bundled_examples_dir() -> Path:
+    return BUNDLED_DIR / "examples"
+
+
 def resolve_taxonomy_path(path: str | Path | None = None) -> Path:
     """解析 taxonomy：显式路径 > 包内 bundled > 项目根默认文件名。"""
     if path is not None:

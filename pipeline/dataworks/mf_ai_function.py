@@ -352,8 +352,9 @@ def prepare_mf_ai_runtime(
 
 
 def is_public_modelset_model(model_name: str) -> bool:
+    # ASR（如 qwen3-asr-flash）已在 public modelset；须 read_odps_model。
     if is_asr_capable_model(model_name):
-        return False
+        return True
     lower = model_name.lower()
     return any(hint in lower for hint in _DASHSCOPE_MODEL_HINTS)
 

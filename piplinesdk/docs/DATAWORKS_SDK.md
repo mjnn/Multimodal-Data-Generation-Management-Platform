@@ -1,11 +1,59 @@
 # DataWorks × OMS Multimodal SDK
 
-> 目标：**所有云端推理前步骤**（解析、ASR、预览 MP4、Omni 打标、融合向量）由 **同一 SDK** 完成，产物对齐 **`sdk_v1` OSS 树** 与 **`aig_sdk__` MC 表**。  
-> **当前约束**：MaxCompute `bigdata_modelset` **尚未上架 Omni**，打标/多模态必须走 **`MODEL_BACKEND=api`**（DashScope / MaaS）。后续 SDK 用参数切换 **`api` | `mc`**。
+> 目标：**云端推理前步骤**（解析、ASR、预览、Omni 打标、融合向量）由 **同一 SDK** 完成，产物对齐 **`sdk_v1` OSS** 与 **`aig_sdk__` MC**。  
+> **推荐云上路径（2026-08）**：单节点 **`sdk_pipeline_driver`**（`apply_chunk` + `stages` + UDF 内 `MODEL_BACKEND=mc`）。多节点 `sdk_*` 已冻结，仅参考/回退。  
+> **本机测能力**：`piplinesdk/examples/`（`run_stages`）。详设见仓库 `docs/sdk-v1-cloud-e2e-runbook.md`。
 
 ---
 
-## 1. 节点职责（替代旧 Job1–Job4 拆分）
+## 0. 单 Driver（推荐）
+
+| 项 | 路径 |
+|----|------|
+| 粘贴包 | `pipeline/dataworks/bundled/sdk_pipeline_driver_node.py`（`bundle_sdk_pipeline_driver.py` 生成） |
+| 参数模板 | `pipeline/dataworks/workflow-params-sdk-pipeline-p0.example` |
+| SDK 编排 | `oms_multimodal.run_stages` / `parse_stages` |
+
+P0 探针：`stages=extract,asr`，`batch_rows=1`，`model_backend=mc`。失败可同节点改 `model_backend=api`。
+
+### UDF 与 `apply_chunk` 并发（教学示例）
+
+带中文注释的粘贴示例：
+
+`piplinesdk/examples/05_dpe_apply_chunk_concurrency.py`
+
+| 概念 | 含义 |
+|------|------|
+| Driver | PyODPS3 节点进程：组参数、建 DataFrame、`new_session`、提交任务、`fetch` 结果 |
+| DPE Worker | 远端真正执行 UDF 的进程：挂载 OSS、跑 `run_stages` |
+| UDF | 节点脚本里定义、被 MaxFrame 发到 Worker 的函数；**禁止** `@dataclass` / 自定义 `class`，只用 `dict`/`list`/内置类型 |
+| `apply`（`axis=1`） | **一行调用一次** UDF，入门简单 |
+| `mf.apply_chunk` | **一次吃多行**；行数由 `batch_rows` 控制（推荐批量路径） |
+| `batch_rows` | 每个 chunk UDF 调用处理几行；探针常用 `1`，吞吐可再加大 |
+| `dpe_parallel` + `mf.rebalance` | 把输入拆成约 N 个分区，便于多 Worker 并行；实际分区 ≤ 行数 |
+
+最小对照（生产 Driver 同构）：
+
+```python
+# 分区：多 Worker 并行
+input_df = input_df.mf.rebalance(num_partitions=min(dpe_parallel, n_rows))
+
+# chunk：每批处理 batch_rows 行
+result_df = input_df.mf.apply_chunk(
+    udf,                 # with_running_options(engine="dpe") + with_fs_mount(...)
+    batch_rows=batch_rows,
+    output_type="dataframe",
+    dtypes={...},
+    skip_infer=True,
+)
+out = result_df.execute().fetch()
+```
+
+辅助实现也可对照：`pipeline/dataworks/sdk_dpe_common.py`（`wrap_dpe_udf` / `make_batch_input_df` / `run_dpe_batch_apply`）、`pipeline/dataworks/dpe_udf_minimal_example.py`（最简 `apply`）。
+
+---
+
+## 1. 节点职责（历史多节点拆分，已冻结）
 
 | SDK 阶段 | 能力 | 本地 / API | 输出（run 目录） |
 |----------|------|------------|------------------|
@@ -15,24 +63,61 @@
 | `sdk_mc_write` | 写 MC 事实表 | PyODPS | `aig_sdk__*` |
 | `sdk_dispatch` | 更新 dispatch | OSS | `pipeline/dispatch/latest.json` |
 
-**`sdk_infer` 内部顺序**（`LabelEmbeddingPipeline.process_bag`）：
+**`sdk_infer` / `run_stages` 内部顺序**：
 
-1. `RosbagExtractor.iter_clips` — 解码帧、WAV、声学面板、**多路 `clip_preview_camera*.mp4`**
-2. `AsrClient.transcribe_clip` — **qwen3-asr-flash**（DashScope）
-3. `OmniLabelClient.label_clip` — **qwen3.5-omni-plus**（MaaS OpenAI 兼容，`stream=True`）
-4. `FusionEmbeddingClient.embed_clip` — **qwen3-vl-embedding**（DashScope 多模态融合）
+1. `extract_clips` — 解码帧、WAV、声学面板、**多路 `clip_preview_camera*.mp4`**
+2. `transcribe_clips` — **qwen3-asr-flash**（`api` 或 `mc`）
+3. `materialize_preview` — `preview/` + `manifest.json`
+4. `label_clips` — Omni
+5. `embed_clips` — VL-embedding
+6. `write_run_json` — `run.json`（upload 提交标记）
 
 ---
 
 ## 2. Driver 节点推荐写法（PyODPS3）
 
-依赖：在 DPE 镜像或节点 init 中安装 wheel：
+依赖：在 **DPE 镜像**安装 SDK（含 `[mc]`）：
 
 ```bash
-pip install oms_multimodal_sdk-0.3.2-py3-none-any.whl
+pip install 'oms-multimodal-sdk[mc]>=0.3.2'
 ```
 
-Python 核心逻辑（与 `dataworks/sdk_infer_node.py` 一致）：
+本机 / 调试核心逻辑（与 `run_stages` 一致）：
+
+```python
+from pathlib import Path
+from oms_multimodal import (
+    OmsMultimodalClient,
+    ClipConfig,
+    bundled_taxonomy_path,
+    parse_stages,
+    run_stages,
+)
+
+run_dir = Path("/mnt/oss/clips/sha256:.../runs/...")
+client = OmsMultimodalClient(
+    taxonomy_path=bundled_taxonomy_path(),
+    work_dir=run_dir / "_sdk_work",
+    model_backend="mc",  # 或 api
+    load_dotenv=False,
+)
+ctx = client.make_run_context(run_dir, media_mode="local", clip_id="...", run_id="...")
+try:
+    result = run_stages(
+        ctx,
+        Path("/mnt/oss/rosbags/.../output.bag"),
+        client,
+        stages=parse_stages("extract,asr,preview,label,embed,upload"),
+        clip_config=ClipConfig(min_sec=15, max_sec=20),
+        model_backend="mc",
+    )
+finally:
+    client.close()
+```
+
+> 生产请粘贴 **bundled** 单文件 Driver，不要只贴未打包的 `sdk_pipeline_driver_node.py`（缺 helpers）。
+
+<details><summary>旧 sdk_infer 一键写法（参考）</summary>
 
 ```python
 from pathlib import Path
@@ -69,6 +154,8 @@ python -m oms_multimodal run --bag /mnt/oss/rosbags/xxx.bag \
   --videos-out /tmp/out/clip_videos.jsonl \
   --taxonomy $(python -c "from oms_multimodal import bundled_taxonomy_path; print(bundled_taxonomy_path())")
 ```
+
+</details>
 
 ---
 

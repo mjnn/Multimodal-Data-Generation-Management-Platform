@@ -1,65 +1,60 @@
-# Pipeline SDK（OMS Multimodal）
+# OMS Multimodal SDK
 
-**包名**：`oms-multimodal-sdk` · **当前版本**：0.3.2
+**软件包名**：`oms-multimodal-sdk` · **当前版本**：0.3.2
 
-本目录为 **SDK 源码 monorepo**：Python 包 `oms_multimodal/`、构建配置、wheel 与对外文档。与 HMI 仓 `rosbag_to_labels_pipline/` 的 `sdk_v1` OSS、`aig_sdk__` MC 对齐。
+把 **ROS1 录制文件（`.bag`）** 解析成时间片段，并可选用阿里云大模型做：**语音转文字、场景打标、融合向量**。
 
 ## 安装
 
 ```powershell
 cd piplinesdk
-pip install ./oms_multimodal_sdk-0.3.2-py3-none-any.whl
+# 推荐 Python 3.11
+py -3.11 -m pip install -e .
 
-# 开发（改 SDK 与 HMI 联调，仓库根）
-cd pipeline
-pip install -e ../piplinesdk
-# 或
-cd hmi && pip install -r requirements-dev.txt
+# 若要通过 MaxCompute 调用模型（进阶）：
+py -3.11 -m pip install -e ".[mc]"
 ```
 
-## 文档
-
-| 文件 | 内容 |
-|------|------|
-| [docs/SDK.md](docs/SDK.md) | API / CLI / 环境变量（构建前同步到 `oms_multimodal/bundled/SDK.md`） |
-| [docs/DATAWORKS_SDK.md](docs/DATAWORKS_SDK.md) | DataWorks 节点、OSS 输出、`MODEL_BACKEND=api` |
-| [RELEASE.md](RELEASE.md) | wheel 说明与构建步骤 |
-
-## 构建 wheel
+或安装已构建的 wheel：
 
 ```powershell
-cd piplinesdk
-Copy-Item docs\SDK.md oms_multimodal\bundled\SDK.md -Force
-python -m pip install build
-python -m build
-Copy-Item dist\oms_multimodal_sdk-0.3.2-py3-none-any.whl . -Force
+py -3.11 -m pip install .\oms_multimodal_sdk-0.3.2-py3-none-any.whl
 ```
+
+## 从这里开始
+
+| 资源 | 内容 |
+|------|------|
+| **[examples/](examples/)** | **可运行示例（建议先跑这里）** |
+| [docs/SDK.md](docs/SDK.md) | 完整使用说明（含术语表） |
+| [docs/DATAWORKS_SDK.md](docs/DATAWORKS_SDK.md) | 在阿里云 DataWorks 上批量运行（进阶） |
+| [docs/README.md](docs/README.md) | 文档索引 |
+
+```powershell
+py -3.11 -c "from oms_multimodal import __version__; print(__version__)"
+py -3.11 examples\01_inspect_bag.py
+py -3.11 examples\02_extract_only.py
+py -3.11 examples\03_run_stages.py extract,asr
+```
+
+调用云端模型时，请在 `piplinesdk/.env` 填写百炼密钥（见 `.env.example`）：
+
+- `DASHSCOPE_API_KEY`
+- `DASHSCOPE_WORKSPACE_ID`
+- `MODEL_BACKEND=api`（本机默认）
 
 ## 能力一览
 
-| 阶段 | 本地（`STORAGE_BACKEND=local`） | 云端（`MODEL_BACKEND=api` / `STORAGE_BACKEND=cloud`） |
-|------|------|------------------------------|
-| Rosbag 解析 + clip | `RosbagExtractor` | — |
-| 预览 MP4 + WAV | ffmpeg | — |
-| ASR | — | `qwen3-asr-flash` |
-| OMS 打标 | — | `qwen3.5-omni-plus` |
-| 融合向量 | — | `qwen3-vl-embedding` |
+| 步骤 | 是否需要云端模型 | 入口 |
+|------|------------------|------|
+| 解析 bag / 整理预览 | 否 | `extract_clips` / `materialize_preview` |
+| 语音转文字 | 是 | `transcribe_clips` |
+| 场景打标 / 融合向量 | 是 | `label_clips` / `embed_clips` |
+| 按步骤组合执行 | 视步骤而定 | **`run_stages`（推荐）** |
 
-## 快速验证
+## 构建发布包
 
 ```powershell
-python -c "from oms_multimodal import OmsMultimodalClient, bundled_taxonomy_path, __version__; print(__version__)"
-python -m oms_multimodal inspect --bag path\to\output.bag
+cd piplinesdk
+.\scripts\build_release.ps1
 ```
-
-需 `.env`：`DASHSCOPE_API_KEY`、`DASHSCOPE_WORKSPACE_ID`（见 `.env.example`）。
-
-## 与 HMI 仓
-
-```text
-SDK process_bag → jsonl + preview/
-       ↓ import_real_data_clips / OSS sdk_v1
-HMI local + aig_sdk__ MC
-```
-
-设计：`docs/sdk-first-pipeline-design.md`

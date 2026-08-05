@@ -25,7 +25,13 @@ from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_vi
 from .client import OmsMultimodalClient
 from .config import BagProcessResult, ClientConfig, ClipConfig, ModelBackend, OutputConfig
 from .embedding_client import FusionEmbeddingClient
-from .resources import bundled_sdk_doc_path, bundled_taxonomy_path, resolve_taxonomy_path
+from .resources import (
+    bundled_dataworks_doc_path,
+    bundled_examples_dir,
+    bundled_sdk_doc_path,
+    bundled_taxonomy_path,
+    resolve_taxonomy_path,
+)
 from .capabilities import (
     ALL_STAGES,
     CAPABILITY_IDS,
@@ -76,6 +82,7 @@ from .model_factory import (
     create_omni_client,
     validate_backend_config,
 )
+from .mc import McBackendConfig
 from .taxonomy import load_taxonomy, parse_label_json, taxonomy_prompt_block
 
 __all__ = [
@@ -87,6 +94,8 @@ __all__ = [
     "AsrConfig",
     "AudioPayload",
     "BagProcessResult",
+    "bundled_dataworks_doc_path",
+    "bundled_examples_dir",
     "bundled_sdk_doc_path",
     "bundled_taxonomy_path",
     "ClientConfig",
@@ -121,6 +130,7 @@ __all__ = [
     "TranscribeResult",
     "FusionEmbeddingClient",
     "LabelEmbeddingPipeline",
+    "McBackendConfig",
     "ModelBackend",
     "OmsMultimodalClient",
     "OmsMultimodalError",
