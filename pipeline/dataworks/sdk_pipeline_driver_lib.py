@@ -31,6 +31,10 @@ def make_run_id() -> str:
     return str(uuid.uuid4())
 
 
+def run_oss_prefix_from_relpath(run_relpath: str) -> str:
+    return f"{str(run_relpath).rstrip('/')}/"
+
+
 def build_job_rows(bags: list[dict[str, Any]], *, ds: str) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for bag in bags:

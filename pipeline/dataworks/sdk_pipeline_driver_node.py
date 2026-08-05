@@ -34,6 +34,7 @@ from sdk_pipeline_driver_lib import (
     build_job_rows,
     chunk_output_dtypes,
     make_run_id,
+    run_oss_prefix_from_relpath,
     split_stages,
 )
 
@@ -336,6 +337,9 @@ def main() -> None:
                     "bag_oss_key": str(row["bag_oss_key"]),
                     "ds": str(row["ds"]),
                     "run_relpath": str(row["run_relpath"]),
+                    "run_oss_prefix": run_oss_prefix_from_relpath(
+                        str(row["run_relpath"])
+                    ),
                 }
                 for row in ok_rows
             ]
@@ -345,6 +349,7 @@ def main() -> None:
                 "pipeline_version": "sdk_v1",
                 "batch_size": len(items),
                 "items": items,
+                "run_oss_prefix": items[0]["run_oss_prefix"],
                 "dispatched_at": utc_now_iso(),
             }
             if len(items) == 1:

@@ -14,6 +14,7 @@ from sdk_pipeline_driver_lib import (  # noqa: E402
     chunk_output_dtypes,
     content_hash_to_clip_id,
     make_run_id,
+    run_oss_prefix_from_relpath,
     split_stages,
 )
 
@@ -31,6 +32,16 @@ class TestDriverLib(unittest.TestCase):
         )
         self.assertEqual(rows[0]["run_relpath"], "clips/sha256:a/runs/r1")
         self.assertEqual(rows[0]["ds"], "20260804")
+
+    def test_run_oss_prefix_from_relpath(self) -> None:
+        self.assertEqual(
+            run_oss_prefix_from_relpath("clips/sha256:a/runs/r1"),
+            "clips/sha256:a/runs/r1/",
+        )
+        self.assertEqual(
+            run_oss_prefix_from_relpath("clips/sha256:a/runs/r1/"),
+            "clips/sha256:a/runs/r1/",
+        )
 
     def test_dtypes_keys(self) -> None:
         d = chunk_output_dtypes()
