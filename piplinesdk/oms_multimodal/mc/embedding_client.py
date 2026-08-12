@@ -160,7 +160,8 @@ class McFusionEmbeddingClient:
                     parts.append(
                         cp.image(
                             data=getattr(df, f"image_url_{idx}"),
-                            type=ImageContentType.IMAGE_URL,
+                            type=ImageContentType.URL,
+                            mime_type="image/jpeg",
                             storage_options=storage,
                         )
                     )

@@ -137,7 +137,7 @@ def main() -> None:
         dpe_memory=dpe_memory,
         oss_mount_url=oss_mount_url,
         mount_path=mount_path,
-        storage_options_dict=storage_options(role_arn, account),
+        storage_options_dict=storage_options(role_arn, account, oss_bucket=oss_bucket),
         sdk_env=sdk_env,
         media_mode=media_mode,
     )

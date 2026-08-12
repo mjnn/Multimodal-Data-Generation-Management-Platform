@@ -7,6 +7,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'clip.review': '校核保存',
   'clip.reopen': '重新打开校核',
   'clip.label_field_review': '字段校核',
+  'clip.bbox_qa': 'BBox 质量标记',
   'aug_recipe.create': '创建扩增配方',
   'aug_recipe.publish': '发布扩增配方',
   'taxonomy.proposal.create': '创建标签提案',

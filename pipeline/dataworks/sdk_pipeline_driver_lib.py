@@ -17,9 +17,31 @@ except ImportError:  # pragma: no cover - DW paste without path
         return frozenset(parts)
 
 
-def split_stages(raw: str | None) -> tuple[frozenset[str], frozenset[str]]:
+# MaxFrame AI stages: when ai_submitter=driver, run on Driver (bare AI), not nested in DPE UDF.
+MC_AI_STAGES = frozenset({"asr", "label", "embed"})
+# Stages safe inside apply_chunk with SDK 0.3.2 (no nested MaxFrame AI).
+DPE_SDK_SAFE_STAGES = frozenset({"extract", "preview", "upload"})
+
+
+def split_stages(
+    raw: str | None,
+    *,
+    ai_submitter: str = "driver",
+) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """Return (driver_stages, udf_stages, driver_ai_stages).
+
+    ``ai_submitter=driver`` (default): asr/label/embed → Driver bare MaxFrame AI.
+    ``ai_submitter=udf``: keep nested path (known broken for model_backend=mc).
+    """
     stages = parse_stages(raw)
-    return stages & DRIVER_STAGES, stages & UDF_STAGES
+    driver = stages & DRIVER_STAGES
+    udf = stages & UDF_STAGES
+    mode = (ai_submitter or "driver").strip().lower()
+    if mode in {"driver", "bare", "job2"}:
+        driver_ai = udf & MC_AI_STAGES
+        udf = udf - MC_AI_STAGES
+        return driver, udf, driver_ai
+    return driver, udf, frozenset()
 
 
 def content_hash_to_clip_id(hex_digest: str) -> str:
@@ -90,6 +112,7 @@ def chunk_output_dtypes() -> dict[str, str]:
         "embeddings_relpath": "string",
         "videos_relpath": "string",
         "preview_ok": "boolean",
+        "audio_keys_json": "string",
     }
 
 

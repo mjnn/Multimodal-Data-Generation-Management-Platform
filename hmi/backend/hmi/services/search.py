@@ -112,6 +112,11 @@ def _load_labeled_frames() -> list[dict[str, Any]]:
 
 
     settings = get_settings()
+    prefix = str(settings.get("sdk_table_prefix") or settings.get("table_prefix") or "")
+    # sdk_v1 cloud facts are clip-level; frame search needs fact_image_label + fact_frame.
+    if prefix.startswith("aig_sdk__"):
+        _labeled_frames_cache[cache_key] = []
+        return []
 
     clip_filters = _active_clip_filters()
 
@@ -274,6 +279,10 @@ def find_similar(composite_id_str: str, top_k: int = 8, min_score: float = 0.75)
     ctx = resolve_clip_context(clip_id, run_id)
 
     settings = get_settings()
+    prefix = str(settings.get("sdk_table_prefix") or settings.get("table_prefix") or "")
+    if prefix.startswith("aig_sdk__"):
+        # Clip-level fusion embeddings only; frame similar needs fact_embedding.
+        return []
 
     w = (
 
@@ -441,4 +450,122 @@ def find_similar(composite_id_str: str, top_k: int = 8, min_score: float = 0.75)
 
     ]
 
+
+def query_overview_clips(
+    *,
+    label_filters: dict[str, Any] | None = None,
+    semantic_query: str = "",
+    top_k: int = 200,
+    min_score: float = 0.25,
+) -> dict[str, Any]:
+    """Clip-level overview search against MC fact_clip_label (+ optional embeddings)."""
+    from hmi.labels_util import labels_to_clip_dict
+    from hmi.services.clip_query_common import (
+        DEFAULT_MIN_TEXT_SCORE,
+        apply_semantic_rank_cutoff,
+        normalize_label_filters,
+        score_clip_candidate,
+        try_embed_query_text,
+    )
+
+    filters = normalize_label_filters(label_filters)
+    query_text = (semantic_query or "").strip()
+    if not filters and not query_text:
+        return {
+            "total": 0,
+            "items": [],
+            "semantic_mode": "none",
+            "embedding_used": False,
+            "message": "请至少设置标签筛选或场景描述检索",
+        }
+
+    settings = get_settings()
+    clip_filters = _active_clip_filters()
+    if not clip_filters:
+        return {
+            "total": 0,
+            "items": [],
+            "semantic_mode": "none",
+            "embedding_used": False,
+            "message": "暂无可用 Clip（需 dim_clip.active_run_id）",
+        }
+
+    text_floor = float(min_score) if min_score is not None else DEFAULT_MIN_TEXT_SCORE
+    where_clip = " OR ".join(
+        f"(clip_id={sql_quote(c)} AND run_id={sql_quote(r)} AND ds={sql_quote(ds)})"
+        for c, r, ds in clip_filters
+    )
+    label_tbl = table_name(settings, "fact_clip_label")
+    label_rows = query(
+        f"SELECT clip_id, run_id, ds, labels_json, scene_summary "
+        f"FROM {label_tbl} WHERE {where_clip}"
+    )
+
+    emb_by: dict[tuple[str, str], str] = {}
+    try:
+        emb_tbl = table_name(settings, "fact_clip_embedding")
+        emb_rows = query(
+            f"SELECT clip_id, run_id, vector_json FROM {emb_tbl} WHERE {where_clip}"
+        )
+        for row in emb_rows:
+            emb_by[(str(row["clip_id"]), str(row["run_id"]))] = str(row.get("vector_json") or "")
+    except Exception:
+        emb_by = {}
+
+    query_vec = try_embed_query_text(query_text) if query_text else None
+    embedding_used = query_vec is not None
+    items: list[dict[str, Any]] = []
+    for row in label_rows:
+        clip_id = str(row["clip_id"])
+        run_id = str(row["run_id"])
+        parsed = parse_labels_json(row.get("labels_json"))
+        flat = labels_to_clip_dict(parsed) or parsed
+        scene_summary = str(row.get("scene_summary") or "").strip() or None
+        if filters and not flat:
+            continue
+        scored = score_clip_candidate(
+            labels_json=flat if isinstance(flat, dict) else {},
+            scene_summary=scene_summary,
+            vector_json=emb_by.get((clip_id, run_id)),
+            label_filters=filters,
+            semantic_query=query_text,
+            query_vec=query_vec,
+            min_semantic_score=text_floor if query_text else 0.0,
+        )
+        if scored is None:
+            continue
+        items.append(
+            {
+                "clip_id": clip_id,
+                "run_id": run_id,
+                "score": scored["score"],
+                "match_mode": scored["match_mode"],
+                "scene_description": scored.get("scene_description") or "",
+                "label_preview": scored.get("label_preview") or "",
+                "text_score": scored.get("text_score"),
+                "embedding_score": scored.get("embedding_score"),
+            }
+        )
+
+    if query_text:
+        items = apply_semantic_rank_cutoff(items, top_k=top_k)
+    else:
+        items.sort(key=lambda r: (-float(r.get("score") or 0), str(r.get("clip_id"))))
+    if query_text and embedding_used:
+        mode = "embedding+text"
+    elif query_text:
+        mode = "text"
+    elif filters:
+        mode = "label"
+    else:
+        mode = "none"
+    return {
+        "total": len(items),
+        "items": items,
+        "semantic_mode": mode,
+        "embedding_used": embedding_used,
+        "message": None
+        if items
+        else "未匹配到相关 Clip（相关度未达阈值）。可换用更贴近场景描述的语句，或放宽标签条件。",
+    }
 

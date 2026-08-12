@@ -79,6 +79,7 @@ def pipeline_step_label(step_id: str, *, local: bool = False) -> str:
     return STEP_LABELS.get(step_id, step_id)
 
 
+# 遗留 clip-omni v2（主/副模型）；新数据默认用 SDK_PIPELINE_STEP_ORDER
 PIPELINE_VERSION = "clip_omni_v2"
 
 PIPELINE_STEP_ORDER = (

@@ -1,5 +1,5 @@
 import { PlusOutlined, SaveOutlined, SettingOutlined } from '@ant-design/icons'
-import { Alert, Button, Form, Input, Space, Table, Typography, message } from 'antd'
+import { Alert, Button, Form, Input, Space, Switch, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
@@ -7,6 +7,10 @@ import type { SystemEnvVariable } from '../api/types'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 
 type Row = SystemEnvVariable & { rowKey: string }
+
+function isTruthyEnv(value: string): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase())
+}
 
 export function SystemEnvPage() {
   const [meta, setMeta] = useState<{
@@ -90,6 +94,8 @@ export function SystemEnvPage() {
         restart_required_hint: res.restart_required_hint,
       })
       setRows(res.variables.map((v) => ({ ...v, rowKey: v.key })))
+      // 测试模式开关影响侧栏；保存后刷新以同步强制云端 / 控件显隐
+      window.setTimeout(() => window.location.reload(), 400)
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : '保存失败')
     } finally {
@@ -107,7 +113,11 @@ export function SystemEnvPage() {
           <Typography.Text code style={{ fontSize: 12 }}>
             {key}
           </Typography.Text>
-          {!r.in_catalog ? (
+          {key === 'HMI_TEST_MODE' ? (
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              测试模式：开=本地/云端切换+重置测试数据；关=强制云端
+            </Typography.Text>
+          ) : !r.in_catalog ? (
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
               自定义
             </Typography.Text>
@@ -119,7 +129,14 @@ export function SystemEnvPage() {
       title: '值',
       dataIndex: 'value',
       render: (_v, r) =>
-        r.sensitive ? (
+        r.key === 'HMI_TEST_MODE' ? (
+          <Switch
+            checked={isTruthyEnv(r.value)}
+            checkedChildren="开"
+            unCheckedChildren="关"
+            onChange={(checked) => updateRow(r.key, checked ? '1' : '0')}
+          />
+        ) : r.sensitive ? (
           <Input.Password
             visibilityToggle
             size="small"

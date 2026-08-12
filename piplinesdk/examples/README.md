@@ -43,8 +43,10 @@ MODEL_BACKEND=api
 ```powershell
 $env:BAG_PATH = "D:\data\my_recording.bag"
 $env:RUN_OUT  = "D:\tmp\sdk_demo_run"   # 可选：结果写到哪里
-$env:MODEL_BACKEND = "api"              # 可选：api（默认）或 mc
+$env:MODEL_BACKEND = "api"              # 可选：api（默认）或 mc（需 maxframe≥2.8.0）
 ```
+
+**MC 模式**（`MODEL_BACKEND=mc`）：需 Python 3.11 + `pip install -e ".[mc]"`。本机验数见 `pipeline/local_sdk_mc_test/run_mc_oss_verify.py`；Omni 三路：`cp.video` + `cp.audio` + `cp.text`（含 ASR）。
 
 ---
 
@@ -97,11 +99,12 @@ py -3.11 examples\04_process_bag.py
 `05_dpe_apply_chunk_concurrency.py` **不能**像上面那样在本机直接跑通（需要 DataWorks 注入的 `o` / `args`、MaxFrame、DPE 镜像）。用途是：
 
 1. 阅读注释，搞清 Driver vs DPE Worker、什么是 UDF  
-2. 对比 `DataFrame.apply`（一行一次）与 `mf.apply_chunk`（一次多行）  
-3. 看清两个并发旋钮：`batch_rows`、`dpe_parallel`（配合 `mf.rebalance`）  
-4. 按需把代码粘贴进 DataWorks PyODPS3 节点做探针  
+2. **发现 bag**：Driver 列举 OSS → DPE `apply_chunk(hash)` → `clip_id=sha256:{hex}`  
+3. 对比 `DataFrame.apply`（一行一次）与 `mf.apply_chunk`（一次多行）  
+4. 看清并发旋钮：`hash_batch_rows`、`batch_rows`、`dpe_parallel`（配合 `mf.rebalance`）  
+5. 按需把代码粘贴进 DataWorks PyODPS3 节点做探针  
 
-节点参数建议先：`batch_rows=1`，`dpe_parallel=2`，`demo_mode=chunk`。  
+节点参数建议：`discover_mode=auto`，`scan_prefix=rosbags/`，`hash_batch_rows=32`，`batch_rows=1`，`dpe_parallel=2`；只验发现可加 `skip_pipeline=1`。  
 生产完整实现见仓库 `pipeline/dataworks/sdk_pipeline_driver_node.py`；云上说明见 [docs/DATAWORKS_SDK.md](../docs/DATAWORKS_SDK.md)。
 
 ---

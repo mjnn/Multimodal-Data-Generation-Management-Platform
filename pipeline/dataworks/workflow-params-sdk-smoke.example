@@ -1,0 +1,14 @@
+# DataWorks · SDK DPE 烟雾探针（P0-smoke）参数
+# 节点代码：粘贴 pipeline/dataworks/sdk_dpe_smoke_node.py（整文件，无需 bundle）
+#
+# 用途：快速验证 DPE 镜像 + OSS 挂载 + SDK import（不跑 extract/ASR）
+# 预期：约 2–5 分钟；日志出现 SMOKE_RESULT={"ok": true, ...}
+#
+# 工作流「参数」：参数名 / 参数值分两格；VS Code 单节点跑请把参数配到「节点」上。
+
+oss_bucket=rosbag-labels-pipeline-bucket2
+oss_ram_role_arn=acs:ram::1413495213520409:role/maxframe-rosbag-oss
+dpe_image=rosbag_sdk_dpe
+cloud_region=cn_shanghai
+mount_path=/mnt/oss
+bag_oss_key=rosbags/2026-06-05_13-27-07/output.bag

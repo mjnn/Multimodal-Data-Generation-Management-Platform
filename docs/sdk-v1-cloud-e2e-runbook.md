@@ -1,43 +1,39 @@
 # SDK v1 上云全链 E2E Runbook（M9.3）
 
-> **目标**：一次 DataWorks 运行后，OSS `clips/{clip_id}/runs/{run_id}/`（sdk_v1）、MaxCompute `aig_sdk__*`、`pipeline/dispatch/latest.json` 与 HMI local 一致。  
+> **目标**：一次 DataWorks 运行后，OSS `clips/{clip_id}/runs/{run_id}/`（sdk_v1）、MaxCompute `aig_sdk__*`、`pipeline/dispatch/latest.json` 与 HMI（在线直读或 local sync）一致。  
 > **验数脚本**：`pipeline/scripts/verify_sdk_v1_run.py`  
-> **推荐节点**：`pipeline/dataworks/sdk_pipeline_driver_node.py`（单 Driver + DPE `apply_chunk`）
+> **生产节点**：`pipeline/dataworks/bundled/sdk_pipeline_driver_node.py`（**hybrid**：DPE extract/preview + Driver AI）
 
 ---
 
 ## 1. 链路概览
 
-**主路径**：一个 PyODPS3 节点 `sdk_pipeline_driver`。Driver 扫 bag → `mf.apply_chunk`（`batch_rows`）拉起 DPE chunk UDF → SDK 按 `stages` 写 OSS run 树 → Driver 收尾 `mc_write` + `dispatch`。
+**生产主路径（hybrid，2026-08-10 P2 已验证）**：一个 PyODPS3 节点 `sdk_pipeline_driver`。
+
+| 层 | 职责 | 关键参数 |
+|----|------|----------|
+| DPE `apply_chunk` | `extract` + `preview`（无嵌套 MaxFrame AI） | `dpe_parallel`（如 4）+ `batch_rows=1` |
+| Driver bare MaxFrame AI | `asr` / `label` / `embed` | `ai_media_mode=oss_url`、`asr_parallel_partitions` 等 |
+| Driver 收尾 | 写回 jsonl、**`run.json`**、`mc_write`、`dispatch` | `stages` 含 `mc_write,dispatch`（upload 可选） |
 
 ```mermaid
 flowchart TB
-  subgraph DW["DataWorks 单节点 sdk_pipeline_driver"]
+  subgraph DW["DataWorks 单节点 sdk_pipeline_driver · hybrid"]
     D[Driver 壳]
-    D -->|扫 OSS rosbags/ 或显式 bag| DF[md.DataFrame 一行一 bag]
-    DF -->|mf.apply_chunk batch_rows| UDF[DPE chunk UDF]
-    UDF -->|SDK stages| OSS[(OSS run 树 sdk_v1)]
-    UDF -->|结果行 ok/stages_done| OUT[result DataFrame]
-    OUT --> MCW[Driver: mc_write → aig_sdk__*]
-    OUT --> DIS[Driver: dispatch → latest.json]
+    D -->|扫 bag / 显式列表| DF[md.DataFrame]
+    DF -->|apply_chunk + rebalance| UDF[DPE: extract+preview]
+    UDF --> OSS[(OSS run 树 sdk_v1)]
+    D -->|MaxFrame AI| AI[Driver: asr/label/embed]
+    AI --> OSS
+    D --> META[run.json + mc_write aig_sdk__* + dispatch]
   end
-  ARGS[工作流参数 stages/model_backend/dpe_image] --> D
-  ARGS -.->|闭包注入 UDF| UDF
-  DIS --> SYNC[sync_hmi_local.py]
-  SYNC --> HMI[HMI local SQLite]
+  META --> HMI[HMI 在线 MC+OSS 或 sync_hmi_local]
 ```
 
-| 层 | 职责 | 产物 |
-|----|------|------|
-| Driver `discover` | 列举 bag、算 `clip_id`/`run_id`、建输入 DataFrame | `DISCOVERED_ROWS_JSON`（日志） |
-| DPE UDF | 按 `stages` 调 SDK（extract/asr/preview/label/embed/upload） | OSS run 树、`asr.jsonl`、`labels.jsonl` 等 |
-| Driver `mc_write` | 消费 `ok=true` 行，读 OSS jsonl 入库 | `aig_sdk__fact_*`、`pipeline_run`、`pipeline_step` |
-| Driver `dispatch` | 写调度 manifest | `pipeline/dispatch/latest.json` |
+**`stages` 约定**（逗号分隔）：`discover` | `extract` | `asr` | `preview` | `label` | `embed` | `upload` | `mc_write` | `dispatch`。  
+全链示例：`stages=extract,preview,asr,label,embed,mc_write,dispatch`（见 `workflow-params-sdk-pipeline-p0.example`）。
 
-**`stages` 约定**（逗号分隔，默认全开）：`discover` | `extract` | `asr` | `preview` | `label` | `embed` | `upload` | `mc_write` | `dispatch`。  
-缩阶探针示例：`stages=extract,asr`（跳过 preview/label/embed 及 Driver 收尾）。
-
-> **冻结**：多节点 `sdk_extract` / `sdk_asr` / … / `sdk_dispatch` 工作流仅作参考/紧急回退，新 run 勿再编排。见 `pipeline/dataworks/WORKFLOW.md`。
+> **冻结**：多节点 `sdk_extract` / `sdk_asr` / … 工作流仅紧急回退。见 `pipeline/dataworks/WORKFLOW.md`。
 
 ---
 
@@ -110,26 +106,35 @@ P0 参数模板：`pipeline/dataworks/workflow-params-sdk-pipeline-p0.example`�
 
 | 参数 | 说明 |
 |------|------|
-| `model_backend=mc` | UDF 内 `MODEL_BACKEND=mc`，嵌套 MaxFrame AI |
-| `mc_omni_fallback_model` | Omni 未上架前必填，如 `qwen3.6-plus` |
+| `model_backend=mc` | UDF 内 `MODEL_BACKEND=mc`，嵌套 MaxFrame AI（**maxframe≥2.8.0**） |
+| `odps_catalog_endpoint` | 可选；默认 Driver 调 `o.get_catalog_host()`，否则从 ODPS service endpoint 推导 |
+| `mc_omni_fallback_model` | Omni 未上架前可选 VL 兜底，如 `qwen3.6-plus` |
+| `MC_OMNI_NATIVE_MEDIA` | 默认 `true`；Omni：`cp.video` + `cp.audio` + `cp.text`（含 ASR） |
 | `total_rpm_limit` / `request_timeout` | AI running_options（可选） |
 
 Driver 日志关键字：`DISCOVERED_ROWS_JSON`、`Logview:`、`BATCH_SUMMARY_JSON`。
 
 ---
 
-## 4. 探针与验收（P0 / P1 / P2）
+## 4. 探针与验收（smoke / P0 / P1 / P2）
 
 设计来源：`docs/superpowers/specs/2026-08-04-sdk-single-driver-apply-chunk-design.md` §7。
 
-| 层 | 配置 | 通过标准 |
-|----|------|----------|
-| **P0 探针** | `stages=extract,asr`，`batch_rows=1`，1 bag | UDF 内 mc ASR 成功；OSS 有 `asr.jsonl` |
-| **P1 全链缩批** | stages 全开，`max_bags=1` | sdk_v1 run 树齐全；`verify_sdk_v1_run.py` exit 0 |
-| **P2 批量** | 多 bag，`batch_rows`≥1 | 行级隔离（单 bag 失败不拖垮批）；`BATCH_SUMMARY_JSON` 计数正确；dispatch 含 `items[]` |
-| P3 HMI | P1/P2 后 sync | 时间轴 / 标签 / 相似可用（H-2） |
+| 层 | 配置 | 通过标准 | 耗时 |
+|----|------|----------|------|
+| **fast（推荐先做）** | `sdk_driver_fast_probe_node.py` + `workflow-params-sdk-fast.example` | `FAST_PROBE_RESULT` 含 `ok=true`；bag HeadObject 成功 | **约 30s–2 min** |
+| **DPE smoke** | `sdk_dpe_smoke_node.py` | DPE 内 SDK import + 挂载读 bag | **常 5–15 min+**（冷启动） |
+| **本机 DPE 探针** | `py -3.11 pipeline/scripts/probe_dpe_image_sdk.py --image rosbag_sdk_dpe` | `PROBE_RESULT ok=true` | 5–15 min |
+| **P0 探针** | `sdk_pipeline_driver`：`stages=extract,asr` | OSS 有 `asr.jsonl` | **20–40+ min** |
+| **P1 全链缩批** | stages 全开，`max_bags=1` | sdk_v1 run 树齐全；`verify_sdk_v1_run.py` exit 0 | 更长 |
+| **P2 批量** | 多 bag，`dpe_parallel`≥行数；hybrid AI | 行级隔离；`BATCH_SUMMARY_JSON`；dispatch `items[]`；**2026-08-10 4-bag verify 18/18** | — |
+| P3 HMI | 在线读 MC 或 sync | 总览/标签可用；preview 主观（H-2） | — |
 
-**P0 必过门禁**：DPE Worker 内嵌套 MaxFrame AI（`MODEL_BACKEND=mc`）。失败时同节点改 `model_backend=api`，不回退多节点工作流。
+**建议顺序**：**fast** →（可选本机或 DPE smoke 验镜像）→ **P0** extract+preview（或 extract+asr）→ **P1/P2 hybrid 全链**。
+
+**P0/P2 混合路径要点**：`ai_submitter=driver`；Driver 写出 **`run.json`**（不必依赖 upload stage）；`ai_media_mode=oss_url`（需 `oss_vl_*`）；粘贴 **`pipeline/dataworks/bundled/sdk_pipeline_driver_node.py`**。
+
+**P0 必过门禁（历史 mc-in-DPE 探针）**：若 stages 在 DPE 内跑 AI，需嵌套 MaxFrame + Catalog 内网 endpoint。**生产已改 hybrid**：AI 在 Driver，DPE 只做 extract/preview。
 
 ---
 
@@ -154,6 +159,16 @@ py -3 hmi\scripts\sync_hmi_local.py --clip-id sha256:... --run-id ... --ds 20260
 
 **通过标准**：`verify_sdk_v1_run.py` exit 0；摘要行 `Summary: N/N passed`。
 
+**MaxFrame 2.8 本机预检**（打 DPE 镜像前，无需 DataWorks）：
+
+```powershell
+cd pipeline/local_sdk_mc_test
+py -3.11 run_mc_oss_verify.py              # SDK mc 阶段
+py -3.11 run_mc_oss_verify.py --cloud-only # OSS + MC ingest + verify 18/18
+```
+
+期望 `asr.jsonl` → `mc_mode=content_part_audio`；`labels.jsonl` → `mc_mode=omni_native` 且 `mc_has_asr_in_text=true`。
+
 ### 检查项摘要
 
 | 域 | 检查 |
@@ -164,11 +179,17 @@ py -3 hmi\scripts\sync_hmi_local.py --clip-id sha256:... --run-id ... --ds 20260
 
 ---
 
-## 6. HMI 人工确认（H-2）
+## 6. HMI 确认（H-2）
 
-1. 启动 HMI local：`hmi/` 栈按 `hmi-web-stack.mdc`
-2. 打开对应 clip 时间轴：preview 可播、标签/ASR 可见
-3. 管线总览五步均为 success/completed
+**推荐：在线模式直读**（无需 A-C-3 sync）
+
+1. 仓库根 `.env`：`OSS_BUCKET=rosbag-labels-pipeline-bucket2` + ODPS 凭证；`shared/config.yaml` → `cloud.maxcompute.table_prefix=aig_sdk__`
+2. 启动：`cd hmi/backend && python run.py` · `cd hmi/frontend && npm run dev`
+3. 侧栏点 **在线**（或 `HMI_DATA_SOURCE=cloud` 后重启）
+4. 数据总览找 clip1：`sha256:9a4ac3a2704dd052630c9b3cd320760b9214febc22c53cf14b41b0806f4d81ed` / run `bb319286-3cad-4b56-93f9-32cc25329bb9`
+5. 确认标签/ASR；preview MP4 主观 OK → 签 H-2
+
+可选 sync 路径：`py -3 hmi/scripts/sync_hmi_local.py --clip-id … --run-id … --ds 20260810` 后用本地模式播放。
 
 ---
 

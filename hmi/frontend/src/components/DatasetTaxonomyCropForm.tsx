@@ -10,11 +10,11 @@ type DatasetTaxonomyCropFormProps = {
   onChange: (next: string[]) => void
 }
 
-function collectLabelKeys(checked: string[]): string[] {
-  return checked.filter((k) => !k.startsWith('level:'))
-}
-
 export function DatasetTaxonomyCropForm({ nodes, value, onChange }: DatasetTaxonomyCropFormProps) {
+  const labelIdSet = useMemo(
+    () => new Set(nodes.filter((n) => n.is_active !== false).map((n) => n.label_id)),
+    [nodes],
+  )
   const treeData = useMemo((): DataNode[] => {
     const groups = groupTaxonomyLevels(nodes.filter((n) => n.is_active !== false))
     return toEditorTreeData(groups, false)
@@ -36,7 +36,8 @@ export function DatasetTaxonomyCropForm({ nodes, value, onChange }: DatasetTaxon
       checkedKeys={value}
       onCheck={(keys) => {
         const list = Array.isArray(keys) ? keys : keys.checked
-        onChange(collectLabelKeys(list.map(String)))
+        // Keep only real taxonomy leaf ids (ignore level / dtype / enumval synthetic keys).
+        onChange(list.map(String).filter((k) => labelIdSet.has(k)))
       }}
       height={240}
       data-testid="dataset-taxonomy-crop-tree"

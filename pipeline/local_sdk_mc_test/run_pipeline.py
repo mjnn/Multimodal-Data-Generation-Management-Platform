@@ -5,8 +5,8 @@
 
     cd pipeline/local_sdk_mc_test
     copy .env.example .env   # 填 BAG_LOCAL_PATH / ODPS_* / MODEL_BACKEND
-    py -3 run_pipeline.py                 # extract→asr→preview→label→embed
-    py -3 run_pipeline.py extract asr     # 只跑指定节点
+    py -3 run_pipeline.py                 # extract→encode→asr→preview→label→embed
+    py -3 run_pipeline.py extract bbox encode  # 含打框
     py -3 run_pipeline.py infer           # 复合一步
     py -3 sdk_label_node.py               # 也可直接跑单文件
 """
@@ -30,9 +30,11 @@ if str(_SDK) not in sys.path:
 
 from sdk_node_common import load_local_env, resolve_backend  # noqa: E402
 
-ATOMIC_ORDER = ("extract", "asr", "preview", "label", "embed")
+ATOMIC_ORDER = ("extract", "encode", "asr", "preview", "label", "embed")
 NODE_MODULES = {
     "extract": "sdk_extract_node",
+    "bbox": "sdk_bbox_node",
+    "encode": "sdk_encode_node",
     "asr": "sdk_asr_node",
     "preview": "sdk_preview_node",
     "label": "sdk_label_node",

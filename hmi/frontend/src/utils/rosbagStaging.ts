@@ -1,5 +1,5 @@
 /**
- * 管线暂存：从「选文件 / 选文件夹 / 拖入目录树」中收集 .bag。
+ * 管线暂存：收集 .bag 与原始 video / audio / text。
  *
  * 浏览器限制：
  * - `<input directory>` / 拖文件夹时，可通过 `webkitRelativePath` 或 FileSystemEntry
@@ -10,8 +10,28 @@
  * `collection_dir_from_filename` 才能取到时间戳父目录名做展示。
  */
 
+export type SourceModality = 'bag' | 'video' | 'audio' | 'text'
+
+const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.mkv', '.avi']
+const AUDIO_EXTS = ['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac']
+const TEXT_EXTS = ['.txt', '.json', '.md', '.csv']
+
 export function isBagFileName(name: string): boolean {
   return name.toLowerCase().endsWith('.bag')
+}
+
+export function classifySourceFileName(name: string): SourceModality | null {
+  const lower = name.toLowerCase().replace(/\\/g, '/')
+  const base = lower.includes('/') ? lower.slice(lower.lastIndexOf('/') + 1) : lower
+  if (base.endsWith('.bag')) return 'bag'
+  if (VIDEO_EXTS.some((ext) => base.endsWith(ext))) return 'video'
+  if (AUDIO_EXTS.some((ext) => base.endsWith(ext))) return 'audio'
+  if (TEXT_EXTS.some((ext) => base.endsWith(ext))) return 'text'
+  return null
+}
+
+export function isPipelineSourceFileName(name: string): boolean {
+  return classifySourceFileName(name) != null
 }
 
 /** Unify Windows/Unix separators; strip leading slashes. */
@@ -23,6 +43,7 @@ export type StagedBagFile = {
   file: File
   /** 上传/列表展示路径；文件夹选择时含父目录。 */
   relativePath: string
+  modality?: SourceModality
 }
 
 function fileRelativePath(file: File): string {
@@ -32,9 +53,11 @@ function fileRelativePath(file: File): string {
 }
 
 export function toStagedBag(file: File, relativePath?: string): StagedBagFile {
+  const rel = normalizeRelativePath(relativePath || fileRelativePath(file))
   return {
     file,
-    relativePath: normalizeRelativePath(relativePath || fileRelativePath(file)),
+    relativePath: rel,
+    modality: classifySourceFileName(rel) || undefined,
   }
 }
 
@@ -75,11 +98,11 @@ function entryFile(entry: FileSystemFileEntry): Promise<File> {
   })
 }
 
-/** DFS：只收集 .bag，relativePath = 自拖入根起的路径。 */
+/** DFS：收集 bag + 原始媒体，relativePath = 自拖入根起的路径。 */
 async function walkEntry(entry: FileSystemEntry, parentPath: string, out: StagedBagFile[]): Promise<void> {
   if (entry.isFile) {
     const file = await entryFile(entry as FileSystemFileEntry)
-    if (!isBagFileName(file.name)) return
+    if (!isPipelineSourceFileName(file.name)) return
     const rel = parentPath ? `${parentPath}/${file.name}` : file.name
     out.push(toStagedBag(file, rel))
     return
@@ -95,6 +118,10 @@ async function walkEntry(entry: FileSystemEntry, parentPath: string, out: Staged
 
 /** 拖放：优先走 FileSystemEntry（可进文件夹）；否则退回 files 列表。 */
 export async function collectBagsFromDataTransfer(dt: DataTransfer): Promise<StagedBagFile[]> {
+  return collectSourcesFromDataTransfer(dt)
+}
+
+export async function collectSourcesFromDataTransfer(dt: DataTransfer): Promise<StagedBagFile[]> {
   const out: StagedBagFile[] = []
   const items = dt.items
   if (items && items.length > 0) {
@@ -112,7 +139,7 @@ export async function collectBagsFromDataTransfer(dt: DataTransfer): Promise<Sta
   }
   for (let i = 0; i < dt.files.length; i += 1) {
     const file = dt.files.item(i)
-    if (file && isBagFileName(file.name)) {
+    if (file && isPipelineSourceFileName(file.name)) {
       out.push(toStagedBag(file))
     }
   }
@@ -121,6 +148,25 @@ export async function collectBagsFromDataTransfer(dt: DataTransfer): Promise<Sta
 
 /** `<input type=file directory>` / 普通多选：依赖 webkitRelativePath。 */
 export function collectBagsFromFileList(fileList: FileList | File[]): StagedBagFile[] {
+  return collectSourcesFromFileList(fileList)
+}
+
+export function collectSourcesFromFileList(fileList: FileList | File[]): StagedBagFile[] {
   const files = Array.from(fileList)
-  return files.filter((f) => isBagFileName(f.name)).map((f) => toStagedBag(f))
+  return files.filter((f) => isPipelineSourceFileName(f.name)).map((f) => toStagedBag(f))
+}
+
+export function modalityLabel(m: SourceModality | undefined): string {
+  switch (m) {
+    case 'bag':
+      return 'Rosbag'
+    case 'video':
+      return '视频'
+    case 'audio':
+      return '音频'
+    case 'text':
+      return '文本'
+    default:
+      return '文件'
+  }
 }

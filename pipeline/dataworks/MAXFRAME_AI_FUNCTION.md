@@ -16,10 +16,11 @@
 
 | Job | 能力 | AI Function 接口 | 推荐模型 |
 |-----|------|------------------|----------|
-| Job2 ASR | 音频转写 | `llm.generate` + `input_audio` | `qwen3-asr-flash`（百炼 ASR，非 qwen3.6-flash 文本模型） |
-| Job3 打标 | 座舱图像结构化标签 | `llm.generate` + `ImageContentType.IMAGE_URL` 或 `llm.extract` | `qwen3.6-plus` / `Qwen3-8B` + extract |
+| Job2 ASR | 音频转写 | `llm.generate` + **`content_part.audio`**（2.8+）或 legacy `input_audio` | `qwen3-asr-flash` |
+| Job3 打标 | 座舱图像结构化标签 | `llm.generate` + `ImageContentType.URL` 或 `llm.extract` | `qwen3.6-plus` / Omni catalog |
 | Job4 向量 | 文本段 embedding | `llm.embed(series, simple=True)` | `text-embedding-v4` |
-| Job4 向量 | 图像 embedding | `llm.embed` 或 VL embedding 模型 | `qwen3-vl-embedding` |
+| Job4 向量 | 图像 embedding | `llm.embed` + `cp.image` / `cp.text` | `qwen3-vl-embedding` |
+| **SDK v1 label** | Omni 多模态打标 | **`cp.video` + `cp.audio` + `cp.text`（含 ASR）**（`McOmniLabelClient`） | `qwen3.5-omni-plus` |
 
 ## 工作流参数（AI 相关）
 
@@ -66,7 +67,7 @@ base64 模式只是图像 **输入格式**；多出来的是 encode 结果经 Dr
 
 ## SDK
 
-Driver 镜像需 **maxframe >= 2.7.1**（含 `maxframe.learn.contrib.llm`）。
+Driver 镜像需 **maxframe >= 2.8.0**（`content_part` 含 `audio` / `video`；`ImageContentType.URL` 取代旧 `IMAGE_URL`）。
 
 ## 参考
 

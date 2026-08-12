@@ -1,10 +1,17 @@
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
-import { AutoComplete, Button, Input, Select, Space, Typography } from 'antd'
+import { AutoComplete, Button, Input, InputNumber, Select, Space, Typography } from 'antd'
 import { useMemo, useState, type ReactNode } from 'react'
 import type { TaxonomyNodeDetail } from '../api/types'
 import { schemaEnumValues } from '../utils/labelDisplay'
 
-export type LabelFilters = Record<string, string | boolean>
+/** Scalar, multi-value OR list, or numeric range. */
+export type LabelFilterValue =
+  | string
+  | boolean
+  | string[]
+  | { min?: number | null; max?: number | null }
+
+export type LabelFilters = Record<string, LabelFilterValue>
 
 type FilterRow = {
   key: string
@@ -28,6 +35,11 @@ function nodeById(nodes: TaxonomyNodeDetail[]): Map<string, TaxonomyNodeDetail> 
   return new Map(activeNodes(nodes).map((n) => [n.label_id, n]))
 }
 
+function isNumericDtype(dtype: string | null | undefined): boolean {
+  const d = (dtype || '').toLowerCase()
+  return d === 'int' || d === 'float' || d === 'number' || d === 'numeric' || d === 'double'
+}
+
 function filtersToRows(value: LabelFilters): FilterRow[] {
   return Object.keys(value).map((labelId) => ({
     key: labelId,
@@ -40,17 +52,20 @@ function rowsToFilters(rows: FilterRow[], value: LabelFilters): LabelFilters {
   for (const row of rows) {
     if (!row.labelId) continue
     const v = value[row.labelId]
-    if (v !== undefined && v !== '') {
-      out[row.labelId] = v
+    if (v === undefined || v === '') continue
+    if (Array.isArray(v) && v.length === 0) continue
+    if (typeof v === 'object' && !Array.isArray(v)) {
+      if (v.min == null && v.max == null) continue
     }
+    out[row.labelId] = v
   }
   return out
 }
 
 type ValueEditorProps = {
   node: TaxonomyNodeDetail
-  value: string | boolean | undefined
-  onChange: (next: string | boolean | undefined) => void
+  value: LabelFilterValue | undefined
+  onChange: (next: LabelFilterValue | undefined) => void
 }
 
 function ValueEditor({ node, value, onChange }: ValueEditorProps) {
@@ -78,29 +93,69 @@ function ValueEditor({ node, value, onChange }: ValueEditorProps) {
     )
   }
 
+  if (isNumericDtype(node.dtype)) {
+    const range =
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? value
+        : { min: undefined, max: undefined }
+    return (
+      <Space.Compact style={{ width: '100%' }}>
+        <InputNumber
+          placeholder="最小值"
+          style={{ width: '50%' }}
+          value={range.min ?? undefined}
+          onChange={(min) => {
+            const next = { min: min ?? null, max: range.max ?? null }
+            if (next.min == null && next.max == null) onChange(undefined)
+            else onChange(next)
+          }}
+        />
+        <InputNumber
+          placeholder="最大值"
+          style={{ width: '50%' }}
+          value={range.max ?? undefined}
+          onChange={(max) => {
+            const next = { min: range.min ?? null, max: max ?? null }
+            if (next.min == null && next.max == null) onChange(undefined)
+            else onChange(next)
+          }}
+        />
+      </Space.Compact>
+    )
+  }
+
   if (enumValues.length > 0) {
+    const selected = Array.isArray(value)
+      ? value
+      : typeof value === 'string' && value
+        ? [value]
+        : []
     return (
       <Select
+        mode="multiple"
         allowClear
         showSearch
-        placeholder="选择枚举值"
+        placeholder="选择一个或多个枚举值"
         style={{ width: '100%' }}
-        value={typeof value === 'string' ? value : undefined}
+        value={selected}
         options={enumValues.map((v) => ({ value: v, label: v }))}
-        onChange={(next) => onChange(next ?? undefined)}
+        onChange={(next) => onChange(next.length ? next : undefined)}
       />
     )
   }
 
+  const tags =
+    Array.isArray(value) ? value : typeof value === 'string' && value ? [value] : []
   return (
-    <Input
+    <Select
+      mode="tags"
       allowClear
-      placeholder="输入匹配值"
-      value={typeof value === 'string' ? value : ''}
-      onChange={(e) => {
-        const next = e.target.value.trim()
-        onChange(next || undefined)
-      }}
+      tokenSeparators={[',', '，']}
+      placeholder="输入一个或多个取值后回车"
+      style={{ width: '100%' }}
+      value={tags}
+      onChange={(next) => onChange(next.length ? next.map(String) : undefined)}
+      dropdownStyle={{ display: 'none' }}
     />
   )
 }
@@ -146,6 +201,12 @@ export function DatasetLabelFilterForm({ nodes, value, onChange }: DatasetLabelF
     const nextRows = rows.map((r) => (r.key === rowKey ? { ...r, labelId } : r))
     setRows(nextRows)
     const merged = { ...value }
+    // Drop previous empty row binding when switching label
+    for (const r of rows) {
+      if (r.key === rowKey && r.labelId && r.labelId !== labelId) {
+        delete merged[r.labelId]
+      }
+    }
     if (labelId && merged[labelId] === undefined) {
       const node = lookup.get(labelId)
       if (node?.dtype === 'bool') merged[labelId] = true
@@ -153,7 +214,7 @@ export function DatasetLabelFilterForm({ nodes, value, onChange }: DatasetLabelF
     syncRowsFromValue(merged, nextRows)
   }
 
-  const updateRowValue = (labelId: string, next: string | boolean | undefined) => {
+  const updateRowValue = (labelId: string, next: LabelFilterValue | undefined) => {
     const merged = { ...value }
     if (next === undefined) {
       delete merged[labelId]
@@ -186,7 +247,7 @@ export function DatasetLabelFilterForm({ nodes, value, onChange }: DatasetLabelF
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        点击「添加筛选项」选择标签并设置取值（多条件 AND）
+        点击「添加筛选项」选择标签并设置取值（多条件 AND；枚举/字符串可多值 OR；数值可用区间）
       </Typography.Text>
 
       {rows.map((row) => {
@@ -208,7 +269,7 @@ export function DatasetLabelFilterForm({ nodes, value, onChange }: DatasetLabelF
               }}
               placeholder="搜索标签名称或 ID"
             />
-            <div style={{ minWidth: 200, flex: 1 }}>
+            <div style={{ minWidth: 220, flex: 1 }}>
               {node ? (
                 <ValueEditor
                   node={node}

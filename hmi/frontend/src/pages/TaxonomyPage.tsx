@@ -55,7 +55,7 @@ import { canManageTaxonomy } from '../auth/roles'
 
 import { ContentCard, FromAuditBackLink, FROM_AUDIT_PARAM, FROM_AUDIT_VALUE, PageHeader, PageStack, useFromAudit } from '../components/ui'
 
-import { nodesToPayload, type TaxonomyLevelMeta } from '../utils/taxonomyTree'
+import { nodesToPayload, formatEmptyLevelLabels, type TaxonomyLevelMeta } from '../utils/taxonomyTree'
 import { formatTaxonomyImpactWarning } from '../utils/taxonomyDisplay'
 
 
@@ -544,6 +544,13 @@ export function TaxonomyPage() {
 
       return
 
+    }
+
+    if (emptyLevels.length > 0) {
+      message.error(
+        `以下层级尚无标签节点，无法保存：${formatEmptyLevelLabels(emptyLevels).join('、')}。请添加标签或删除空层级。`,
+      )
+      return
     }
 
     setSaving(true)

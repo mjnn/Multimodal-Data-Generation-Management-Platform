@@ -25,6 +25,7 @@ _DASHSCOPE_MODEL_HINTS = (
     "qwen3.",
     "qwen3-",
     "qwen3-vl",
+    "qwen-vl",  # qwen-vl-max-latest 等百炼 VL（Token Quota，不用 CU/GU）
     "text-embedding",
     "deepseek-v4",
     "deepseek-v3",
@@ -138,7 +139,7 @@ def _account_security_token(account: Any) -> str:
 
 
 def ai_image_storage_options(account: Any) -> dict[str, str]:
-    """Long-term AK/SK or STS triple for MaxFrame VL IMAGE_URL reads."""
+    """Long-term AK/SK or STS triple for MaxFrame VL OSS URL reads."""
     access_id = str(account.access_id)
     opts: dict[str, str] = {
         "access_key_id": access_id,
@@ -156,7 +157,7 @@ def resolve_vl_storage_options(
     *,
     role_arn: str | None = None,
 ) -> dict[str, str]:
-    """Resolve OSS AK/SK for ``cp.image(IMAGE_URL)``.
+    """Resolve OSS AK/SK for ``cp.image(URL)``.
 
     MaxFrame VL **only** accepts ``access_key_id`` + ``access_key_secret`` here.
     ``role_arn`` is for DPE ``@with_fs_mount`` only and must not be passed to
@@ -179,7 +180,7 @@ def resolve_vl_storage_options(
             return resolved
 
     raise ValueError(
-        "VL IMAGE_URL requires long-term OSS access_key_id/access_key_secret "
+        "VL OSS URL mode requires long-term OSS access_key_id/access_key_secret "
         "(workflow: oss_vl_access_key_id + oss_vl_access_key_secret). "
         "oss_ram_role_arn is for DPE mount only, not MaxFrame cp.image."
     )
@@ -218,7 +219,7 @@ def build_vl_oss_storage_options(
     oss_access_key_id: str | None = None,
     oss_access_key_secret: str | None = None,
 ) -> dict[str, str] | None:
-    """Build ``storage_options`` for ``cp.image(IMAGE_URL)`` (AK/SK only)."""
+    """Build ``storage_options`` for ``cp.image(URL)`` (AK/SK only)."""
     del role_arn  # mount-only
     ak = (oss_access_key_id or "").strip()
     sk = (oss_access_key_secret or "").strip()
@@ -355,6 +356,7 @@ def prepare_mf_ai_runtime(
 
 
 def is_public_modelset_model(model_name: str) -> bool:
+    # ASR（如 qwen3-asr-flash）已在 public modelset；须 read_odps_model。
     if is_asr_capable_model(model_name):
         return True
     lower = model_name.lower()
@@ -491,7 +493,7 @@ def ai_embed_oss_image_urls(
     request_timeout: int | None = None,
     ai_memory: str | None = None,
 ) -> list[list[float]]:
-    """Embed OSS images via VL embedding model + IMAGE_URL."""
+    """Embed OSS images via VL embedding model + ``ImageContentType.URL``."""
     if not image_urls:
         return []
     if not model_name:
@@ -519,7 +521,7 @@ def ai_embed_oss_image_urls(
         image_input = [
             cp.image(
                 data=df.image_url,
-                type=ImageContentType.IMAGE_URL,
+                type=ImageContentType.URL,
                 storage_options=vl_storage_options,
             ),
         ]
@@ -641,7 +643,7 @@ def ai_transcribe_segments(
     request_timeout: int | None = None,
     ai_memory: str | None = None,
 ) -> list[dict[str, Any]]:
-    """ASR via Qwen-ASR + input_audio (OSS wav URL). Not text LLM + URL in prompt."""
+    """ASR via Qwen-ASR（MaxFrame 2.8+ 优先 ``content_part.audio``，否则 ``input_audio``）。"""
     if not model_name:
         return [
             {
@@ -687,21 +689,35 @@ def ai_transcribe_segments(
     if lang:
         asr_options["language"] = lang.split("-")[0].lower()
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_audio",
-                    "input_audio": {"data": "{audio_url}"},
-                }
-            ],
-        }
-    ]
     params: dict[str, Any] = {"asr_options": asr_options}
     oss_opts: dict[str, str] | None = None
     if storage_options:
         oss_opts = resolve_vl_storage_options(storage_options, odps_entry)
+
+    if hasattr(llm, "content_part"):
+        from maxframe.learn.contrib.llm import AudioContentType
+
+        cp = llm.content_part
+        audio_part: dict[str, Any] = {
+            "data": getattr(df, "audio_url"),
+            "type": AudioContentType.URL,
+            "mime_type": "audio/wav",
+        }
+        if oss_opts:
+            audio_part["storage_options"] = oss_opts
+        messages = [{"role": "user", "content": [cp.audio(**audio_part)]}]
+    else:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "{audio_url}"},
+                    }
+                ],
+            }
+        ]
 
     def _run_asr_generate(**extra: Any) -> md.DataFrame:
         gen_kwargs: dict[str, Any] = {"simple_output": True, "params": params, **extra}
@@ -755,6 +771,182 @@ def _taxonomy_to_extract_schema(taxonomy: dict[str, Any]) -> dict[str, str]:
         value_schema = item.get("value_schema") or {}
         schema[label_id] = str(value_schema.get("type") or "string")
     return schema
+
+
+def build_sync_label_prompt(taxonomy: dict[str, Any], *, compact: bool = True) -> str:
+    base = build_label_prompt(taxonomy, compact=compact)
+    return (
+        f"{base}\n"
+        "本次输入为同一时刻四路相机（camera0~camera3）时间对齐帧，请综合四路视角输出一组 OMS 标签。"
+        "严格输出单个 JSON 对象，不要按相机拆分。"
+    )
+
+
+def _sync_group_camera_columns(group: dict[str, Any]) -> list[dict[str, Any]]:
+    frames = group.get("frames") or []
+    return sorted(frames, key=lambda item: str(item.get("camera") or ""))
+
+
+def ai_label_sync_groups_with_model(
+    sync_groups: list[dict[str, Any]],
+    model_name: str,
+    odps_entry: Any,
+    *,
+    taxonomy: dict[str, Any],
+    cloud_region: str,
+    oss_bucket: str,
+    storage_options: dict[str, str] | None = None,
+    modelset_project: str = DEFAULT_MODELSET_PROJECT,
+    parallel_partitions: int = 1,
+    parsed_relpath: str | None = None,
+    role_arn: str | None = None,
+    compact_prompt: bool = True,
+    total_rpm_limit: int | None = None,
+    request_timeout: int | None = None,
+    ai_memory: str | None = None,
+) -> list[dict[str, Any]]:
+    """One VL call per sync group with up to four aligned camera images."""
+    if not model_name:
+        return []
+    if not sync_groups:
+        return []
+
+    region_id = cloud_region.replace("_", "-")
+    llm = create_ai_model(model_name, odps_entry, modelset_project=modelset_project)
+    partitions = resolve_ai_parallel_partitions(len(sync_groups), parallel_partitions)
+
+    if is_public_modelset_model(model_name) and hasattr(llm, "content_part"):
+        from maxframe.learn.contrib.llm import ImageContentType
+
+        cp = llm.content_part
+        prompt = build_sync_label_prompt(taxonomy, compact=compact_prompt)
+
+        use_base64 = any(
+            str(frame.get("image_base64") or "").strip()
+            for group in sync_groups
+            for frame in (group.get("frames") or [])
+        )
+        rows: list[dict[str, Any]] = []
+        for group in sync_groups:
+            ordered = _sync_group_camera_columns(group)
+            row: dict[str, Any] = {"sync_group_id": group.get("sync_group_id")}
+            for idx, frame in enumerate(ordered):
+                if use_base64:
+                    row[f"image_b64_{idx}"] = str(frame.get("image_base64") or "")
+                else:
+                    image_relpath = str(frame.get("image_relpath") or frame.get("image_path") or "")
+                    frame_parsed_relpath = (
+                        parsed_relpath or str(frame.get("parsed_relpath") or "").strip() or None
+                    )
+                    oss_key = oss_key_for_frame_image(
+                        image_relpath,
+                        parsed_relpath=frame_parsed_relpath,
+                    )
+                    row[f"image_url_{idx}"] = (
+                        f"oss://oss-{region_id}-internal.aliyuncs.com/{oss_bucket}/{oss_key}"
+                    )
+            rows.append(row)
+
+        df = _rebalance_df(md.DataFrame(pd.DataFrame(rows)), partitions)
+        content_parts: list[Any] = [cp.text(prompt)]
+        camera_count = max(len(_sync_group_camera_columns(group)) for group in sync_groups)
+        if use_base64:
+            for idx in range(camera_count):
+                content_parts.append(
+                    cp.image(
+                        data=getattr(df, f"image_b64_{idx}"),
+                        type=ImageContentType.BASE64,
+                        mime_type="image/jpeg",
+                    )
+                )
+        else:
+            vl_storage_options = resolve_vl_storage_options(
+                storage_options,
+                odps_entry,
+                role_arn=role_arn,
+            )
+            for idx in range(camera_count):
+                content_parts.append(
+                    cp.image(
+                        data=getattr(df, f"image_url_{idx}"),
+                        type=ImageContentType.URL,
+                        storage_options=vl_storage_options,
+                    )
+                )
+
+        generate_kwargs: dict[str, Any] = {
+            "simple_output": True,
+            "params": {"temperature": 0.2, "max_tokens": 2048},
+        }
+        running_options = build_ai_running_options(
+            total_rpm_limit=total_rpm_limit,
+            request_timeout=request_timeout,
+            ai_memory=ai_memory,
+        )
+        if running_options:
+            generate_kwargs["running_options"] = running_options
+        result = llm.generate(
+            df,
+            messages=[{"role": "user", "content": content_parts}],
+            **generate_kwargs,
+        )
+        outputs = _fetch_series(result, ("output", "generated_text", "text"))
+        labeled: list[dict[str, Any]] = []
+        for group, raw in zip(sync_groups, outputs):
+            values: dict[str, Any] = {}
+            text = str(raw or "").strip()
+            if text:
+                match = re.search(r"\{.*\}", text, re.DOTALL)
+                if match:
+                    try:
+                        loaded = json.loads(match.group(0))
+                        if isinstance(loaded, dict):
+                            values = loaded
+                    except json.JSONDecodeError:
+                        values = {"raw": text}
+                else:
+                    values = {"raw": text}
+            labeled.append(
+                {
+                    "sync_group_id": group.get("sync_group_id"),
+                    "values": values,
+                    "status": _infer_label_status(values),
+                }
+            )
+        return labeled
+
+    schema = _taxonomy_to_extract_schema(taxonomy)
+    description = "从四路相机对齐帧描述中提取 OMS 标签，输出 JSON object"
+    prompts = []
+    for group in sync_groups:
+        ordered = _sync_group_camera_columns(group)
+        parts = [
+            f"{frame.get('camera')}:{frame.get('timestamp_ns')}"
+            for frame in ordered
+        ]
+        prompts.append(
+            f"sync_group_id={group.get('sync_group_id')} anchor={group.get('anchor_timestamp_ns')} "
+            + " ".join(parts)
+        )
+    extracted = ai_extract_texts(
+        prompts,
+        model_name,
+        odps_entry,
+        schema=schema,
+        description=description,
+        modelset_project=modelset_project,
+        parallel_partitions=parallel_partitions,
+    )
+    labeled = []
+    for group, values in zip(sync_groups, extracted):
+        labeled.append(
+            {
+                "sync_group_id": group.get("sync_group_id"),
+                "values": values,
+                "status": "ok",
+            }
+        )
+    return labeled
 
 
 def ai_label_frames_with_model(
@@ -831,7 +1023,7 @@ def ai_label_frames_with_model(
             df = _rebalance_df(md.DataFrame(pd.DataFrame(rows)), partitions)
             image_part = cp.image(
                 data=df.image_url,
-                type=ImageContentType.IMAGE_URL,
+                type=ImageContentType.URL,
                 storage_options=vl_storage_options,
             )
 
@@ -935,7 +1127,18 @@ try:
 except ImportError:  # pragma: no cover
     oss_v2 = None  # type: ignore[assignment]
 
+from upload_run import new_pipeline_run_id
+
 REQUIRED_PIPELINE_STEPS: tuple[str, ...] = (
+    "job1_parse",
+    "job1_align",
+    "job2_labeling",
+    "job2_embedding",
+    "job3_labeling_by_other_model",
+    "job4_label_merge_and_compare",
+)
+
+LEGACY_PIPELINE_STEPS: tuple[str, ...] = (
     "job1_parse",
     "job2_sample",
     "job2_asr",
@@ -944,6 +1147,9 @@ REQUIRED_PIPELINE_STEPS: tuple[str, ...] = (
 )
 
 DEFAULT_DISPATCH_OSS_KEY = "pipeline/dispatch/latest.json"
+DEFAULT_DISCOVER_OSS_KEY = "pipeline/discover/latest.json"
+DEFAULT_UPLOADS_PREFIX = "rosbags/uploads/"
+TAXONOMY_LATEST_OSS_KEY = "config/taxonomy/latest.json"
 
 DISPATCH_OUTPUT_KEYS: tuple[str, ...] = (
     "action",
@@ -1143,6 +1349,9 @@ def pick_dispatch_target(
     get_arg: Callable[[str, str | None], str | None] | None = None,
 ) -> dict[str, Any]:
     """Return dispatch payload with action=run|idle."""
+    pipeline_version = "clip_omni_v2"
+    if get_arg is not None:
+        pipeline_version = str(get_arg("pipeline_version", pipeline_version) or pipeline_version)
     for clip in list_dim_clips(client, table_prefix):
         clip_id = clip["clip_id"]
         active_run_id = clip.get("active_run_id")
@@ -1169,6 +1378,7 @@ def pick_dispatch_target(
             "bag_oss_key": clip.get("bag_oss_key") or "",
             "content_hash": clip.get("content_hash") or "",
             "active_run_id_before": active_run_id,
+            "pipeline_version": pipeline_version,
             "dispatched_at": utc_now_iso(),
         }
     return {
@@ -1178,7 +1388,488 @@ def pick_dispatch_target(
         "run_id": "",
         "clip_dir_name": "",
         "bag_oss_key": "",
+        "pipeline_version": pipeline_version,
         "dispatched_at": utc_now_iso(),
+    }
+
+
+def _dispatch_item_from_clip(
+    clip: dict[str, Any],
+    *,
+    run_id: str,
+    reason: str,
+    prefix_template: str,
+    runs_subdir_template: str,
+) -> dict[str, str]:
+    clip_id = str(clip.get("clip_id") or "").strip()
+    run_id = str(run_id or "").strip()
+    if not clip_id or not run_id:
+        raise ValueError(f"invalid dispatch item: clip_id={clip_id!r} run_id={run_id!r}")
+    bag_oss_key = str(
+        clip.get("bag_oss_key") or clip.get("object_key") or ""
+    ).strip()
+    clip_prefix = prefix_template.format(clip_id=clip_id).strip("/")
+    runs_subdir = runs_subdir_template.format(run_id=run_id).strip("/")
+    run_relpath = f"{clip_prefix}/{runs_subdir}"
+    return {
+        "clip_id": clip_id,
+        "run_id": run_id,
+        "clip_dir_name": str(clip.get("clip_dir_name") or "").strip(),
+        "bag_oss_key": bag_oss_key,
+        "content_hash": str(clip.get("content_hash") or "").strip(),
+        "run_relpath": run_relpath,
+        "reason": reason,
+    }
+
+
+def _upload_run_state_key(upload_run_id: str) -> str:
+    return f"pipeline/upload_runs/{upload_run_id}.json"
+
+
+def read_upload_run_state_from_oss(
+    *,
+    upload_run_id: str,
+    bucket_name: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> dict[str, Any] | None:
+    return read_dispatch_from_oss(
+        bucket_name=bucket_name,
+        object_key=_upload_run_state_key(upload_run_id),
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def write_upload_run_state_to_oss(
+    *,
+    payload: dict[str, Any],
+    bucket_name: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> None:
+    upload_run_id = str(payload.get("upload_run_id") or "").strip()
+    if not upload_run_id:
+        raise ValueError("upload_run state missing upload_run_id")
+    write_dispatch_to_oss(
+        bucket_name=bucket_name,
+        object_key=_upload_run_state_key(upload_run_id),
+        endpoint=endpoint,
+        account=account,
+        payload=payload,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def pick_dispatch_upload_run(
+    client: Any,
+    table_prefix: str,
+    *,
+    required_steps: tuple[str, ...] = REQUIRED_PIPELINE_STEPS,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+    discover_payload: dict[str, Any] | None = None,
+    oss_account: Any | None = None,
+    oss_bucket: str | None = None,
+    oss_endpoint: str | None = None,
+    prefix_template: str = "clips/{clip_id}/",
+    runs_subdir_template: str = "runs/{run_id}/",
+) -> dict[str, Any]:
+    """Pick exactly ONE upload_run (one user upload); all clips share one pipeline run_id."""
+    pipeline_version = "sdk_v1"
+    if get_arg is not None:
+        pipeline_version = str(get_arg("pipeline_version", pipeline_version) or pipeline_version)
+
+    upload_runs = (discover_payload or {}).get("upload_runs") or []
+    candidates: list[dict[str, Any]] = []
+    for raw in upload_runs:
+        if not isinstance(raw, dict):
+            continue
+        if not raw.get("complete", True):
+            continue
+        bags = raw.get("bags") or raw.get("items") or []
+        new_count = int(raw.get("new_count") or len(bags) or 0)
+        if new_count <= 0 or not bags:
+            continue
+        upload_run_id = str(raw.get("upload_run_id") or "").strip()
+        if not upload_run_id:
+            continue
+        status = ""
+        if oss_account and oss_bucket and oss_endpoint:
+            state = read_upload_run_state_from_oss(
+                upload_run_id=upload_run_id,
+                bucket_name=oss_bucket,
+                endpoint=oss_endpoint,
+                account=oss_account,
+                region=(get_arg("cloud_region", "cn_shanghai") if get_arg else "cn_shanghai"),
+                get_arg=get_arg,
+            )
+            if state:
+                status = str(state.get("status") or "").strip().lower()
+        if status in {"dispatched", "processing", "completed"}:
+            continue
+        candidates.append(raw)
+
+    candidates.sort(key=lambda item: str(item.get("upload_run_id") or ""))
+    if not candidates:
+        return {
+            "action": "idle",
+            "reason": "no_pending_upload_run",
+            "mode": "upload_run",
+            "upload_run_id": "",
+            "pipeline_run_id": "",
+            "items": [],
+            "clip_id": "",
+            "run_id": "",
+            "pipeline_version": pipeline_version,
+            "dispatched_at": utc_now_iso(),
+        }
+
+    chosen = candidates[0]
+    upload_run_id = str(chosen["upload_run_id"])
+    pipeline_run_id = new_pipeline_run_id()
+    items: list[dict[str, str]] = []
+    for bag in chosen.get("bags") or []:
+        if not isinstance(bag, dict):
+            continue
+        clip_id = str(bag.get("clip_id") or "").strip()
+        if not clip_id:
+            continue
+        items.append(
+            _dispatch_item_from_clip(
+                {
+                    "clip_id": clip_id,
+                    "clip_dir_name": str(bag.get("clip_dir_name") or ""),
+                    "content_hash": str(bag.get("content_hash") or ""),
+                    "bag_oss_key": str(bag.get("object_key") or bag.get("bag_oss_key") or ""),
+                },
+                run_id=pipeline_run_id,
+                reason="upload_run",
+                prefix_template=prefix_template,
+                runs_subdir_template=runs_subdir_template,
+            )
+        )
+        items[-1]["upload_run_id"] = upload_run_id
+
+    if not items:
+        return {
+            "action": "idle",
+            "reason": "upload_run_empty",
+            "mode": "upload_run",
+            "upload_run_id": upload_run_id,
+            "pipeline_run_id": "",
+            "items": [],
+            "clip_id": "",
+            "run_id": "",
+            "pipeline_version": pipeline_version,
+            "dispatched_at": utc_now_iso(),
+        }
+
+    first = items[0]
+    return {
+        "action": "run",
+        "reason": "upload_run",
+        "mode": "upload_run",
+        "upload_run_id": upload_run_id,
+        "pipeline_run_id": pipeline_run_id,
+        "batch_size": len(items),
+        "batch_source": "upload_run",
+        "items": items,
+        "clip_id": first["clip_id"],
+        "run_id": pipeline_run_id,
+        "clip_dir_name": first.get("clip_dir_name") or "",
+        "bag_oss_key": first.get("bag_oss_key") or "",
+        "pipeline_version": pipeline_version,
+        "dispatched_at": utc_now_iso(),
+        "upload_run_state": {
+            "upload_run_id": upload_run_id,
+            "pipeline_run_id": pipeline_run_id,
+            "status": "dispatched",
+            "clip_count": len(items),
+            "clips": items,
+            "dispatched_at": utc_now_iso(),
+        },
+    }
+
+
+def pick_dispatch_batch(
+    client: Any,
+    table_prefix: str,
+    *,
+    required_steps: tuple[str, ...] = REQUIRED_PIPELINE_STEPS,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+    discover_payload: dict[str, Any] | None = None,
+    max_batch: int = 32,
+    prefix_template: str = "clips/{clip_id}/",
+    runs_subdir_template: str = "runs/{run_id}/",
+) -> dict[str, Any]:
+    """Pick up to ``max_batch`` clips; write ``items[]`` for multi-row DPE downstream."""
+    pipeline_version = "clip_omni_v2"
+    batch_source = "discover_new" if discover_payload else "dim_pending"
+    if get_arg is not None:
+        pipeline_version = str(get_arg("pipeline_version", pipeline_version) or pipeline_version)
+        batch_source = str(get_arg("batch_source", batch_source) or batch_source).strip().lower()
+
+    if batch_source in {"upload_run", "upload"}:
+        return pick_dispatch_upload_run(
+            client,
+            table_prefix,
+            required_steps=required_steps,
+            get_arg=get_arg,
+            discover_payload=discover_payload,
+            prefix_template=prefix_template,
+            runs_subdir_template=runs_subdir_template,
+        )
+
+    limit = max(1, min(int(max_batch or 32), 128))
+    source_clips: list[dict[str, Any]] = []
+
+    if batch_source in {"discover_new", "discover_all", "discover"} and discover_payload:
+        raw_items = discover_payload.get("items") or []
+        if batch_source == "discover_all":
+            raw_items = discover_payload.get("pending") or raw_items
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            source_clips.append(
+                {
+                    "clip_id": str(raw.get("clip_id") or ""),
+                    "clip_dir_name": str(raw.get("clip_dir_name") or ""),
+                    "content_hash": str(raw.get("content_hash") or ""),
+                    "bag_oss_key": str(raw.get("object_key") or raw.get("bag_oss_key") or ""),
+                }
+            )
+            if len(source_clips) >= limit:
+                break
+
+    if not source_clips:
+        batch_source = "dim_pending"
+        for clip in list_dim_clips(client, table_prefix):
+            clip_id = str(clip.get("clip_id") or "").strip()
+            if not clip_id:
+                continue
+            active_run_id = clip.get("active_run_id")
+            if active_run_id and is_pipeline_run_complete(
+                client,
+                table_prefix,
+                str(active_run_id),
+                required_steps=required_steps,
+                get_arg=get_arg,
+            ):
+                continue
+            source_clips.append(clip)
+            if len(source_clips) >= limit:
+                break
+
+    items: list[dict[str, str]] = []
+    for clip in source_clips:
+        clip_id = str(clip.get("clip_id") or "").strip()
+        if not clip_id:
+            continue
+        active_run_id = clip.get("active_run_id")
+        if active_run_id and batch_source == "dim_pending":
+            run_id = str(active_run_id)
+            reason = "resume_incomplete"
+        else:
+            run_id = str(uuid.uuid4())
+            reason = "new_run"
+        items.append(
+            _dispatch_item_from_clip(
+                clip,
+                run_id=run_id,
+                reason=reason,
+                prefix_template=prefix_template,
+                runs_subdir_template=runs_subdir_template,
+            )
+        )
+
+    if not items:
+        return {
+            "action": "idle",
+            "reason": "no_pending_clip",
+            "mode": "batch",
+            "batch_id": "",
+            "items": [],
+            "clip_id": "",
+            "run_id": "",
+            "pipeline_version": pipeline_version,
+            "dispatched_at": utc_now_iso(),
+        }
+
+    first = items[0]
+    return {
+        "action": "run",
+        "reason": f"batch_{batch_source}",
+        "mode": "batch",
+        "batch_id": str(uuid.uuid4()),
+        "batch_size": len(items),
+        "batch_source": batch_source,
+        "items": items,
+        "clip_id": first["clip_id"],
+        "run_id": first["run_id"],
+        "clip_dir_name": first.get("clip_dir_name") or "",
+        "bag_oss_key": first.get("bag_oss_key") or "",
+        "pipeline_version": pipeline_version,
+        "dispatched_at": utc_now_iso(),
+    }
+
+
+def write_discover_manifest_to_oss(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    payload: dict[str, Any],
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> None:
+    write_dispatch_to_oss(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        payload=payload,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def read_discover_manifest_from_oss(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> dict[str, Any] | None:
+    raw = read_dispatch_from_oss(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+    return raw
+
+
+def _normalize_batch_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items = payload.get("items")
+    if isinstance(items, list) and items:
+        normalized: list[dict[str, Any]] = []
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            clip_id = str(raw.get("clip_id") or "").strip()
+            run_id = str(raw.get("run_id") or "").strip()
+            if not clip_id or not run_id:
+                continue
+            normalized.append(dict(raw))
+        if normalized:
+            return normalized
+    clip_id = str(payload.get("clip_id") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    if clip_id and run_id:
+        return [
+            {
+                "clip_id": clip_id,
+                "run_id": run_id,
+                "clip_dir_name": str(payload.get("clip_dir_name") or ""),
+                "bag_oss_key": str(payload.get("bag_oss_key") or ""),
+                "run_relpath": str(payload.get("run_relpath") or ""),
+            }
+        ]
+    return []
+
+
+def resolve_pipeline_batch_context(
+    get_arg: Callable[[str, str | None], str | None],
+    *,
+    odps_client: Any | None = None,
+    oss_account: Any | None = None,
+    oss_endpoint: str | None = None,
+    oss_bucket: str | None = None,
+) -> dict[str, Any]:
+    """Like resolve_pipeline_context but exposes ``items[]`` for multi-row DPE."""
+    ctx = resolve_pipeline_context(
+        get_arg,
+        odps_client=odps_client,
+        oss_account=oss_account,
+        oss_endpoint=oss_endpoint,
+        oss_bucket=oss_bucket,
+    )
+    if not ctx.get("should_run"):
+        return {**ctx, "items": [], "batch_size": 0, "mode": "single"}
+
+    payload: dict[str, Any] | None = None
+    dispatch_key = (
+        resolve_node_param("dispatch_oss_key", get_arg, DEFAULT_DISPATCH_OSS_KEY)
+        or DEFAULT_DISPATCH_OSS_KEY
+    ).strip()
+    bucket = (oss_bucket or resolve_node_param("oss_bucket", get_arg, "") or "").strip()
+    if oss_account and bucket:
+        region = resolve_node_param("cloud_region", get_arg, "cn_shanghai") or "cn_shanghai"
+        endpoint = (oss_endpoint or resolve_node_param("oss_endpoint", get_arg, "") or "").strip()
+        if not endpoint:
+            endpoint = resolve_oss_http_endpoint(region, get_arg=get_arg)
+        payload = read_dispatch_from_oss(
+            bucket_name=bucket,
+            object_key=dispatch_key,
+            endpoint=endpoint,
+            account=oss_account,
+            region=region,
+            get_arg=get_arg,
+        )
+
+    prefix_template = resolve_node_param("oss_prefix_template", get_arg, "clips/{clip_id}/") or "clips/{clip_id}/"
+    runs_subdir_template = (
+        resolve_node_param("oss_runs_subdir", get_arg, "runs/{run_id}/") or "runs/{run_id}/"
+    )
+
+    items = _normalize_batch_items(payload or ctx)
+    enriched: list[dict[str, Any]] = []
+    upload_run_id = str((payload or {}).get("upload_run_id") or ctx.get("upload_run_id") or "")
+    pipeline_run_id = str((payload or {}).get("pipeline_run_id") or ctx.get("run_id") or "")
+    for raw in items:
+        item = dict(raw)
+        if upload_run_id:
+            item["upload_run_id"] = upload_run_id
+        if pipeline_run_id and not str(item.get("run_id") or "").strip():
+            item["run_id"] = pipeline_run_id
+        if not str(item.get("run_relpath") or "").strip():
+            item = _dispatch_item_from_clip(
+                item,
+                run_id=str(item.get("run_id") or ""),
+                reason=str(item.get("reason") or "batch"),
+                prefix_template=prefix_template,
+                runs_subdir_template=runs_subdir_template,
+            )
+        if not str(item.get("bag_oss_key") or "").strip():
+            item["bag_oss_key"] = str(ctx.get("bag_oss_key") or "")
+        enriched.append(item)
+
+    mode = "batch" if len(enriched) > 1 else "single"
+    if str((payload or {}).get("mode") or "") == "upload_run":
+        mode = "upload_run"
+    first = enriched[0]
+    return {
+        **ctx,
+        "mode": mode,
+        "batch_size": len(enriched),
+        "items": enriched,
+        "upload_run_id": upload_run_id,
+        "pipeline_run_id": pipeline_run_id or str(first.get("run_id") or ctx.get("run_id") or ""),
+        "clip_id": str(first.get("clip_id") or ctx.get("clip_id") or ""),
+        "run_id": str(first.get("run_id") or ctx.get("run_id") or ""),
+        "bag_oss_key": str(first.get("bag_oss_key") or ctx.get("bag_oss_key") or ""),
     }
 
 
@@ -1294,17 +1985,17 @@ def _is_oss_object_missing(exc: BaseException) -> bool:
     return any(token in text for token in ("NoSuchKey", "404", "Not Found", "not found"))
 
 
-def write_dispatch_to_oss(
+def write_oss_object_bytes(
     *,
     bucket_name: str,
     object_key: str,
     endpoint: str,
     account: Any,
-    payload: dict[str, Any],
+    body: bytes,
     region: str | None = None,
     get_arg: Callable[[str, str | None], str | None] | None = None,
 ) -> None:
-    body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    """Write one OSS object from the DataWorks driver (no MaxFrame STRING tunnel limit)."""
     access_id, secret, token = resolve_dispatch_oss_credentials(account, get_arg=get_arg)
     if oss2 is not None:
         auth = (
@@ -1316,7 +2007,7 @@ def write_dispatch_to_oss(
         bucket.put_object(object_key, body)
         return
     if oss_v2 is None:
-        raise RuntimeError("oss2 or alibabacloud_oss_v2 is required to write dispatch payload")
+        raise RuntimeError("oss2 or alibabacloud_oss_v2 is required to write OSS objects")
     client = _make_oss_v2_client(
         access_id,
         secret,
@@ -1333,7 +2024,50 @@ def write_dispatch_to_oss(
     )
 
 
-def read_dispatch_from_oss(
+def write_oss_object_text(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    text: str,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> None:
+    write_oss_object_bytes(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        body=text.encode("utf-8"),
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def write_dispatch_to_oss(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    payload: dict[str, Any],
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> None:
+    body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    write_oss_object_bytes(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        body=body,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def read_oss_object_bytes(
     *,
     bucket_name: str,
     object_key: str,
@@ -1341,7 +2075,8 @@ def read_dispatch_from_oss(
     account: Any,
     region: str | None = None,
     get_arg: Callable[[str, str | None], str | None] | None = None,
-) -> dict[str, Any] | None:
+) -> bytes | None:
+    """Read one OSS object on the DataWorks driver (no MaxFrame 8MB STRING tunnel limit)."""
     access_id, secret, token = resolve_dispatch_oss_credentials(account, get_arg=get_arg)
     if oss2 is not None:
         auth = (
@@ -1351,12 +2086,12 @@ def read_dispatch_from_oss(
         )
         bucket = oss2.Bucket(auth, endpoint, bucket_name)
         try:
-            raw = bucket.get_object(object_key).read()
+            return bucket.get_object(object_key).read()
         except oss2.exceptions.NoSuchKey:
             return None
         except oss2.exceptions.NotFound:
             return None
-    elif oss_v2 is not None:
+    if oss_v2 is not None:
         client = _make_oss_v2_client(
             access_id,
             secret,
@@ -1369,12 +2104,77 @@ def read_dispatch_from_oss(
                 oss_v2.GetObjectRequest(bucket=bucket_name, key=object_key)
             )
             with result.body as stream:
-                raw = stream.read()
+                return stream.read()
         except Exception as exc:
             if _is_oss_object_missing(exc):
                 return None
             raise
-    else:
+    raise RuntimeError("oss2 or alibabacloud_oss_v2 is required to read OSS objects")
+
+
+def read_oss_object_text(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> str | None:
+    raw = read_oss_object_bytes(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+    if raw is None:
+        return None
+    return raw.decode("utf-8")
+
+
+def read_oss_json_object(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> dict[str, Any] | None:
+    text = read_oss_object_text(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+    if text is None:
+        return None
+    loaded = json.loads(text)
+    return loaded if isinstance(loaded, dict) else None
+
+
+def read_dispatch_from_oss(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> dict[str, Any] | None:
+    raw = read_oss_object_bytes(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+    if raw is None:
         return None
     loaded = json.loads(raw.decode("utf-8"))
     return loaded if isinstance(loaded, dict) else None
@@ -1410,6 +2210,58 @@ def write_dispatch_to_mc(
         f"{_sql_string_literal(row['dispatched_at'])}"
     )
     client.execute_sql(sql).wait_for_success()
+
+
+def merge_taxonomy_into_dispatch(
+    payload: dict[str, Any],
+    taxonomy: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(payload)
+    for key in ("taxonomy_version_id", "taxonomy_version_code", "taxonomy_oss_key"):
+        value = taxonomy.get(key)
+        if value:
+            merged[key] = str(value)
+    return merged
+
+
+def load_taxonomy_latest_from_oss(
+    *,
+    bucket_name: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+    object_key: str = TAXONOMY_LATEST_OSS_KEY,
+) -> dict[str, Any] | None:
+    return read_oss_json_object(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def attach_taxonomy_to_dispatch_payload(
+    payload: dict[str, Any],
+    *,
+    bucket_name: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> dict[str, Any]:
+    taxonomy = load_taxonomy_latest_from_oss(
+        bucket_name=bucket_name,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+    if not taxonomy:
+        return payload
+    return merge_taxonomy_into_dispatch(payload, taxonomy)
 
 
 def dispatch_payload_from_json(raw: str) -> dict[str, Any] | None:
@@ -1454,7 +2306,7 @@ def _run_context(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
     run_id = str(payload.get("run_id") or "").strip()
     if not clip_id or not run_id:
         raise ValueError(f"Invalid dispatch payload (missing clip_id/run_id): {payload!r}")
-    return {
+    ctx: dict[str, Any] = {
         "should_run": True,
         "action": "run",
         "clip_id": clip_id,
@@ -1464,6 +2316,11 @@ def _run_context(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
         "reason": str(payload.get("reason") or ""),
         "source": source,
     }
+    for key in ("taxonomy_version_id", "taxonomy_version_code", "taxonomy_oss_key", "pipeline_version"):
+        value = payload.get(key)
+        if value:
+            ctx[key] = str(value)
+    return ctx
 
 
 def _load_dispatch_from_oss(
@@ -1613,6 +2470,230 @@ def exit_if_pipeline_idle(ctx: dict[str, Any], *, node_name: str = "") -> bool:
     )
     return True
 # === END pipeline_dispatch.py ===
+
+# === BEGIN oms_time_labels.py (auto-bundled) ===
+"""Deterministic OMS L1.1 time labels from rosbag record_time_ns (Job3 post-process)."""
+
+
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+DEFAULT_LABEL_TIMEZONE = "Asia/Shanghai"
+
+L1_TIME_LABEL_IDS: tuple[str, ...] = (
+    "L1.1.timestamp",
+    "L1.1.day_period",
+    "L1.1.commute_flag",
+    "L1.1.is_holiday",
+)
+
+
+def _local_dt(timestamp_ns: int, timezone: str) -> datetime:
+    return datetime.fromtimestamp(int(timestamp_ns) / 1e9, tz=ZoneInfo(timezone))
+
+
+def day_period_from_hour(hour: int) -> str:
+    if 5 <= hour < 7:
+        return "dawn"
+    if 7 <= hour < 11:
+        return "morning"
+    if 11 <= hour < 13:
+        return "noon"
+    if 13 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 19:
+        return "dusk"
+    if 19 <= hour < 22:
+        return "evening"
+    return "night"
+
+
+def commute_flag_from_local_dt(local_dt: datetime) -> str:
+    if local_dt.weekday() >= 5:
+        return "non_commute"
+    hour_fraction = local_dt.hour + local_dt.minute / 60.0 + local_dt.second / 3600.0
+    if 7 <= hour_fraction < 9:
+        return "morning_commute"
+    if 17 <= hour_fraction < 19:
+        return "evening_commute"
+    return "non_commute"
+
+
+def is_weekend_holiday(local_dt: datetime) -> str:
+    """Weekend-only; statutory holidays need a separate calendar source."""
+    return "true" if local_dt.weekday() >= 5 else "false"
+
+
+def derive_l1_time_labels(
+    timestamp_ns: int,
+    *,
+    timezone: str = DEFAULT_LABEL_TIMEZONE,
+) -> dict[str, Any]:
+    local_dt = _local_dt(timestamp_ns, timezone)
+    return {
+        "L1.1.timestamp": {
+            "timestamp_ms": int(timestamp_ns) // 1_000_000,
+            "timezone": timezone,
+        },
+        "L1.1.day_period": day_period_from_hour(local_dt.hour),
+        "L1.1.commute_flag": commute_flag_from_local_dt(local_dt),
+        "L1.1.is_holiday": is_weekend_holiday(local_dt),
+    }
+
+
+def apply_l1_time_label_overrides(
+    values: dict[str, Any],
+    timestamp_ns: int,
+    *,
+    timezone: str = DEFAULT_LABEL_TIMEZONE,
+) -> dict[str, Any]:
+    """Override VL/stub values with record_time_ns-derived L1.1 labels."""
+    merged = dict(values) if isinstance(values, dict) else {}
+    merged.update(derive_l1_time_labels(timestamp_ns, timezone=timezone))
+    return merged
+# === END oms_time_labels.py ===
+
+# === BEGIN sample_sync.py (auto-bundled) ===
+"""Four-camera time-aligned sampling and sync-group helpers (Job2/Job3)."""
+
+
+from typing import Any
+
+DEFAULT_ALIGN_WINDOW_MS = 200
+
+
+def align_window_ns_from_ms(window_ms: float | int) -> int:
+    return int(float(window_ms) * 1_000_000)
+
+
+def resolve_required_cameras(
+    frames: list[dict[str, Any]],
+    cameras: Any,
+) -> list[str]:
+    if cameras not in (None, "all", "*"):
+        if isinstance(cameras, str):
+            return sorted(item.strip() for item in cameras.split(",") if item.strip())
+        return sorted(str(item) for item in cameras)
+    return sorted({str(frame["camera"]) for frame in frames})
+
+
+def _nearest_frame_in_window(
+    camera_frames: list[dict[str, Any]],
+    anchor_ns: int,
+    window_ns: int,
+) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    best_dist: int | None = None
+    for frame in camera_frames:
+        ts = int(frame["timestamp_ns"])
+        dist = abs(ts - anchor_ns)
+        if dist > window_ns:
+            continue
+        if best_dist is None or dist < best_dist:
+            best = frame
+            best_dist = dist
+    return best
+
+
+def sample_uniform_sync(
+    frames: list[dict[str, Any]],
+    *,
+    interval_sec: float,
+    align_window_ms: float | int = DEFAULT_ALIGN_WINDOW_MS,
+    cameras: Any = "all",
+    start_time_ns: int | None = None,
+    end_time_ns: int | None = None,
+    min_cameras: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return (flat sampled_frames with sync_group_id, sample_groups metadata).
+
+    Each sync group only emitted when all required cameras have a frame within
+    ±align_window_ms of the anchor timestamp.
+    """
+    if not frames:
+        return [], []
+
+    interval_ns = int(float(interval_sec) * 1_000_000_000)
+    window_ns = align_window_ns_from_ms(align_window_ms)
+    required = resolve_required_cameras(frames, cameras)
+    if not required:
+        return [], []
+
+    need = min_cameras if min_cameras is not None else len(required)
+    need = max(1, min(need, len(required)))
+
+    by_camera: dict[str, list[dict[str, Any]]] = {}
+    for frame in frames:
+        if str(frame["camera"]) not in required:
+            continue
+        by_camera.setdefault(str(frame["camera"]), []).append(frame)
+    for camera_frames in by_camera.values():
+        camera_frames.sort(key=lambda item: int(item["timestamp_ns"]))
+
+    all_ts = [int(frame["timestamp_ns"]) for frame in frames]
+    range_start = int(start_time_ns if start_time_ns is not None else min(all_ts))
+    range_end = int(end_time_ns if end_time_ns is not None else max(all_ts))
+    if interval_ns <= 0:
+        raise ValueError("interval_sec must be positive")
+
+    flat: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = []
+    group_idx = 0
+    anchor = range_start
+    while anchor <= range_end:
+        picked: list[dict[str, Any]] = []
+        for camera in required:
+            match = _nearest_frame_in_window(by_camera.get(camera, []), anchor, window_ns)
+            if match is not None:
+                picked.append(match)
+        if len(picked) >= need and len(picked) == len(required):
+            group_idx += 1
+            sync_group_id = f"sg{group_idx:06d}"
+            group_frames: list[dict[str, Any]] = []
+            for frame in sorted(picked, key=lambda item: str(item["camera"])):
+                row = dict(frame)
+                row["sync_group_id"] = sync_group_id
+                row["anchor_timestamp_ns"] = anchor
+                group_frames.append(row)
+                flat.append(row)
+            groups.append(
+                {
+                    "sync_group_id": sync_group_id,
+                    "anchor_timestamp_ns": anchor,
+                    "cameras": [str(item["camera"]) for item in group_frames],
+                    "frames": group_frames,
+                }
+            )
+        anchor += interval_ns
+    return flat, groups
+
+
+def is_sync_sample_policy(policy: dict[str, Any] | None) -> bool:
+    if not policy:
+        return False
+    return str(policy.get("type") or "") == "uniform_sync"
+
+
+def group_manifest_by_sync(manifest_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not any(str(row.get("sync_group_id") or "").strip() for row in manifest_rows):
+        return []
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in manifest_rows:
+        sync_group_id = str(row.get("sync_group_id") or "").strip()
+        if not sync_group_id:
+            continue
+        bucket = grouped.setdefault(
+            sync_group_id,
+            {
+                "sync_group_id": sync_group_id,
+                "anchor_timestamp_ns": int(row.get("anchor_timestamp_ns") or row["timestamp_ns"]),
+                "frames": [],
+            },
+        )
+        bucket["frames"].append(row)
+    return sorted(grouped.values(), key=lambda item: int(item["anchor_timestamp_ns"]))
+# === END sample_sync.py ===
 
 # =============================================================================
 # DataWorks PyODPS 3 节点：Job2-ASR（MaxFrame + DPE + MaxFrame AI Function）

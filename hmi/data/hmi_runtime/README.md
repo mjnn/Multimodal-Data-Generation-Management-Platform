@@ -43,11 +43,19 @@ py -3 scripts\import_real_data_clips.py --from-path D:\path\to\pipeline_latest -
 
 | 模式 | 元数据 | 文件 |
 |------|--------|------|
-| **本地** | `hmi.db` | `artifacts/`（runtime，OSS 同步后） + `oss/`（模拟云端桶） |
+| **本地** | `hmi.db` | `artifacts/`（runtime）+ `oss/`（模拟云端桶） |
+| **在线** | MaxCompute **`aig_sdk__*`**（`shared/config.yaml` → `cloud.maxcompute.table_prefix`） | OSS **`rosbag-labels-pipeline-bucket2`**（`.env` `OSS_BUCKET` / config `cloud.oss.bucket`） |
+
+### 在线模式读 aig_sdk__ + bucket2
+
+1. 确认仓库根 `.env` 有 ODPS_* 与 OSS_*（**不要**把 AK 写进文档）；桶名应为 `rosbag-labels-pipeline-bucket2`。
+2. 启动 backend/frontend 后，侧栏切换 **在线**（写入 `config.json` 的 `data_source=cloud`），或启动前设 `HMI_DATA_SOURCE=cloud`。
+3. 总览读 `aig_sdk__dim_clip` / `pipeline_run` / `fact_clip_label` 等；sdk_v1 preview 在 OSS `clips/{clip_id}/runs/{run_id}/preview/`。
+4. **不必**先跑 `sync_hmi_local.py`（那是本地模式镜像路径）。帧级检索/相似在 SDK 表集上暂空（仅 clip 级事实）。
 
 SDK 跑完后产物先写入 **`oss/clips/{clip_id}/runs/{run_id}/`**（与云端 sdk_v1 布局一致），并更新 `oss/pipeline/dispatch/latest.json`。打开 OSS 管理里的 **「OSS 同步到本地」** 后，轮询会把 `oss/clips/…` 同步到 `artifacts/` 并刷新 `hmi.db`。
 
-在 HMI 侧栏切换「本地模式 / 在线模式」会调用 `POST /api/config/data-source` 并刷新页面。
+在 HMI 侧栏切换「本地 / 在线」会调用 `POST /api/config/data-source` 并刷新页面。
 
 ## 环境变量（常用）
 

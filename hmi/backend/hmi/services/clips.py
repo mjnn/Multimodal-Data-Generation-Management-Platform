@@ -14,13 +14,31 @@ from hmi.labels_sync import (
     enrich_label_entry,
 )
 from hmi.labels_util import has_label_content, labels_preview, parse_labels_json
-from hmi.config import PIPELINE_STEP_ORDER, STEP_LABELS, get_settings, table_name
+from hmi.config import (
+    PIPELINE_STEP_ORDER,
+    SDK_PIPELINE_STEP_ORDER,
+    get_settings,
+    pipeline_step_label,
+    table_name,
+)
 from hmi.db import normalize_pipeline_status, query, sql_quote
 from hmi.oss_signer import sign_image
 
 _label_map_cache: TTLCache = TTLCache(maxsize=32, ttl=600)
 _frame_rows_cache: TTLCache = TTLCache(maxsize=16, ttl=600)
 _timeline_meta_cache: TTLCache = TTLCache(maxsize=16, ttl=600)
+
+
+def _uses_sdk_tables(settings: dict[str, str] | None = None) -> bool:
+    s = settings or get_settings()
+    prefix = str(s.get("sdk_table_prefix") or s.get("table_prefix") or "")
+    return prefix.startswith("aig_sdk__")
+
+
+def _overview_step_order(settings: dict[str, str] | None = None) -> tuple[str, ...]:
+    if _uses_sdk_tables(settings):
+        return SDK_PIPELINE_STEP_ORDER
+    return tuple(sid for sid in PIPELINE_STEP_ORDER if sid != "job0_discover")
 
 
 def label_map_cache_clear() -> None:
@@ -90,21 +108,51 @@ def _pending_steps() -> list[dict[str, Any]]:
     return [
         {
             "step_id": sid,
-            "label": STEP_LABELS.get(sid, sid),
+            "label": pipeline_step_label(sid),
             "status": "pending",
         }
-        for sid in PIPELINE_STEP_ORDER
-        if sid != "job0_discover"
+        for sid in _overview_step_order()
     ]
 
 
 def _clip_counts(ctx: ClipContext) -> dict[str, Any]:
     settings = get_settings()
     w = _fact_where(ctx)
-    frame_tbl = table_name(settings, "fact_frame")
     clip_label_tbl = table_name(settings, "fact_clip_label")
-    label_tbl = table_name(settings, "fact_image_label")
     asr_tbl = table_name(settings, "fact_audio_segment")
+    if _uses_sdk_tables(settings):
+        # aig_sdk__ has clip-level facts only (no fact_frame / fact_image_label / fact_event)
+        counts = query(
+            f"SELECT "
+            f"(SELECT COUNT(*) FROM {clip_label_tbl} WHERE {w} AND labels_json IS NOT NULL "
+            f"AND labels_json != '{{}}' AND labels_json != '') AS clip_labeled_count, "
+            f"(SELECT COUNT(*) FROM {asr_tbl} WHERE {w}) AS asr_count"
+        )[0]
+        clip_labeled = int(counts["clip_labeled_count"])
+        preview = ""
+        if clip_labeled > 0:
+            preview_row = query(
+                f"SELECT labels_json FROM {clip_label_tbl} WHERE {w} "
+                f"AND labels_json IS NOT NULL AND labels_json != '{{}}' AND labels_json != '' LIMIT 1"
+            )
+            preview = (
+                labels_preview(parse_labels_json(preview_row[0].get("labels_json")))
+                if preview_row
+                else ""
+            )
+        return {
+            "frame_count": 0,
+            "sampled_count": 1,
+            "labeled_count": 1 if clip_labeled > 0 else 0,
+            "asr_segment_count": int(counts["asr_count"]),
+            "event_count": 0,
+            "label_granularity": "clip" if clip_labeled > 0 else "frame",
+            "clip_label_ready": clip_labeled > 0,
+            "clip_label_preview": preview,
+        }
+
+    frame_tbl = table_name(settings, "fact_frame")
+    label_tbl = table_name(settings, "fact_image_label")
     event_tbl = table_name(settings, "fact_event")
     counts = query(
         f"SELECT "
@@ -265,11 +313,10 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
                 item["steps"] = [
                     {
                         "step_id": sid,
-                        "label": STEP_LABELS.get(sid, sid),
+                        "label": pipeline_step_label(sid),
                         "status": step_map.get(sid, "pending"),
                     }
-                    for sid in PIPELINE_STEP_ORDER
-                    if sid != "job0_discover"
+                    for sid in _overview_step_order(settings)
                 ]
             except Exception:
                 pass
@@ -320,17 +367,21 @@ def _batch_all_clip_stats_impl() -> dict[str, dict[str, int]]:
                 out[ctx.clip_id] = int(r["cnt"])
         return out
 
-    frames = grouped("fact_frame")
+    frames = {} if _uses_sdk_tables(settings) else grouped("fact_frame")
     clip_labeled = grouped(
         "fact_clip_label",
         "labels_json IS NOT NULL AND labels_json != '{}' AND labels_json != ''",
     )
-    frame_labeled = grouped(
-        "fact_image_label",
-        "labels_json IS NOT NULL AND labels_json != '{}' AND labels_json != ''",
+    frame_labeled = (
+        {}
+        if _uses_sdk_tables(settings)
+        else grouped(
+            "fact_image_label",
+            "labels_json IS NOT NULL AND labels_json != '{}' AND labels_json != ''",
+        )
     )
     asr = grouped("fact_audio_segment")
-    events = grouped("fact_event")
+    events = {} if _uses_sdk_tables(settings) else grouped("fact_event")
 
     result: dict[str, dict[str, Any]] = {}
     for ctx in contexts:
@@ -418,11 +469,10 @@ def get_clip_overview(
     steps = [
         {
             "step_id": sid,
-            "label": STEP_LABELS.get(sid, sid),
+            "label": pipeline_step_label(sid),
             "status": step_map.get(sid, "pending"),
         }
-        for sid in PIPELINE_STEP_ORDER
-        if sid != "job0_discover"
+        for sid in _overview_step_order(settings)
     ]
 
     return {
@@ -547,6 +597,10 @@ def _load_frame_rows(ctx: ClipContext) -> list[dict[str, Any]]:
     if key in _frame_rows_cache:
         return _frame_rows_cache[key]
     settings = get_settings()
+    if _uses_sdk_tables(settings):
+        # SDK cloud stores preview under OSS preview/; no MC fact_frame rows.
+        _frame_rows_cache[key] = []
+        return _frame_rows_cache[key]
     rows = query(
         f"SELECT camera, frame_idx, timestamp_ns, image_path FROM "
         f"{table_name(settings, 'fact_frame')} WHERE {_run_where(ctx)}"
@@ -566,14 +620,18 @@ def get_timeline_meta(
     settings = get_settings()
     w = _run_where(ctx)
     clip_view = _cloud_clip_label_view(ctx)
-    label_rows = query(
-        f"SELECT frame_id, timestamp_ns, sync_group_id, anchor_timestamp_ns, label_scope "
-        f"FROM {table_name(settings, 'fact_image_label')} WHERE {w}"
-    )
-    event_rows = query(
-        f"SELECT timestamp_ns, event_data FROM {table_name(settings, 'fact_event')} "
-        f"WHERE {w} ORDER BY timestamp_ns"
-    )
+    if _uses_sdk_tables(settings):
+        label_rows: list[dict[str, Any]] = []
+        event_rows: list[dict[str, Any]] = []
+    else:
+        label_rows = query(
+            f"SELECT frame_id, timestamp_ns, sync_group_id, anchor_timestamp_ns, label_scope "
+            f"FROM {table_name(settings, 'fact_image_label')} WHERE {w}"
+        )
+        event_rows = query(
+            f"SELECT timestamp_ns, event_data FROM {table_name(settings, 'fact_event')} "
+            f"WHERE {w} ORDER BY timestamp_ns"
+        )
     asr_rows = query(
         f"SELECT segment_id, start_ns, end_ns, asr_text, confidence FROM "
         f"{table_name(settings, 'fact_audio_segment')} WHERE {w} ORDER BY start_ns"

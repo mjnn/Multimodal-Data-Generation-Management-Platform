@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, type MutableRefObject } from 'react'
+import { Segmented, Space, Typography } from 'antd'
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { resolveMediaUrl } from '../utils/mediaUrl'
 
 const CAMERA_SLOTS = ['camera0', 'camera1', 'camera2', 'camera3'] as const
@@ -6,7 +7,10 @@ const CAMERA_SLOTS = ['camera0', 'camera1', 'camera2', 'camera3'] as const
 export type ClipPreviewCamera = {
   camera: string
   url: string
+  bbox_url?: string
 }
+
+export type PreviewVariant = 'plain' | 'bbox'
 
 type ClipPreviewVideoProps = {
   gridUrl: string
@@ -19,6 +23,12 @@ type ClipPreviewVideoProps = {
   onCursorChange: (ns: number) => void
   onPlayingChange?: (playing: boolean) => void
   height?: number
+  /** Controlled variant; when omitted, component manages toggle if any bbox_url exists. */
+  variant?: PreviewVariant
+  onVariantChange?: (v: PreviewVariant) => void
+  hasBboxPreview?: boolean
+  /** False when only bbox MP4s exist (encode_plain off). */
+  hasPlainPreview?: boolean
 }
 
 function useSyncedClipVideos(
@@ -85,6 +95,12 @@ function useSyncedClipVideos(
   return { bindVideo }
 }
 
+function resolveCameraUrl(cam: ClipPreviewCamera, variant: PreviewVariant): string {
+  if (variant === 'bbox' && cam.bbox_url) return cam.bbox_url
+  if (cam.url) return cam.url
+  return cam.bbox_url || ''
+}
+
 export function ClipPreviewVideo({
   gridUrl,
   cameras,
@@ -96,11 +112,59 @@ export function ClipPreviewVideo({
   onCursorChange,
   onPlayingChange,
   height: _maxPreviewHeight = 480,
+  variant: variantProp,
+  onVariantChange,
+  hasBboxPreview,
+  hasPlainPreview,
 }: ClipPreviewVideoProps) {
   const durationSec = Math.max(0.001, (endNs - startNs) / 1e9)
   const multiRefs = useRef<(HTMLVideoElement | null)[]>([])
   const singleRef = useRef<HTMLVideoElement>(null)
   const singleScrubbingRef = useRef(false)
+
+  const hasBbox =
+    hasBboxPreview === true || (cameras ?? []).some((c) => Boolean(c.bbox_url))
+  // Explicit false from API means encode_plain was off — do not fall back to grid.
+  const hasPlain =
+    hasPlainPreview === true ||
+    (hasPlainPreview !== false &&
+      ((cameras ?? []).some((c) => Boolean(c.url) && c.url !== (c.bbox_url || '')) ||
+        (Boolean(gridUrl) && !hasBbox)))
+
+  // Prefer BBox when available (detection preview); user can switch to 原图.
+  const defaultVariant: PreviewVariant = hasBbox ? 'bbox' : 'plain'
+  const [internalVariant, setInternalVariant] = useState<PreviewVariant>(defaultVariant)
+  const userPickedRef = useRef(false)
+
+  const showToggle = hasBbox
+
+  const rawVariant: PreviewVariant = variantProp ?? internalVariant
+  const variant: PreviewVariant =
+    rawVariant === 'plain' && !hasPlain && hasBbox
+      ? 'bbox'
+      : rawVariant === 'bbox' && !hasBbox && hasPlain
+        ? 'plain'
+        : rawVariant
+
+  const setVariant = (v: PreviewVariant) => {
+    if (v === 'plain' && !hasPlain) return
+    if (v === 'bbox' && !hasBbox) return
+    userPickedRef.current = true
+    if (variantProp === undefined) setInternalVariant(v)
+    onVariantChange?.(v)
+  }
+
+  useEffect(() => {
+    if (variantProp !== undefined) return
+    if (internalVariant === 'plain' && !hasPlain && hasBbox) {
+      setInternalVariant('bbox')
+      return
+    }
+    // When bbox becomes available and user has not picked, default to BBox.
+    if (!userPickedRef.current && hasBbox && internalVariant !== 'bbox') {
+      setInternalVariant('bbox')
+    }
+  }, [hasPlain, hasBbox, internalVariant, variantProp])
 
   const cameraBySlot = useMemo(() => {
     const map = new Map<string, ClipPreviewCamera>()
@@ -148,6 +212,30 @@ export function ClipPreviewVideo({
     onCursorChange(startNs + Math.round(v.currentTime * 1e9))
   }
 
+  const toggleBar = showToggle ? (
+    <Space direction="vertical" size={4} style={{ marginBottom: 8 }} data-testid="preview-variant-toggle">
+      <Space size={8}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          预览
+        </Typography.Text>
+        <Segmented
+          size="small"
+          value={variant}
+          onChange={(v) => setVariant(v as PreviewVariant)}
+          options={[
+            { label: '原图', value: 'plain', disabled: !hasPlain },
+            { label: '带框', value: 'bbox', disabled: !hasBbox },
+          ]}
+        />
+      </Space>
+      {variant === 'bbox' ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }} data-testid="bbox-preview-hint">
+          带框为检测预览（辅助观察），不是 Taxonomy 字段校核对象。
+        </Typography.Text>
+      ) : null}
+    </Space>
+  ) : null
+
   if (useMulti) {
     const activeSlots = CAMERA_SLOTS.filter((slot) => cameraBySlot.has(slot))
     const gridClass =
@@ -160,52 +248,66 @@ export function ClipPreviewVideo({
             : 'clip-explorer__cameras clip-explorer__cameras--n4'
 
     return (
-      <div
-        className={gridClass}
-        aria-label={`${cameras?.length ?? 0} 路摄像头同步预览 ${fps}fps`}
-      >
-        {activeSlots.map((slot) => {
-          const cam = cameraBySlot.get(slot)!
-          const index = CAMERA_SLOTS.indexOf(slot)
-          return (
-            <div key={slot} className="clip-camera-tile">
-              <div className="clip-camera-tile__label">{slot}</div>
-              <div className="clip-camera-tile__media">
-                <video
-                  {...bindVideo(index)}
-                  src={resolveMediaUrl(cam.url)}
-                  className="clip-camera-tile__video"
-                  playsInline
-                  preload="metadata"
-                  muted
-                />
+      <div>
+        {toggleBar}
+        <div
+          className={gridClass}
+          aria-label={`${cameras?.length ?? 0} 路摄像头同步预览 ${fps}fps (${variant})`}
+        >
+          {activeSlots.map((slot) => {
+            const cam = cameraBySlot.get(slot)!
+            const index = CAMERA_SLOTS.indexOf(slot)
+            const src = resolveCameraUrl(cam, variant)
+            return (
+              <div key={`${slot}-${variant}`} className="clip-camera-tile">
+                <div className="clip-camera-tile__label">{slot}</div>
+                <div className="clip-camera-tile__media">
+                  <video
+                    {...bindVideo(index)}
+                    src={resolveMediaUrl(src)}
+                    className="clip-camera-tile__video"
+                    playsInline
+                    preload="metadata"
+                    muted
+                  />
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     )
   }
 
+  // Single / grid path: prefer first camera bbox when variant=bbox and available
+  const singleSrc =
+    variant === 'bbox'
+      ? (cameras ?? []).find((c) => c.bbox_url)?.bbox_url || gridUrl
+      : gridUrl || (cameras ?? []).find((c) => c.url)?.url || ''
+
   return (
-    <div className="clip-camera-tile__media">
-      <video
-        ref={singleRef}
-        src={resolveMediaUrl(gridUrl)}
-        className="clip-preview-video"
-        playsInline
-        preload="metadata"
-        onTimeUpdate={handleSingleTimeUpdate}
-        onEnded={() => onPlayingChange?.(false)}
-        onSeeking={() => {
-          singleScrubbingRef.current = true
-        }}
-        onSeeked={() => {
-          singleScrubbingRef.current = false
-          handleSingleTimeUpdate()
-        }}
-        aria-label={`预览 ${fps}fps`}
-      />
+    <div>
+      {toggleBar}
+      <div className="clip-camera-tile__media">
+        <video
+          key={`${variant}-${singleSrc}`}
+          ref={singleRef}
+          src={resolveMediaUrl(singleSrc)}
+          className="clip-preview-video"
+          playsInline
+          preload="metadata"
+          onTimeUpdate={handleSingleTimeUpdate}
+          onEnded={() => onPlayingChange?.(false)}
+          onSeeking={() => {
+            singleScrubbingRef.current = true
+          }}
+          onSeeked={() => {
+            singleScrubbingRef.current = false
+            handleSingleTimeUpdate()
+          }}
+          aria-label={`预览 ${fps}fps (${variant})`}
+        />
+      </div>
     </div>
   )
 }

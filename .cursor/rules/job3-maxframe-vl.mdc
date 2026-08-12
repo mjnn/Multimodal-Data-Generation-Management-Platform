@@ -10,7 +10,7 @@ alwaysApply: false
 
 - **VL 推理**（qwen3.6-plus）：`llm.generate(...).execute()` 提交后在 **DPE + MCSQL Worker** 上跑，**不在** DataWorks Driver Pod。
 - Driver 只做：建 `md.DataFrame`、`.execute().fetch()`、校验、写下一 stage 参数。
-- **base64 / oss_url** 是 **图像输入格式**（`ImageContentType.BASE64` vs `IMAGE_URL`），**不是**「推理改到 Driver」。
+- **base64 / oss_url** 是 **图像输入格式**（`ImageContentType.BASE64` vs **`URL`**），**不是**「推理改到 Driver」。
 
 详：`maxframe-driver-dpe-mcsql.mdc`。
 
@@ -19,10 +19,10 @@ alwaysApply: false
 | 场景 | `storage_options` |
 |------|-------------------|
 | DPE `@with_fs_mount` | `{"role_arn": oss_ram_role_arn}` |
-| VL `cp.image(IMAGE_URL)`（在 MC Worker 上读 OSS） | **优先** `{"role_arn": ...}` |
+| VL `cp.image(URL)`（在 MC Worker 上读 OSS） | **优先** `{"role_arn": ...}` |
 | DataWorks `o.account` | 多为 `STS.*`；勿只传 AK/SK → `InvalidAccessKeyId` |
 
-`IMAGE_URL` 仍 403：工作流 `label_image_mode=base64`。
+OSS URL 仍 403：工作流 `label_image_mode=base64`。
 
 ## 图像模式 `label_image_mode`
 
@@ -32,7 +32,7 @@ alwaysApply: false
 | `oss_url` | OSS URL + role_arn | DPE+MCSQL | 轻 |
 | `base64` | BASE64 字段 | **仍是 DPE+MCSQL** | encode 结果 **fetch 回 Driver** 再 submit generate（Tunnel 开销） |
 
-MaxFrame 2.7.1 枚举：**`ImageContentType.BASE64`**（非 `IMAGE_BASE64`）。
+MaxFrame **2.8.0** 枚举：**`ImageContentType.BASE64`** / **`ImageContentType.URL`**。SDK Omni：**`cp.video` / `cp.audio` / `cp.text`（含 ASR）**（`MC_OMNI_NATIVE_MEDIA`，见 `oms_multimodal/mc/content_parts.py`）。
 
 ### base64 链路（三步，推理不在 Driver）
 

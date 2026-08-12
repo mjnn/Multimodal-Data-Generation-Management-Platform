@@ -11,7 +11,7 @@ cd piplinesdk
 # 推荐 Python 3.11
 py -3.11 -m pip install -e .
 
-# 若要通过 MaxCompute 调用模型（进阶）：
+# 若要通过 MaxCompute 调用模型（进阶，需 maxframe≥2.8.0）：
 py -3.11 -m pip install -e ".[mc]"
 ```
 
@@ -41,7 +41,7 @@ py -3.11 examples\03_run_stages.py extract,asr
 
 - `DASHSCOPE_API_KEY`
 - `DASHSCOPE_WORKSPACE_ID`
-- `MODEL_BACKEND=api`（本机默认）
+- `MODEL_BACKEND=api`（本机默认）或 `mc`（MaxFrame AI；Omni 三路：`cp.video`+`cp.audio`+`cp.text` 含 ASR）
 
 ## 能力一览
 

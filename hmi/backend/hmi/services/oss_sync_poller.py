@@ -186,6 +186,14 @@ def _run_sync_subprocess(clip_id: str, run_id: str) -> tuple[bool, str]:
 
 def _after_sync_success() -> None:
     cache_clear()
+    # Legacy ECS: after pulling cloud → local disk, optionally flip UI to local.
+    # Do NOT override an explicit「在线」choice — that undoes MC/OSS browsing and
+    # makes OSS 管理 show the simulated local root again.
+    from hmi.data_source import get_data_source
+
+    if get_data_source() == "cloud":
+        logger.info("oss_sync_poller: skip auto-local; data_source=cloud")
+        return
     if _env_bool("HMI_OSS_SYNC_AUTO_LOCAL", True):
         try:
             set_data_source("local")

@@ -1,10 +1,7 @@
-import { CloudOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Button, Modal, Space, Tooltip, Typography, message } from 'antd'
-import { useState } from 'react'
-import { api } from '../api'
+import { CloudOutlined, DatabaseOutlined } from '@ant-design/icons'
+import { Button, Space, Tooltip, Typography } from 'antd'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
-
-const CLOUD_UNAVAILABLE_TIP = '云端管线暂不可用'
+import { ResetTestDataButton } from './ResetTestDataButton'
 
 type Props = {
   collapsed?: boolean
@@ -16,12 +13,14 @@ function DataSourceModeButtons({
   loading,
   switching,
   onSelectLocal,
+  onSelectCloud,
 }: {
   compact?: boolean
   localMode: boolean
   loading: boolean
   switching: boolean
   onSelectLocal: () => void
+  onSelectCloud: () => void
 }) {
   const busy = loading || switching
 
@@ -40,73 +39,41 @@ function DataSourceModeButtons({
           {!compact ? '本地' : null}
         </Button>
       </Tooltip>
-      <Tooltip title={CLOUD_UNAVAILABLE_TIP} placement={compact ? 'right' : 'top'}>
-        <span
-          className={compact ? undefined : 'local-mode-cloud-btn-wrap'}
-          style={compact ? { display: 'inline-block' } : undefined}
+      <Tooltip
+        title={compact ? '在线：aig_sdk__ + OSS bucket2' : undefined}
+        placement={compact ? 'right' : 'top'}
+      >
+        <Button
+          type={!localMode ? 'primary' : 'default'}
+          size="small"
+          icon={<CloudOutlined />}
+          loading={busy && localMode}
+          onClick={onSelectCloud}
+          block={!compact}
+          aria-pressed={!localMode}
+          data-testid="local-mode-cloud-btn"
         >
-          <Button
-            size="small"
-            icon={<CloudOutlined />}
-            disabled
-            block={!compact}
-            aria-disabled
-            data-testid="local-mode-cloud-btn"
-          >
-            {!compact ? '云端' : null}
-          </Button>
-        </span>
+          {!compact ? '在线' : null}
+        </Button>
       </Tooltip>
     </Space.Compact>
   )
 }
 
+/** Shown only when HMI_TEST_MODE is on (local/cloud switch + reset). */
 export function LocalModeControls({ collapsed = false }: Props) {
-  const { localMode, loading, switching, setLocalMode, bumpDataRevision } = useDataSourceMode()
-  const [resetting, setResetting] = useState(false)
+  const { localMode, loading, switching, testMode, setLocalMode } = useDataSourceMode()
 
-  const handleResetHmiArtifacts = () => {
-    Modal.confirm({
-      title: '重置 HMI 产物？',
-      content: (
-        <>
-          <p>将恢复到 baseline 初始状态（需 admin 权限）：</p>
-          <ul style={{ marginBottom: 0, paddingLeft: 20 }}>
-            <li>清空人工校核、派单任务、数据集快照与审计日志</li>
-            <li>删除除 admin 以外的所有用户</li>
-            <li>标签树仅保留已发布版本 <strong>label_tree_baseline</strong>（全量 YAML）</li>
-            <li>
-              本地模式：清空 SDK 管线（<code>hmi.db</code> clip/run/事实表、上传 rosbag、管线步骤、
-              <code>artifacts/</code>、<code>oss/rosbags</code>、<code>oss/clips</code>、
-              <code>oss/pipeline</code>、执行参数）
-            </li>
-            <li>本地模式下清空 oss/datasets、oss/reviews 目录</li>
-          </ul>
-        </>
-      ),
-      okText: '确认重置',
-      cancelText: '取消',
-      okButtonProps: { danger: true },
-      width: 480,
-      onOk: async () => {
-        setResetting(true)
-        try {
-          const res = await api.resetHmiArtifacts()
-          message.success(res.message ?? 'HMI 产物已重置')
-          bumpDataRevision()
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : '重置 HMI 产物失败'
-          message.error(msg)
-          throw e
-        } finally {
-          setResetting(false)
-        }
-      },
-    })
+  if (!testMode) {
+    return null
   }
 
   const selectLocal = () => {
     if (!localMode) void setLocalMode(true)
+  }
+
+  const selectCloud = () => {
+    if (localMode) void setLocalMode(false)
   }
 
   if (collapsed) {
@@ -118,20 +85,9 @@ export function LocalModeControls({ collapsed = false }: Props) {
           loading={loading}
           switching={switching}
           onSelectLocal={selectLocal}
+          onSelectCloud={selectCloud}
         />
-        {localMode ? (
-          <Tooltip title="重置 HMI 产物" placement="right">
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={resetting}
-              onClick={handleResetHmiArtifacts}
-              aria-label="重置 HMI 产物"
-              data-testid="hmi-reset-button"
-            />
-          </Tooltip>
-        ) : null}
+        <ResetTestDataButton collapsed />
       </div>
     )
   }
@@ -144,22 +100,12 @@ export function LocalModeControls({ collapsed = false }: Props) {
           loading={loading}
           switching={switching}
           onSelectLocal={selectLocal}
+          onSelectCloud={selectCloud}
         />
         <Typography.Text type="secondary" className="app-shell__demo-hint">
-          本地：SQLite + 磁盘 oss/（ECS 同理）；云端入口暂不可用
+          测试模式：可切换本地 / 云端；云端重置会清空 OSS + MC
         </Typography.Text>
-        {localMode ? (
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            loading={resetting}
-            onClick={handleResetHmiArtifacts}
-            block
-            data-testid="hmi-reset-button"
-          >
-            重置 HMI 产物
-          </Button>
-        ) : null}
+        <ResetTestDataButton block />
       </Space>
     </div>
   )

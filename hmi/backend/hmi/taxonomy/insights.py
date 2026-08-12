@@ -11,13 +11,40 @@ from hmi.taxonomy_db import get_published_version, get_version, list_nodes
 
 
 def _enum_values(node: dict[str, Any]) -> list[str]:
+    """Flat enum values, or leaf ids for enum_tree (nested value_schema)."""
     schema = node.get("value_schema")
     if not isinstance(schema, dict):
         return []
     raw = schema.get("values")
-    if isinstance(raw, list):
-        return [str(v) for v in raw]
-    return []
+    if not isinstance(raw, list):
+        return []
+
+    def _is_tree(values: list[Any]) -> bool:
+        if schema.get("type") == "enum_tree":
+            return True
+        return any(isinstance(v, dict) and "id" in v for v in values)
+
+    if not _is_tree(raw):
+        return [str(v) for v in raw if not isinstance(v, dict)]
+
+    leaves: list[str] = []
+
+    def _walk(nodes: list[Any]) -> None:
+        for item in nodes:
+            if isinstance(item, str):
+                leaves.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            nid = str(item.get("id") or "").strip()
+            kids = item.get("children")
+            if isinstance(kids, list) and kids:
+                _walk(kids)
+            elif nid:
+                leaves.append(nid)
+
+    _walk(raw)
+    return leaves
 
 
 def _load_reviews_for_version(taxonomy_version_id: str) -> list[dict[str, Any]]:

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from hmi.audit import append_audit_log
 from hmi.auth.deps import get_current_user, require_reviewer
+from hmi.review.bbox_qa_db import BBOX_QA_STATUSES, get_bbox_qa, upsert_bbox_qa
 from hmi.review.field_review_db import FIELD_REVIEW_ACTIONS
 from hmi.review.merge import apply_field_review
 from hmi.review.v2_tasks import (
@@ -35,6 +36,13 @@ class SubmitReviewV2Body(BaseModel):
     value: Any | None = None
     clip_updated_at: str | None = None
     assignment_batch_id: str | None = None
+
+
+class UpsertBboxQaBody(BaseModel):
+    clip_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    status: Literal["bbox_ok", "bbox_bad", "bbox_skip"]
+    note: str | None = None
 
 
 def _validation_error(message: str) -> HTTPException:
@@ -185,6 +193,52 @@ def api_review_v2_tasks(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/bbox-qa")
+def api_review_v2_get_bbox_qa(
+    clip_id: str = Query(..., min_length=1),
+    run_id: str = Query(..., min_length=1),
+    _user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Clip/run-level BBox quality mark (sidecar; not taxonomy / Dataset y)."""
+    qa = get_bbox_qa(clip_id.strip(), run_id.strip())
+    return {"bbox_qa": qa}
+
+
+@router.put("/bbox-qa")
+def api_review_v2_put_bbox_qa(
+    body: UpsertBboxQaBody,
+    user: dict = Depends(require_reviewer),
+) -> dict[str, Any]:
+    """Upsert BBox quality mark. Does not touch labels_json / field review / Dataset y."""
+    status = body.status.strip()
+    if status not in BBOX_QA_STATUSES:
+        raise _validation_error(f"invalid status: {status}")
+    try:
+        qa = upsert_bbox_qa(
+            body.clip_id.strip(),
+            body.run_id.strip(),
+            status=status,
+            note=body.note,
+            reviewer_id=user["id"],
+        )
+    except ValueError as exc:
+        raise _validation_error(str(exc)) from exc
+
+    append_audit_log(
+        actor_id=user["id"],
+        action="clip.bbox_qa",
+        resource_type="clip_bbox_qa",
+        resource_id=qa["id"],
+        detail={
+            "clip_id": qa["clip_id"],
+            "run_id": qa["run_id"],
+            "status": qa["status"],
+            "note": qa.get("note"),
+        },
+    )
+    return {"bbox_qa": qa}
 
 
 @router.post("/submit")

@@ -167,7 +167,10 @@ def list_runs_needing_sdk(*, limit: int = 4) -> list[dict[str, Any]]:
         JOIN pipeline_step si ON si.run_id = r.run_id AND si.clip_id = r.clip_id AND si.ds = r.ds
           AND si.step_id = 'sdk_infer' AND si.status = 'pending'
         WHERE r.status IN ('pending', 'running')
-          AND c.bag_oss_key LIKE 'local://rosbags/%'
+          AND (
+            c.bag_oss_key LIKE 'local://rosbags/%'
+            OR c.bag_oss_key LIKE 'local://sources/%'
+          )
         ORDER BY
           COALESCE(
             (SELECT e.started_at FROM pipeline_execution e WHERE e.run_id = r.run_id),

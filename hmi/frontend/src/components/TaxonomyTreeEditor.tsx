@@ -1,7 +1,6 @@
 import {
   DeleteOutlined,
   EditOutlined,
-  MinusCircleOutlined,
   PlusOutlined,
 } from '@ant-design/icons'
 import {
@@ -19,8 +18,11 @@ import {
 } from 'antd'
 import type { DataNode } from 'antd/es/tree'
 import type { Key, ReactNode } from 'react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { TaxonomyNodeDetail } from '../api/types'
+import type { EnumTreeFormNode } from '../utils/enumTree'
+import { emptyEnumTreeFormNodes } from '../utils/enumTree'
+import { isEnumValueKey } from '../utils/taxonomySchemaView'
 import {
   groupTaxonomyLevels,
   levelCodes,
@@ -31,7 +33,12 @@ import {
   toEditorTreeData,
   type TaxonomyLevelMeta,
 } from '../utils/taxonomyTree'
-import { buildValueSchema, schemaToFormFields } from '../utils/taxonomyLeafSchema'
+import { EnumTreeNodesFormRoot } from './EnumTreeNodesForm'
+import {
+  buildValueSchema,
+  normalizeEditorDtype,
+  schemaToFormFields,
+} from '../utils/taxonomyLeafSchema'
 
 type LevelFormValues = {
   level_code: string
@@ -44,6 +51,7 @@ type LeafFormValues = {
   definition?: string
   dtype?: string
   enum_options?: string[]
+  enum_tree_nodes?: EnumTreeFormNode[]
   bool_true_label?: string
   bool_false_label?: string
   string_example?: string
@@ -111,9 +119,29 @@ export function TaxonomyTreeEditor({
     [nodes, emptyLevels],
   )
   const treeData = useMemo(() => toEditorTreeData(groups, canEdit), [groups, canEdit])
+  const levelExpandKeys = useMemo(
+    () => groups.map((g) => `level:${g.level_code}`),
+    [groups],
+  )
+  // Expand levels by default so labels are visible; leave enum nesting collapsed for layer-by-layer expand.
+  const [expandedKeys, setExpandedKeys] = useState<Key[]>([])
+  useEffect(() => {
+    setExpandedKeys((prev) => {
+      const prevSet = new Set(prev.map(String))
+      const next = prev.filter((k) => {
+        const s = String(k)
+        if (s.startsWith('level:')) return levelExpandKeys.includes(s)
+        return true
+      })
+      for (const k of levelExpandKeys) {
+        if (!prevSet.has(k)) next.push(k)
+      }
+      return next
+    })
+  }, [levelExpandKeys])
 
   const selectedLevelCode = selectedKey ? parseLevelKey(selectedKey) : null
-  const selectedLeaf = selectedKey && !selectedLevelCode
+  const selectedLeaf = selectedKey && !selectedLevelCode && !isEnumValueKey(selectedKey)
     ? nodes.find((n) => n.label_id === selectedKey) ?? null
     : null
 
@@ -179,7 +207,11 @@ export function TaxonomyTreeEditor({
     setLeafEditing(null)
     setLeafLevel(level)
     leafForm.resetFields()
-    leafForm.setFieldsValue({ is_active: true, dtype: 'enum', enum_options: [''] })
+    leafForm.setFieldsValue({
+      is_active: true,
+      dtype: 'enum_tree',
+      enum_tree_nodes: emptyEnumTreeFormNodes(),
+    })
     setLeafModalOpen(true)
   }
 
@@ -190,7 +222,7 @@ export function TaxonomyTreeEditor({
       label_id: node.label_id,
       name: node.name,
       definition: node.definition ?? '',
-      dtype: node.dtype ?? 'enum',
+      dtype: normalizeEditorDtype(node.dtype),
       is_active: node.is_active !== false,
       ...schemaToFormFields(node.dtype, node.value_schema),
     })
@@ -200,9 +232,10 @@ export function TaxonomyTreeEditor({
   const saveLeaf = async () => {
     if (!leafLevel) return
     const values = await leafForm.validateFields()
+    const dtype = normalizeEditorDtype(values.dtype)
     let valueSchema: unknown = null
     try {
-      valueSchema = buildValueSchema(values.dtype, values)
+      valueSchema = buildValueSchema(dtype, values)
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : 'schema 无效')
       return
@@ -216,7 +249,7 @@ export function TaxonomyTreeEditor({
                 ...n,
                 name: values.name.trim(),
                 definition: values.definition?.trim() || null,
-                dtype: values.dtype || null,
+                dtype,
                 value_schema: valueSchema,
                 is_active: values.is_active,
               }
@@ -234,7 +267,7 @@ export function TaxonomyTreeEditor({
         newLeafNode(
           versionId,
           leafLevel,
-          values,
+          { ...values, dtype },
           valueSchema,
           nextSortOrder(nodes, leafLevel.level_code),
         ),
@@ -249,7 +282,27 @@ export function TaxonomyTreeEditor({
   }
 
   const deleteLeaf = (labelId: string) => {
-    onNodesChange(nodes.filter((n) => n.label_id !== labelId))
+    const target = nodes.find((n) => n.label_id === labelId)
+    const nextNodes = nodes.filter((n) => n.label_id !== labelId)
+    onNodesChange(nextNodes)
+    if (target) {
+      const stillHasSiblings = nextNodes.some(
+        (n) => n.level_code === target.level_code && n.is_active !== false,
+      )
+      if (
+        !stillHasSiblings &&
+        !emptyLevels.some((l) => l.level_code === target.level_code)
+      ) {
+        onEmptyLevelsChange([
+          ...emptyLevels,
+          {
+            level_code: target.level_code,
+            level_name: target.level_name || target.level_code,
+            sort_order: target.sort_order,
+          },
+        ])
+      }
+    }
     if (selectedKey === labelId) setSelectedKey(undefined)
   }
 
@@ -261,6 +314,9 @@ export function TaxonomyTreeEditor({
   }) => {
     const dragKey = String(info.dragNode.key)
     const dropKey = String(info.node.key)
+    // Enum option nodes are display-only in the outer tree
+    if (isEnumValueKey(dragKey) || isEnumValueKey(dropKey)) return
+
     const dragLevel = parseLevelKey(dragKey)
     const dropLevel = parseLevelKey(dropKey)
 
@@ -318,6 +374,8 @@ export function TaxonomyTreeEditor({
   }) => {
     const dragKey = String(info.dragNode.key)
     const dropKey = String(info.dropNode.key)
+    if (isEnumValueKey(dragKey) || isEnumValueKey(dropKey)) return false
+
     const dragLevel = parseLevelKey(dragKey)
     const dropLevel = parseLevelKey(dropKey)
 
@@ -340,6 +398,7 @@ export function TaxonomyTreeEditor({
     const key = keys[0] as string | undefined
     setSelectedKey(key)
     if (!key || !canEdit) return
+    if (isEnumValueKey(key)) return
     const levelCode = parseLevelKey(key)
     if (levelCode) {
       const level = groups.find((g) => g.level_code === levelCode)
@@ -351,8 +410,16 @@ export function TaxonomyTreeEditor({
   }
 
   const titleRender = (node: DataNode) => {
-    const levelCode = parseLevelKey(String(node.key))
-    const leaf = !levelCode ? nodes.find((n) => n.label_id === node.key) : null
+    const key = String(node.key)
+    if (isEnumValueKey(key)) {
+      return (
+        <div className="taxonomy-tree-node taxonomy-tree-node--enum">
+          <span className="taxonomy-tree-node__title">{node.title as ReactNode}</span>
+        </div>
+      )
+    }
+    const levelCode = parseLevelKey(key)
+    const leaf = !levelCode ? nodes.find((n) => n.label_id === key) : null
 
     return (
       <div className="taxonomy-tree-node">
@@ -467,16 +534,32 @@ export function TaxonomyTreeEditor({
 
       {canEdit && (
         <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-          支持层级与标签增删改；可拖动整个层级调整顺序，同级标签也可拖动排序。保存后生效。
+          支持层级与标签增删改；可拖动整个层级调整顺序，同级标签也可拖动排序。枚举类型标签可在树中逐层展开查看选项嵌套（编辑仍点铅笔）。保存后生效。
         </Typography.Paragraph>
       )}
+
+      {canEdit && emptyLevels.length > 0 ? (
+        <Typography.Paragraph type="danger" style={{ marginBottom: 8, fontSize: 12 }}>
+          空层级（无标签）不会写入版本：
+          {emptyLevels.map((l) => `${l.level_name}（${l.level_code}）`).join('、')}
+          。请添加标签或删除该层级。
+        </Typography.Paragraph>
+      ) : null}
 
       <Tree
         treeData={treeData}
         selectedKeys={selectedKey ? [selectedKey] : []}
-        defaultExpandAll
+        expandedKeys={expandedKeys}
+        onExpand={(keys) => setExpandedKeys(keys)}
         blockNode
-        draggable={canEdit ? { icon: false } : false}
+        draggable={
+          canEdit
+            ? {
+                icon: false,
+                nodeDraggable: (n) => !isEnumValueKey(String(n.key)),
+              }
+            : false
+        }
         allowDrop={canEdit ? allowDrop : undefined}
         titleRender={titleRender}
         onSelect={onTreeSelect}
@@ -581,7 +664,7 @@ function LeafModal({
       onCancel={onCancel}
       onOk={onOk}
       destroyOnHidden
-      width={560}
+      width={640}
     >
       <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
         <Form.Item
@@ -600,42 +683,25 @@ function LeafModal({
         <Form.Item name="dtype" label="数据类型">
           <Select
             options={[
-              { value: 'enum', label: '枚举' },
+              { value: 'enum_tree', label: '枚举' },
               { value: 'bool', label: '布尔' },
               { value: 'string', label: '字符串' },
             ]}
+            onChange={(next) => {
+              if (next === 'enum_tree') {
+                const cur = form.getFieldValue('enum_tree_nodes')
+                if (!Array.isArray(cur) || cur.length === 0) {
+                  form.setFieldValue('enum_tree_nodes', emptyEnumTreeFormNodes())
+                }
+              }
+            }}
           />
         </Form.Item>
         <Form.Item noStyle shouldUpdate={(prev, cur) => prev.dtype !== cur.dtype}>
           {({ getFieldValue }) => {
             const dtype = getFieldValue('dtype') as string | undefined
-            if (dtype === 'enum') {
-              return (
-                <Form.List name="enum_options">
-                  {(fields, { add, remove }) => (
-                    <Form.Item label="枚举选项">
-                      <Space direction="vertical" style={{ width: '100%' }}>
-                        {fields.map((field) => (
-                          <Space key={field.key} align="baseline">
-                            <Form.Item {...field} rules={[{ required: true, message: '请输入选项' }]} noStyle>
-                              <Input placeholder="选项值" style={{ width: 360 }} />
-                            </Form.Item>
-                            <Button
-                              type="text"
-                              danger
-                              icon={<MinusCircleOutlined />}
-                              onClick={() => remove(field.name)}
-                            />
-                          </Space>
-                        ))}
-                        <Button type="dashed" icon={<PlusOutlined />} onClick={() => add('')}>
-                          添加选项
-                        </Button>
-                      </Space>
-                    </Form.Item>
-                  )}
-                </Form.List>
-              )
+            if (dtype === 'enum_tree' || dtype === 'enum') {
+              return <EnumTreeNodesFormRoot />
             }
             if (dtype === 'bool') {
               return (

@@ -22,11 +22,11 @@ class ClipVideoConfig:
 
     enabled: bool = True
     filename: str = "clip_preview.mp4"
-    max_width: int = 1280
-    max_height: int = 720
+    max_width: int = 1920
+    max_height: int = 1080
     video_codec: str = "libx264"
     audio_codec: str = "aac"
-    crf: int = 23
+    crf: int = 18
     camera_topic: str | None = None
     encode_all_cameras: bool = True
 
@@ -40,11 +40,11 @@ class ClipVideoConfig:
         return cls(
             enabled=enabled,
             filename=os.getenv("CLIP_VIDEO_FILENAME", "clip_preview.mp4"),
-            max_width=int(os.getenv("CLIP_VIDEO_MAX_WIDTH", "1280")),
-            max_height=int(os.getenv("CLIP_VIDEO_MAX_HEIGHT", "720")),
+            max_width=int(os.getenv("CLIP_VIDEO_MAX_WIDTH", "1920")),
+            max_height=int(os.getenv("CLIP_VIDEO_MAX_HEIGHT", "1080")),
             video_codec=os.getenv("CLIP_VIDEO_CODEC", "libx264"),
             audio_codec=os.getenv("CLIP_VIDEO_AUDIO_CODEC", "aac"),
-            crf=int(os.getenv("CLIP_VIDEO_CRF", "23")),
+            crf=int(os.getenv("CLIP_VIDEO_CRF", "18")),
             camera_topic=camera_topic,
             encode_all_cameras=encode_all,
         )
@@ -263,33 +263,75 @@ def render_clip_preview_video(
     output_path: str | Path,
     *,
     config: ClipVideoConfig | None = None,
+    frames: list | None = None,
+    path_map: dict[str, str] | None = None,
+    filename_stem: str | None = None,
+    assign_clip_fields: bool = True,
 ) -> str | None:
-    """生成预览 MP4：默认每路相机各一个文件，并写入 clip.clip_video_paths。"""
+    """生成预览 MP4：默认每路相机各一个文件，并写入 clip.clip_video_paths。
+
+    Args:
+        frames: 若给定则用该帧列表代替 clip.video_frames/frames。
+        path_map: 原始 image_path → 替代路径（如 bbox 图）。
+        filename_stem: 覆盖输出文件 stem（默认用 output_path.stem）。
+        assign_clip_fields: True 时写入 clip.clip_video_path(s)；bbox 编码应传 False。
+    """
     cfg = config or ClipVideoConfig()
     if not cfg.enabled:
         return None
-    if not _video_source_frames(clip) or not clip.audio:
+    source = list(frames) if frames is not None else _video_source_frames(clip)
+    if not source or not clip.audio:
         return None
 
+    if path_map:
+        remapped = []
+        for frame in source:
+            alt = path_map.get(frame.image_path) or path_map.get(str(Path(frame.image_path).resolve()))
+            if alt:
+                remapped.append(
+                    type(frame)(
+                        topic=frame.topic,
+                        timestamp_ns=frame.timestamp_ns,
+                        image_path=alt,
+                        width=getattr(frame, "width", None),
+                        height=getattr(frame, "height", None),
+                    )
+                )
+            else:
+                remapped.append(frame)
+        source = remapped
+
     base = Path(output_path)
-    pairs = _topics_to_encode(clip, cfg)
-    if not pairs:
+    if filename_stem:
+        base = base.with_name(f"{filename_stem}{base.suffix or '.mp4'}")
+
+    by_topic = _group_frames_by_topic(source)
+    if not by_topic:
         return None
+    if cfg.encode_all_cameras:
+        pairs = [(t, by_topic[t]) for t in sorted(by_topic.keys())]
+    elif cfg.camera_topic and cfg.camera_topic in by_topic:
+        pairs = [(cfg.camera_topic, by_topic[cfg.camera_topic])]
+    else:
+        topic = sorted(by_topic.keys())[0]
+        pairs = [(topic, by_topic[topic])]
 
     paths: dict[str, str] = {}
     encoded: list[dict[str, Any]] = []
-    for topic, frames in pairs:
+    for topic, topic_frames in pairs:
         if cfg.encode_all_cameras and len(pairs) > 1:
             out = _camera_output_path(base, topic)
         else:
             out = base
-        path = _encode_one_camera_mp4(clip, frames, out, cfg=cfg, camera_topic=topic)
+        path = _encode_one_camera_mp4(clip, topic_frames, out, cfg=cfg, camera_topic=topic)
         paths[topic] = path
-        encoded.append({"camera_topic": topic, "path": path, "encoded_frame_count": len(frames)})
+        encoded.append({"camera_topic": topic, "path": path, "encoded_frame_count": len(topic_frames)})
 
-    clip.clip_video_paths = paths
-    clip.clip_video_path = paths[pairs[0][0]]
     meta = cfg.to_dict()
     meta["encoded_cameras"] = encoded
+    meta["filename_stem"] = base.stem
     clip.clip_video_config = meta
-    return clip.clip_video_path
+    if assign_clip_fields:
+        clip.clip_video_paths = paths
+        clip.clip_video_path = paths[pairs[0][0]]
+    return paths[pairs[0][0]] if paths else None

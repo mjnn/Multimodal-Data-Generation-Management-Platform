@@ -1,24 +1,28 @@
 # 进度看板
 
-> 最后更新：2026-08-03
+> 最后更新：2026-08-12
 
 ## Todo
 
 | ID | 标题 | 里程碑 |
 |----|------|--------|
-| M9.3-A-C | sdk_v1 cloud 验数（DataWorks 跑完后） | M9 |
+| M9.3-H-2 | HMI 在线主观：preview MP4 + 标签 | M9 |
 | M7.5-E2E | Parquet 全链 zip E2E | M7.5 |
 
 ## Doing
 
 | ID | 标题 | 备注 |
 |----|------|------|
-| M9.3 | sdk_v1 cloud 全链 | verify_sdk_v1_run + runbook；A-1~A-2 ✓ |
+| M9.3 | sdk_v1 cloud hybrid 全链 | A-C-2 / H-1 ✓；H-2 待签；推荐下一步 = HMI 在线 |
 
 ## Done
 
 | ID | 标题 | 完成日 |
 |----|------|--------|
+| **HMI-SDK-MODALITY** | 原始媒体上传 + Planner 模态编排（local） | 2026-08-12 |
+| **HMI-SDK-BBOX** | 本地 BBox 参数 + infer_full + Plain/BBox + enum_tree | 2026-08-12 |
+| **HMI-TEST-MODE** | 测试模式开关 + 重置测试数据（云端清 OSS+MC） | 2026-08-11 |
+| **M9.3-A-C-2** | hybrid 4-bag verify 18/18 + meta repair | 2026-08-10 |
 | **M8.5+** | 派生向导平衡+标签裁剪 UI | 2026-07-31 |
 | **M10.10** | Hub diff/impact/lineage UI polish | 2026-07-31 |
 | **M9.2** | PostgreSQL 迁移路径 (docs) | 2026-07-31 |

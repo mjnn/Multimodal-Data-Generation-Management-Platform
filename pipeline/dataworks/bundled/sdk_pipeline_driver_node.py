@@ -1432,6 +1432,81 @@ def exit_if_pipeline_idle(ctx: dict[str, Any], *, node_name: str = "") -> bool:
     return True
 # === END pipeline_dispatch.py ===
 
+# === BEGIN oss_v2_dw.py (auto-bundled) ===
+"""DataWorks 节点用 alibabacloud_oss_v2 薄封装（粘贴节点时可复制本文件函数到节点内）。"""
+
+import hashlib
+from pathlib import PurePosixPath
+from typing import Any, Iterator
+
+import alibabacloud_oss_v2 as oss
+
+def normalize_oss_region(region: str) -> str:
+    return region.replace("_", "-")
+
+def make_oss_client(
+    *,
+    access_key_id: str,
+    access_key_secret: str,
+    region: str,
+    endpoint: str | None = None,
+    security_token: str | None = None,
+) -> oss.Client:
+    cfg = oss.config.load_default()
+    if security_token:
+        cfg.credentials_provider = oss.credentials.StaticCredentialsProvider(
+            access_key_id,
+            access_key_secret,
+            security_token,
+        )
+    else:
+        cfg.credentials_provider = oss.credentials.StaticCredentialsProvider(
+            access_key_id,
+            access_key_secret,
+        )
+    cfg.region = normalize_oss_region(region)
+    if endpoint:
+        cfg.endpoint = endpoint
+    return oss.Client(cfg)
+
+def iter_object_keys(
+    client: oss.Client,
+    *,
+    bucket: str,
+    prefix: str = "",
+    suffix: str = "",
+    max_count: int | None = None,
+) -> Iterator[str]:
+    paginator = client.list_objects_v2_paginator()
+    count = 0
+    for page in paginator.iter_page(
+        oss.ListObjectsV2Request(bucket=bucket, prefix=prefix or None)
+    ):
+        for obj in page.contents or []:
+            key = obj.key
+            if suffix and not key.endswith(suffix):
+                continue
+            yield key
+            count += 1
+            if max_count is not None and count >= max_count:
+                return
+
+def stream_object_sha256(client: oss.Client, *, bucket: str, object_key: str) -> str:
+    """与 clip_id._hash_file 一致：先 hash 文件名，再 hash 内容。"""
+    hasher = hashlib.sha256()
+    hasher.update(PurePosixPath(object_key).name.encode("utf-8"))
+    result = client.get_object(oss.GetObjectRequest(bucket=bucket, key=object_key))
+    with result.body as stream:
+        for chunk in stream.iter_bytes():
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+def get_object_text(client: oss.Client, *, bucket: str, object_key: str) -> str:
+    result = client.get_object(oss.GetObjectRequest(bucket=bucket, key=object_key))
+    with result.body as stream:
+        return stream.read().decode("utf-8")
+# === END oss_v2_dw.py ===
+
 # === BEGIN sdk_dpe_common.py (auto-bundled) ===
 # =============================================================================
 # SDK DPE 节点共享：Driver 批量编排 + DPE UDF 装饰器
@@ -1439,15 +1514,69 @@ def exit_if_pipeline_idle(ctx: dict[str, Any], *, node_name: str = "") -> bool:
 
 import json
 import os
+import re
 from typing import Any, Callable
 
 import pandas as pd
 
-def get_dw_arg(name: str, default: str | None = None) -> str | None:
+# 与 workflow-params-sdk-pipeline-p0.example 一致；节点/工作流未配参时的兜底（非密钥）
+_PROJECT_DEFAULTS: dict[str, str] = {
+    "oss_bucket": "rosbag-labels-pipeline-bucket2",
+    "cloud_region": "cn_shanghai",
+    "sdk_table_prefix": "aig_sdk__",
+    "table_prefix": "aig_sdk__",
+    "scan_prefix": "rosbags/",
+    "mount_path": "/mnt/oss",
+    "dpe_mount_path": "/mnt/oss",
+    "dpe_image": "rosbag_sdk_dpe",
+    "batch_rows": "1",
+    "model_backend": "mc",
+    "mc_image_mode": "base64",
+    "mc_modelset_project": "bigdata_public_modelset",
+}
+
+def _parse_skynet_args(raw: str) -> dict[str, str]:
+    """Parse DataWorks SKYNET_ARGS (semicolon key=value or JSON object)."""
+    text = raw.strip()
+    if not text:
+        return {}
+    if text.startswith("{"):
+        loaded = json.loads(text)
+        if isinstance(loaded, dict):
+            return {str(k): str(v) for k, v in loaded.items()}
+    parsed: dict[str, str] = {}
+    for token in re.split(r"[;\s]+", text):
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        parsed[key.strip()] = value.strip()
+    return parsed
+
+def _all_dw_arg_sources() -> dict[str, str]:
+    """args (node) > env aliases > SKYNET_ARGS > code defaults."""
+    merged: dict[str, str] = dict(_PROJECT_DEFAULTS)
+    merged.update(_parse_skynet_args(os.environ.get("SKYNET_ARGS", "")))
+    for env_name, arg_name in (
+        ("OSS_BUCKET", "oss_bucket"),
+        ("CLOUD_REGION", "cloud_region"),
+        ("DPE_IMAGE", "dpe_image"),
+        ("ODPS_PROJECT", "odps_project"),
+    ):
+        env_value = os.environ.get(env_name, "").strip()
+        if env_value:
+            merged[arg_name] = env_value
     try:
-        value = args.get(name)  # type: ignore[name-defined]
+        node_args = args  # type: ignore[name-defined]
+        if isinstance(node_args, dict):
+            for key, value in node_args.items():
+                if value is not None and str(value).strip():
+                    merged[str(key)] = str(value).strip()
     except NameError:
-        value = None
+        pass
+    return merged
+
+def get_dw_arg(name: str, default: str | None = None) -> str | None:
+    value = _all_dw_arg_sources().get(name)
     if value is None or str(value).strip() == "":
         return default
     return str(value).strip()
@@ -1455,7 +1584,13 @@ def get_dw_arg(name: str, default: str | None = None) -> str | None:
 def require_dw_arg(name: str) -> str:
     value = get_dw_arg(name)
     if not value:
-        raise ValueError(f"Missing required parameter: {name}")
+        resolved = _all_dw_arg_sources()
+        hint = (
+            f"Missing required parameter: {name}. "
+            f"Configure DataWorks node/workflow parameters (参数名={name}). "
+            f"Resolved keys: {sorted(resolved.keys())}"
+        )
+        raise ValueError(hint)
     return value
 
 def get_dw_int_arg(name: str, default: int) -> int:
@@ -1466,13 +1601,497 @@ def get_dw_float_arg(name: str, default: float) -> float:
     value = get_dw_arg(name)
     return default if value is None else float(value)
 
+def _account_security_token(account: Any) -> str:
+    for attr in ("sts_token", "security_token", "token"):
+        value = getattr(account, attr, None)
+        if value:
+            return str(value)
+    return ""
+
+def _odps_credential_fields(
+    account: Any | None,
+    odps_entry: Any | None = None,
+) -> dict[str, str]:
+    """Collect ODPS AK/SK/STS from DataWorks ``o`` / ``o.account`` for DPE env."""
+    fields: dict[str, str] = {}
+    for candidate in (account, getattr(odps_entry, "account", None) if odps_entry else None):
+        if candidate is None:
+            continue
+        fields.setdefault("ODPS_ACCESS_ID", str(getattr(candidate, "access_id", "") or ""))
+        fields.setdefault(
+            "ODPS_ACCESS_KEY",
+            str(
+                getattr(candidate, "secret_access_key", "")
+                or getattr(candidate, "access_key_secret", "")
+                or ""
+            ),
+        )
+        fields.setdefault("ODPS_PROJECT", str(getattr(candidate, "project", "") or ""))
+        fields.setdefault("ODPS_ENDPOINT", str(getattr(candidate, "endpoint", "") or ""))
+        token = _account_security_token(candidate)
+        if token:
+            fields["ODPS_STS_TOKEN"] = token
+    for env_name, arg_name in (
+        ("ODPS_ACCESS_ID", "odps_access_id"),
+        ("ODPS_ACCESS_KEY", "odps_access_key"),
+        ("ODPS_PROJECT", "odps_project"),
+        ("ODPS_ENDPOINT", "odps_endpoint"),
+        ("ODPS_STS_TOKEN", "odps_sts_token"),
+    ):
+        if fields.get(env_name, "").strip():
+            continue
+        try:
+            value = get_dw_arg(arg_name)
+        except NameError:
+            value = None
+        if value is not None and str(value).strip():
+            fields[env_name] = str(value).strip()
+    return fields
+
+def derive_odps_catalog_endpoint(
+    *,
+    cloud_region: str = "cn_shanghai",
+    odps_endpoint: str | None = None,
+    explicit: str | None = None,
+    catalog_host: str | None = None,
+) -> str:
+    """Catalog base URL for DPE nested ``read_odps_model``.
+
+    Prefer ``catalog_host`` from ``o.get_catalog_host()`` on Driver; else derive
+    from ODPS service endpoint (strip ``/api``), e.g. DataWorks
+    ``service.cn-shanghai.maxcompute.apsara-inc.com``.
+    """
+    if explicit and str(explicit).strip():
+        url = str(explicit).strip()
+    elif catalog_host and str(catalog_host).strip():
+        host = str(catalog_host).strip()
+        url = host if host.startswith(("http://", "https://")) else f"http://{host}"
+    else:
+        endpoint = (odps_endpoint or "").strip().rstrip("/")
+        if endpoint.endswith("/api"):
+            endpoint = endpoint[:-4]
+        if endpoint:
+            url = endpoint
+        else:
+            region_id = (cloud_region or "cn_shanghai").replace("_", "-")
+            url = f"http://service.{region_id}.maxcompute.apsara-inc.com"
+    if not url.startswith(("http://", "https://")):
+        url = f"http://{url.lstrip('/')}"
+    return url.rstrip("/")
+
+def resolve_catalog_endpoint_for_dpe(
+    odps_entry: Any | None,
+    *,
+    cloud_region: str,
+    account: Any | None = None,
+    explicit: str | None = None,
+) -> str:
+    catalog_host: str | None = None
+    odps_endpoint = ""
+    for candidate in (odps_entry, account):
+        if candidate is None:
+            continue
+        if not catalog_host:
+            getter = getattr(candidate, "get_catalog_host", None)
+            if callable(getter):
+                try:
+                    catalog_host = str(getter() or "").strip() or None
+                except Exception:
+                    catalog_host = None
+        if not odps_endpoint:
+            odps_endpoint = str(getattr(candidate, "endpoint", "") or "").strip()
+    return derive_odps_catalog_endpoint(
+        cloud_region=cloud_region,
+        odps_endpoint=odps_endpoint or None,
+        explicit=explicit,
+        catalog_host=catalog_host,
+    )
+
+def _parse_version_tuple(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in re.split(r"[.+]", str(version or "0").split("-", 1)[0]):
+        if piece.isdigit():
+            parts.append(int(piece))
+    return tuple(parts or (0,))
+
+def ensure_dpe_maxframe_for_mc_ai(min_version: str = "2.8.0") -> str:
+    """Upgrade MaxFrame on DPE workers before nested ``read_odps_model`` (MLLM/ASR).
+
+    Driver custom-script pip only affects the Driver pod; DPE workers keep the platform
+    MaxFrame unless we install here. qwen3-asr-flash (format MLLM) needs MaxFrame 2.8+.
+    """
+    import importlib
+    import subprocess
+    import sys
+
+    target = _parse_version_tuple(min_version)
+    current = "0"
+    try:
+        import maxframe
+
+        current = str(getattr(maxframe, "__version__", "0"))
+        if _parse_version_tuple(current) >= target:
+            print(f"DPE_MAXFRAME_VERSION={current}")
+            return current
+    except ImportError:
+        pass
+
+    mirror = "http://mirrors.cloud.aliyuncs.com/pypi/simple/"
+    print(f"DPE_MAXFRAME_UPGRADE from={current} target>={min_version}")
+    subprocess.check_call(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-q",
+            f"maxframe>={min_version}",
+            "-i",
+            mirror,
+            "--trusted-host",
+            "mirrors.cloud.aliyuncs.com",
+        ]
+    )
+    for name in list(sys.modules):
+        if name == "maxframe" or name.startswith("maxframe."):
+            del sys.modules[name]
+    maxframe = importlib.import_module("maxframe")
+    new_version = str(getattr(maxframe, "__version__", "?"))
+    print(f"DPE_MAXFRAME_VERSION={new_version}")
+    return new_version
+
+def _ensure_odps_llm_registry() -> int:
+    """Force-register ODPSLLM so ``read_odps_model`` can build MLLM/ASR models."""
+    import maxframe.learn.contrib.llm.models.odps  # noqa: F401
+    from maxframe.learn.utils.odpsio import _odps_model_classes
+
+    count = len(_odps_model_classes)
+    print(f"DPE_ODPS_MODEL_REGISTRY={count}")
+    return count
+
+def _patch_odps_llm_mllm_dispatch() -> None:
+    """qwen3-asr-flash is MLLM with tasks ``image-text-to-text`` + ``auto-speech-recognition``.
+
+    When Catalog returns empty/unknown tasks inside DPE, MaxFrame's
+    ``ODPSLLM._determine_model_class`` returns None and ``read_odps_model`` raises the
+    misleading \"format MLLM is not supported\" error even though MLLM is listed.
+    """
+    from maxframe.learn.contrib.llm.core import (
+        TASK_IMAGE_TEXT_TO_TEXT,
+        TASK_MULTI_MODAL_EMBEDDING,
+    )
+    from maxframe.learn.contrib.llm.models.managed import (
+        ManagedMultiModalEmbeddingModel,
+        ManagedMultiModalGenLLM,
+    )
+    from maxframe.learn.contrib.llm.models.odps import ODPSLLM, ODPSModelType
+
+    if getattr(ODPSLLM._determine_model_class, "_rosbag_mllm_patched", False):
+        return
+
+    _orig = ODPSLLM._determine_model_class.__func__  # type: ignore[attr-defined]
+
+    @classmethod  # type: ignore[misc]
+    def _determine_model_class_patched(cls, tasks, model_type):  # noqa: ANN001
+        result = _orig(cls, tasks, model_type)
+        if result is not None:
+            return result
+        if model_type != ODPSModelType.MLLM:
+            return None
+        task_list = [str(t) for t in (tasks or [])]
+        joined = " ".join(task_list).lower()
+        if TASK_MULTI_MODAL_EMBEDDING in task_list or "embedding" in joined:
+            print(f"DPE_MLLM_DISPATCH embedding tasks={task_list}")
+            return ManagedMultiModalEmbeddingModel
+        # ASR / empty tasks / unknown multimodal generation → GenLLM
+        print(
+            "DPE_MLLM_DISPATCH gen "
+            f"tasks={task_list or ['(empty)']} "
+            f"fallback={ManagedMultiModalGenLLM.__name__}"
+        )
+        return ManagedMultiModalGenLLM
+
+    _determine_model_class_patched._rosbag_mllm_patched = True  # type: ignore[attr-defined]
+    ODPSLLM._determine_model_class = _determine_model_class_patched  # type: ignore[method-assign]
+    # Keep image-text-to-text as a known good path in logs when Catalog is healthy.
+    _ = TASK_IMAGE_TEXT_TO_TEXT
+
+def patch_mc_catalog_runtime_for_dpe() -> None:
+    """Ensure nested MC AI uses internal Catalog API (works with SDK wheel <0.3.3)."""
+    import os
+
+    ensure_dpe_maxframe_for_mc_ai()
+    try:
+        _ensure_odps_llm_registry()
+        _patch_odps_llm_mllm_dispatch()
+    except Exception as exc:  # noqa: BLE001
+        print(f"DPE_ODPS_LLM_PATCH_WARN={type(exc).__name__}: {exc}")
+
+    region = (
+        os.environ.get("MC_CLOUD_REGION")
+        or os.environ.get("CLOUD_REGION")
+        or "cn_shanghai"
+    ).replace("_", "-")
+    catalog = os.environ.get("ODPS_CATALOG_ENDPOINT", "").strip()
+    if not catalog:
+        catalog = derive_odps_catalog_endpoint(
+            cloud_region=region,
+            odps_endpoint=os.environ.get("ODPS_ENDPOINT", "").strip() or None,
+        )
+        os.environ["ODPS_CATALOG_ENDPOINT"] = catalog
+    os.environ.setdefault("MC_USE_INTERNAL_CATALOG", "true")
+
+    try:
+        import oms_multimodal.mc.runtime as mc_runtime
+    except ImportError:
+        return
+
+    def _configure_nested_mc_ai_for_dpe() -> None:
+        """DPE UDF 内嵌套 MaxFrame AI session（与 Job2 Driver 侧 AI 对齐）。
+
+        关键：勿把外层 ``apply_chunk`` 的 ``rosbag_sdk_dpe`` image 带进 AI session；
+        ManagedLLM* 算子需要可调度的 MCSQL/平台引擎，自定义解析镜像常导致
+        ``Operator type ... can't be accepted by any engine``。
+        """
+        try:
+            from maxframe.config import options as mf_options
+        except ImportError:
+            return
+        mf_options.local_execution.enabled = False
+        # MCSQL first：AI Function 主路径；DPE 仅作备选
+        mf_options.dag.settings = {
+            "engine_order": ["MCSQL", "DPE"],
+            "unavailable_engines": ["SPE"],
+        }
+        sql_settings = dict(mf_options.sql.settings or {})
+        sql_settings["odps.sql.python.version"] = "cp311"
+        sql_settings["odps.sql.using.public.model"] = "true"
+        # Nested AI session image: default = platform (unset). Override with MC_AI_SESSION_IMAGE.
+        ai_image = os.environ.get("MC_AI_SESSION_IMAGE", "").strip()
+        if ai_image:
+            sql_settings["odps.session.image"] = ai_image
+        else:
+            sql_settings.pop("odps.session.image", None)
+        mf_options.sql.settings = sql_settings
+        inference_quota = (
+            os.environ.get("MC_INFERENCE_QUOTA_NAME", "").strip()
+            or os.environ.get("AI_INFERENCE_QUOTA_NAME", "").strip()
+            or os.environ.get("INFERENCE_QUOTA_NAME", "").strip()
+        )
+        if inference_quota:
+            mf_options.session.inference_quota_name = inference_quota
+        print(
+            "DPE_MC_AI_CONFIG "
+            f"engine_order={mf_options.dag.settings.get('engine_order')} "
+            f"unavailable={mf_options.dag.settings.get('unavailable_engines')} "
+            f"session_image={sql_settings.get('odps.session.image') or '(platform-default)'} "
+            f"inference_quota={inference_quota or '(unset)'} "
+            f"local_execution={mf_options.local_execution.enabled}"
+        )
+
+    def _configure_mc_sql_for_public_modelset() -> None:
+        _configure_nested_mc_ai_for_dpe()
+
+    _configure_mc_sql_for_public_modelset()
+
+    _orig_prepare = mc_runtime.prepare_mf_ai_runtime
+
+    def _prepare_mf_ai_runtime_patched(**kwargs: Any) -> None:
+        # SDK prepare 会再写入 dpe_image；嵌套配置必须在其后覆盖。
+        _orig_prepare(**kwargs)
+        _configure_nested_mc_ai_for_dpe()
+
+    mc_runtime.prepare_mf_ai_runtime = _prepare_mf_ai_runtime_patched
+
+    # Force a fresh nested MaxFrame session before generate/execute (Job2-style AI session).
+    _McRuntime = mc_runtime.McRuntime
+    _orig_ensure_session = _McRuntime.ensure_session
+    _orig_prepare_for_model = _McRuntime.prepare_for_model
+
+    def _ensure_session_patched(self: Any) -> Any:
+        _configure_nested_mc_ai_for_dpe()
+        if self._session is not None:
+            return self._session
+        from maxframe import new_session
+
+        try:
+            from maxframe.session import reset_default_session
+
+            reset_default_session()
+            print("DPE_NESTED_SESSION reset_default_session=ok")
+        except Exception as reset_exc:  # noqa: BLE001
+            print(f"DPE_NESTED_SESSION reset_warn={type(reset_exc).__name__}: {reset_exc}")
+        self._session = new_session(self.odps_entry)
+        try:
+            logview = self._session.get_logview_address()
+        except Exception:  # noqa: BLE001
+            logview = ""
+        print(f"DPE_NESTED_SESSION created logview={logview}")
+        return self._session
+
+    def _prepare_for_model_patched(self: Any, model_name: str) -> None:
+        _orig_prepare_for_model(self, model_name)
+        # ensure_session after options so execute() binds to nested AI session
+        self.ensure_session()
+
+    _McRuntime.ensure_session = _ensure_session_patched  # type: ignore[method-assign]
+    _McRuntime.prepare_for_model = _prepare_for_model_patched  # type: ignore[method-assign]
+
+    _orig_fetch_series = mc_runtime._fetch_series
+
+    def _fetch_series_patched(result_df: Any, preferred: tuple[str, ...]) -> list[Any]:
+        from maxframe.session import get_default_session
+
+        session = None
+        try:
+            session = get_default_session()
+        except Exception:  # noqa: BLE001
+            session = None
+        if session is not None:
+            pdf = result_df.execute(session=session).fetch()
+        else:
+            pdf = result_df.execute().fetch()
+        columns = list(pdf.columns)
+        col = mc_runtime._output_column(columns, preferred)
+        if col not in columns:
+            raise ValueError(f"AI output column {col!r} not in {columns}")
+        return pdf[col].tolist()
+
+    mc_runtime._fetch_series = _fetch_series_patched
+    # Clients bind `_fetch_series` at import time — refresh if already loaded.
+    for mod_name in (
+        "oms_multimodal.mc.asr_client",
+        "oms_multimodal.mc.omni_client",
+        "oms_multimodal.mc.embedding_client",
+    ):
+        try:
+            mod = __import__(mod_name, fromlist=["_fetch_series"])
+            if hasattr(mod, "_fetch_series"):
+                mod._fetch_series = _fetch_series_patched
+        except ImportError:
+            pass
+
+    _orig_create = mc_runtime.create_ai_model
+
+    def _create_ai_model_patched(
+        model_name: str,
+        odps_entry: Any,
+        *,
+        modelset_project: str = mc_runtime.DEFAULT_MODELSET_PROJECT,
+    ) -> Any:
+        _configure_nested_mc_ai_for_dpe()
+        try:
+            _ensure_odps_llm_registry()
+            _patch_odps_llm_mllm_dispatch()
+        except Exception as exc:  # noqa: BLE001
+            print(f"DPE_ODPS_LLM_PATCH_WARN={type(exc).__name__}: {exc}")
+        try:
+            # Prefetch Catalog metadata so failures include format/tasks in Driver logs.
+            if odps_entry is not None and hasattr(odps_entry, "get_model"):
+                try:
+                    model_obj = odps_entry.get_model(model_name, modelset_project, None)
+                    model_obj.reload()
+                    fmt = getattr(getattr(model_obj, "type", None), "value", None) or getattr(
+                        model_obj, "type", "?"
+                    )
+                    tasks = list(getattr(model_obj, "tasks", None) or [])
+                    print(
+                        f"DPE_MODEL_META name={model_name} format={fmt} tasks={tasks}"
+                    )
+                except Exception as meta_exc:  # noqa: BLE001
+                    print(
+                        f"DPE_MODEL_META_WARN name={model_name} "
+                        f"{type(meta_exc).__name__}: {meta_exc}"
+                    )
+            return _orig_create(model_name, odps_entry, modelset_project=modelset_project)
+        except Exception as exc:
+            import maxframe
+
+            raise RuntimeError(
+                f"{type(exc).__name__}: {exc} | "
+                f"maxframe={getattr(maxframe, '__version__', '?')} "
+                f"model={model_name} project={modelset_project}"
+            ) from exc
+
+    mc_runtime.create_ai_model = _create_ai_model_patched
+
+    def _ensure(odps_entry: Any) -> None:
+        if odps_entry is None:
+            return
+        cat = os.environ.get("ODPS_CATALOG_ENDPOINT", "").strip() or derive_odps_catalog_endpoint(
+            cloud_region=region,
+            odps_endpoint=os.environ.get("ODPS_ENDPOINT", "").strip() or None,
+        )
+        odps_entry._catalog_endpoint = cat
+        odps_entry._catalog_rest = None
+
+    def _resolve(entry: Any | None = None) -> Any:
+        if entry is not None:
+            _ensure(entry)
+            return entry
+        access_id = os.environ.get("ODPS_ACCESS_ID", "").strip()
+        secret = os.environ.get("ODPS_ACCESS_KEY", "").strip()
+        project = os.environ.get("ODPS_PROJECT", "").strip()
+        endpoint = os.environ.get("ODPS_ENDPOINT", "").strip()
+        sts_token = os.environ.get("ODPS_STS_TOKEN", "").strip()
+        if not all([access_id, secret, project, endpoint]):
+            return mc_runtime.resolve_odps_entry(entry)
+        from odps import ODPS
+
+        catalog = (
+            cat
+            if (cat := os.environ.get("ODPS_CATALOG_ENDPOINT", "").strip())
+            else derive_odps_catalog_endpoint(
+                cloud_region=region,
+                odps_endpoint=os.environ.get("ODPS_ENDPOINT", "").strip() or None,
+            )
+        )
+        # pyodps rejects ODPS(..., sts_token=...); use StsAccount instead.
+        if sts_token:
+            from odps.accounts import StsAccount
+
+            odps = ODPS(
+                account=StsAccount(access_id, secret, sts_token),
+                project=project,
+                endpoint=endpoint,
+                catalog_endpoint=catalog,
+            )
+        else:
+            odps = ODPS(
+                access_id,
+                secret,
+                project=project,
+                endpoint=endpoint,
+                catalog_endpoint=catalog,
+            )
+        _ensure(odps)
+        return odps
+
+    mc_runtime.ensure_odps_catalog_endpoint = _ensure
+    mc_runtime.resolve_odps_entry = _resolve
+
 def apply_dpe_runtime_settings(dpe_image: str | None) -> None:
     from maxframe.config import options as mf_options
+
+    # extract+mc ASR inside one DPE chunk routinely exceeds the ~20min default
+    # container/session wait; raise before new_session().
+    alive_sec = int(get_dw_arg("session_max_alive_sec", "14400") or "14400")
+    idle_sec = int(get_dw_arg("session_max_idle_sec", str(alive_sec)) or str(alive_sec))
+    if alive_sec > 0:
+        mf_options.session.max_alive_seconds = alive_sec
+    if idle_sec > 0:
+        mf_options.session.max_idle_seconds = min(idle_sec, alive_sec) if alive_sec > 0 else idle_sec
 
     sql_settings = dict(mf_options.sql.settings or {})
     sql_settings["odps.sql.python.version"] = "cp311"
     if dpe_image:
         sql_settings["odps.session.image"] = dpe_image
+    # Long per-chunk UDF (parse bag + nested MaxFrame AI ASR).
+    sql_settings["odps.function.timeout"] = str(
+        int(get_dw_arg("odps_function_timeout_sec", "3600") or "3600")
+    )
+    sql_settings["odps.sql.executionengine.batch.rowcount"] = "1"
+    sql_settings.setdefault("odps.sql.job.max.time.hours", "24")
     mf_options.sql.settings = sql_settings
 
 def configure_dpe_engine() -> None:
@@ -1485,19 +2104,34 @@ def configure_dpe_engine() -> None:
     mf_options.local_execution.enabled = False
 
 def oss_internal_url(region: str, bucket: str, prefix: str) -> str:
-    host = f"oss-{region}-internal.aliyuncs.com"
-    base = f"oss://{bucket}.{host}"
-    if prefix:
-        return f"{base}/{prefix.strip('/')}/"
-    return f"{base}/"
+    """MaxFrame 2.8 mount path: oss://{endpoint}/{bucket}/{prefix}/"""
+    region_id = region.replace("_", "-")
+    bucket_name = (bucket or "").strip()
+    if not bucket_name:
+        raise ValueError("oss_bucket is required for OSS mount URL")
+    normalized = (prefix or "").strip("/")
+    base = f"oss://oss-{region_id}-internal.aliyuncs.com/{bucket_name}"
+    if not normalized:
+        return f"{base}/"
+    return f"{base}/{normalized}/"
 
-def storage_options(role_arn: str | None, account: Any) -> dict[str, str]:
+def storage_options(
+    role_arn: str | None,
+    account: Any,
+    *,
+    oss_bucket: str | None = None,
+) -> dict[str, str]:
+    # MaxFrame ``with_fs_mount`` expects ``role_arn`` or ``access_key_id``/``access_key_secret``;
+    # ossfs2 also reads ``oss_bucket`` from storage_options on DPE workers.
+    opts: dict[str, str] = {}
+    if oss_bucket and str(oss_bucket).strip():
+        opts["oss_bucket"] = str(oss_bucket).strip()
     if role_arn:
-        return {"oss_role_arn": role_arn}
-    return {
-        "oss_access_key_id": account.access_id,
-        "oss_access_key_secret": account.secret_access_key,
-    }
+        opts["role_arn"] = role_arn
+        return opts
+    opts["access_key_id"] = account.access_id
+    opts["access_key_secret"] = account.secret_access_key
+    return opts
 
 def work_items_to_job_rows(work_items: list[dict[str, Any]]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
@@ -1539,7 +2173,10 @@ def _set_env_from_arg(env: dict[str, str], env_name: str, arg_name: str, *, defa
     if value is not None and str(value).strip():
         env[env_name] = str(value).strip()
 
-def collect_sdk_env_for_dpe(account: Any | None = None) -> dict[str, str]:
+def collect_sdk_env_for_dpe(
+    account: Any | None = None,
+    odps_entry: Any | None = None,
+) -> dict[str, str]:
     """Driver 收集工作流参数 → DPE UDF 内 os.environ（仅 oms_multimodal import）。"""
     backend_raw = (get_dw_arg("model_backend") or "mc").strip().lower()
     backend = "mc" if backend_raw == "mc" else "api"
@@ -1567,6 +2204,9 @@ def collect_sdk_env_for_dpe(account: Any | None = None) -> dict[str, str]:
             ("AI_CU_QUOTA_NAME", "ai_cu_quota_name", None),
             ("MC_AI_GU_QUOTA_NAME", "ai_gu_quota_name", None),
             ("AI_GU_QUOTA_NAME", "ai_gu_quota_name", None),
+            ("MC_INFERENCE_QUOTA_NAME", "inference_quota_name", None),
+            ("AI_INFERENCE_QUOTA_NAME", "inference_quota_name", None),
+            ("INFERENCE_QUOTA_NAME", "inference_quota_name", None),
             ("MC_TOTAL_RPM_LIMIT", "total_rpm_limit", None),
             ("MC_REQUEST_TIMEOUT_SEC", "request_timeout", None),
             ("MC_AI_MEMORY", "ai_memory", None),
@@ -1577,14 +2217,16 @@ def collect_sdk_env_for_dpe(account: Any | None = None) -> dict[str, str]:
             ("MC_OSS_ACCESS_KEY_SECRET", "oss_vl_access_key_secret", None),
         ):
             _set_env_from_arg(env, env_name, arg_name, default=default)
-        if account is not None:
-            env.setdefault("ODPS_ACCESS_ID", str(getattr(account, "access_id", "") or ""))
-            env.setdefault(
-                "ODPS_ACCESS_KEY",
-                str(getattr(account, "secret_access_key", "") or getattr(account, "access_key_secret", "") or ""),
-            )
-            env.setdefault("ODPS_PROJECT", str(getattr(account, "project", "") or ""))
-            env.setdefault("ODPS_ENDPOINT", str(getattr(account, "endpoint", "") or ""))
+        for key, value in _odps_credential_fields(account, odps_entry).items():
+            if value:
+                env.setdefault(key, value)
+        env["ODPS_CATALOG_ENDPOINT"] = resolve_catalog_endpoint_for_dpe(
+            odps_entry,
+            cloud_region=get_dw_arg("cloud_region", "cn_shanghai") or "cn_shanghai",
+            account=account,
+            explicit=get_dw_arg("odps_catalog_endpoint"),
+        )
+        env.setdefault("MC_USE_INTERNAL_CATALOG", "true")
     return env
 
 def wrap_dpe_udf(
@@ -1717,21 +2359,146 @@ def _labels_to_clip_dict(raw_labels: Any) -> dict[str, Any]:
             result[str(key)] = str(entry)
     return result
 
+def build_run_json_document(
+    *,
+    clip_id: str,
+    run_id: str,
+    ds: str,
+    bag_oss_key: str = "",
+    stages_done: tuple[str, ...] | list[str] = (),
+    model_backend: str = "mc",
+    extra: dict[str, Any] | None = None,
+    completed_at: str | None = None,
+) -> dict[str, Any]:
+    """sdk_v1 run.json schema (matches OMS ``write_run_json`` / verify_sdk_v1_run)."""
+    doc: dict[str, Any] = {
+        "layout_version": "sdk_v1",
+        "clip_id": clip_id,
+        "run_id": run_id,
+        "ds": ds,
+        "bag_oss_key": bag_oss_key,
+        "sdk_files": {
+            "labels": SDK_LABELS_JSONL,
+            "embeddings": SDK_EMBEDDINGS_JSONL,
+            "videos": "clip_videos.jsonl",
+        },
+        "preview_manifest": "preview/manifest.json",
+        "stages_done": list(stages_done),
+        "model_backend": model_backend,
+        "completed_at": completed_at or _utc_now(),
+    }
+    if extra:
+        doc.update(extra)
+    return doc
+
+def format_run_json_body(doc: dict[str, Any]) -> str:
+    return json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
+
+def _fetch_dim_clip_created_at(odps: Any, table_name: str, clip_id: str) -> str | None:
+    sql = (
+        f"SELECT created_at FROM {table_name} "
+        f"WHERE clip_id = {_sql_literal(clip_id)} LIMIT 1"
+    )
+    with odps.execute_sql(sql).open_reader() as reader:
+        rows = list(reader)
+    if not rows:
+        return None
+    value = rows[0][0]
+    return None if value is None else str(value)
+
+def build_dim_clip_upsert_sql(
+    *,
+    clip_id: str,
+    clip_dir_name: str,
+    content_hash: str,
+    bag_oss_key: str,
+    run_id: str,
+    created_at: str,
+    updated_at: str,
+    table_prefix: str = "aig_sdk__",
+) -> str:
+    """INSERT OVERWRITE merge: one row per clip_id with active_run_id = this run.
+
+    Plain INSERT INTO would append duplicates; verify/HMI then may see a stale
+    active_run_id. Same pattern as job1_mc_write_node._upsert_dim_clip.
+    """
+    p = table_prefix
+    cols = (
+        "clip_id, clip_dir_name, content_hash, bag_oss_key, "
+        "active_run_id, layout_version, created_at, updated_at"
+    )
+    return (
+        f"INSERT OVERWRITE TABLE {p}dim_clip "
+        f"SELECT {cols} FROM {p}dim_clip WHERE clip_id != {_sql_literal(clip_id)} "
+        f"UNION ALL "
+        f"SELECT {_sql_literal(clip_id)}, {_sql_literal(clip_dir_name)}, "
+        f"{_sql_literal(content_hash)}, {_sql_literal(bag_oss_key)}, "
+        f"{_sql_literal(run_id)}, 'sdk_v1', {_sql_literal(created_at)}, "
+        f"{_sql_literal(updated_at)}"
+    )
+
+def upsert_dim_clip_active_run(
+    odps: Any,
+    *,
+    clip_id: str,
+    run_id: str,
+    table_prefix: str = "aig_sdk__",
+    bag_oss_key: str = "",
+    clip_dir_name: str = "",
+    now: str | None = None,
+) -> None:
+    """Point ``aig_sdk__dim_clip.active_run_id`` at ``run_id`` (overwrite upsert)."""
+    updated_at = now or _utc_now()
+    table_name = f"{table_prefix}dim_clip"
+    created_at = _fetch_dim_clip_created_at(odps, table_name, clip_id) or updated_at
+    content_hash = clip_id.split(":", 1)[-1][:64]
+    sql = build_dim_clip_upsert_sql(
+        clip_id=clip_id,
+        clip_dir_name=clip_dir_name or clip_id,
+        content_hash=content_hash,
+        bag_oss_key=bag_oss_key,
+        run_id=run_id,
+        created_at=created_at,
+        updated_at=updated_at,
+        table_prefix=table_prefix,
+    )
+    odps.execute_sql(sql)
+    print("OK", sql[:80], "...")
+
 def build_ingest_statements(
     *,
     clip_id: str,
     run_id: str,
     ds: str,
-    run_dir: Path,
+    run_dir: Path | None = None,
     table_prefix: str = "aig_sdk__",
     bag_oss_key: str = "",
     now: str | None = None,
+    label_row: dict[str, Any] | None = None,
+    embed_row: dict[str, Any] | None = None,
+    run_doc: dict[str, Any] | None = None,
+    include_dim_clip: bool = False,
 ) -> list[str]:
-    """Return SQL statements for SDK jsonl artifacts without contacting ODPS."""
-    run_dir = Path(run_dir)
-    label_row = _read_jsonl_first(run_dir / SDK_LABELS_JSONL)
-    embed_row = _read_jsonl_first(run_dir / SDK_EMBEDDINGS_JSONL)
-    run_doc = _read_json_object(run_dir / SDK_RUN_JSON)
+    """Return SQL statements for SDK jsonl artifacts without contacting ODPS.
+
+    Prefer in-memory ``label_row`` / ``embed_row`` (Driver bare AI path). When
+    omitted, read from ``run_dir`` (requires local/mount filesystem).
+
+    ``dim_clip`` is upserted separately via ``upsert_dim_clip_active_run`` so
+    ``active_run_id`` is overwritten (not appended). Set ``include_dim_clip=True``
+    only for legacy tests that assert a plain INSERT string.
+    """
+    if label_row is None or embed_row is None:
+        if run_dir is None:
+            raise ValueError("run_dir or label_row+embed_row required")
+        run_dir = Path(run_dir)
+        if label_row is None:
+            label_row = _read_jsonl_first(run_dir / SDK_LABELS_JSONL)
+        if embed_row is None:
+            embed_row = _read_jsonl_first(run_dir / SDK_EMBEDDINGS_JSONL)
+        if run_doc is None:
+            run_doc = _read_json_object(run_dir / SDK_RUN_JSON)
+    run_doc = run_doc or {}
 
     start_ns = int(label_row.get("start_timestamp_ns") or 0)
     end_ns = int(label_row.get("end_timestamp_ns") or start_ns)
@@ -1749,28 +2516,36 @@ def build_ingest_statements(
     content_hash = clip_id.split(":", 1)[-1][:64]
     p = table_prefix
 
-    statements = [
-        f"INSERT INTO TABLE {p}dim_clip "
-        f"SELECT {_sql_literal(clip_id)}, {_sql_literal(clip_dir_name)}, "
-        f"{_sql_literal(content_hash)}, {_sql_literal(effective_bag_key)}, "
-        f"{_sql_literal(run_id)}, 'sdk_v1', {_sql_literal(created_at)}, {_sql_literal(created_at)}",
-        f"INSERT INTO TABLE {p}pipeline_run PARTITION (ds={_sql_literal(ds)}) "
-        f"SELECT {_sql_literal(run_id)}, {_sql_literal(clip_id)}, 'completed', 'sdk_v1', 'clip', "
-        f"{_sql_literal(created_at)}, {_sql_literal(created_at)}, {_sql_literal(created_at)}",
-        f"INSERT INTO TABLE {p}clip_parse_summary PARTITION (ds={_sql_literal(ds)}) "
-        f"SELECT {_sql_literal(clip_id)}, {_sql_literal(run_id)}, 'output', 'output.bag', "
-        f"{end_ns - start_ns}, {duration}, {start_ns}, {end_ns}, 0, {_sql_literal(created_at)}",
-        f"INSERT INTO TABLE {p}fact_clip_label PARTITION (ds={_sql_literal(ds)}) "
-        f"SELECT {_sql_literal(clip_id)}, {_sql_literal(run_id)}, {_sql_literal(labels_json)}, "
-        f"NULL, {_sql_literal(str(label_row.get('model') or ''))}, 'ai', {start_ns}, NULL, "
-        f"{_sql_literal(f'clips/{clip_id}/runs/{run_id}/{SDK_LABELS_JSONL}')}, "
-        f"{_sql_literal(created_at)}, {_sql_literal(created_at)}",
-        f"INSERT INTO TABLE {p}fact_clip_embedding PARTITION (ds={_sql_literal(ds)}) "
-        f"SELECT {_sql_literal(clip_id)}, {_sql_literal(run_id)}, {_sql_literal(vector_json)}, "
-        f"{len(vector)}, {_sql_literal(str(embed_row.get('model') or ''))}, 'clip_native', "
-        f"{_sql_literal(f'clips/{clip_id}/runs/{run_id}/{SDK_EMBEDDINGS_JSONL}')}, "
-        f"{_sql_literal(created_at)}, {_sql_literal(created_at)}",
-    ]
+    statements: list[str] = []
+    if include_dim_clip:
+        statements.append(
+            f"INSERT INTO TABLE {p}dim_clip "
+            f"SELECT {_sql_literal(clip_id)}, {_sql_literal(clip_dir_name)}, "
+            f"{_sql_literal(content_hash)}, {_sql_literal(effective_bag_key)}, "
+            f"{_sql_literal(run_id)}, 'sdk_v1', {_sql_literal(created_at)}, "
+            f"{_sql_literal(created_at)}"
+        )
+
+    statements.extend(
+        [
+            f"INSERT INTO TABLE {p}pipeline_run PARTITION (ds={_sql_literal(ds)}) "
+            f"SELECT {_sql_literal(run_id)}, {_sql_literal(clip_id)}, 'completed', 'sdk_v1', 'clip', "
+            f"{_sql_literal(created_at)}, {_sql_literal(created_at)}, {_sql_literal(created_at)}",
+            f"INSERT INTO TABLE {p}clip_parse_summary PARTITION (ds={_sql_literal(ds)}) "
+            f"SELECT {_sql_literal(clip_id)}, {_sql_literal(run_id)}, 'output', 'output.bag', "
+            f"{end_ns - start_ns}, {duration}, {start_ns}, {end_ns}, 0, {_sql_literal(created_at)}",
+            f"INSERT INTO TABLE {p}fact_clip_label PARTITION (ds={_sql_literal(ds)}) "
+            f"SELECT {_sql_literal(clip_id)}, {_sql_literal(run_id)}, {_sql_literal(labels_json)}, "
+            f"NULL, {_sql_literal(str(label_row.get('model') or ''))}, 'ai', {start_ns}, NULL, "
+            f"{_sql_literal(f'clips/{clip_id}/runs/{run_id}/{SDK_LABELS_JSONL}')}, "
+            f"{_sql_literal(created_at)}, {_sql_literal(created_at)}",
+            f"INSERT INTO TABLE {p}fact_clip_embedding PARTITION (ds={_sql_literal(ds)}) "
+            f"SELECT {_sql_literal(clip_id)}, {_sql_literal(run_id)}, {_sql_literal(vector_json)}, "
+            f"{len(vector)}, {_sql_literal(str(embed_row.get('model') or ''))}, 'clip_native', "
+            f"{_sql_literal(f'clips/{clip_id}/runs/{run_id}/{SDK_EMBEDDINGS_JSONL}')}, "
+            f"{_sql_literal(created_at)}, {_sql_literal(created_at)}",
+        ]
+    )
 
     asr_text = str(label_row.get("asr_text") or "").strip()
     if asr_text:
@@ -1780,8 +2555,6 @@ def build_ingest_statements(
             f"{_sql_literal(asr_text)}, 1.0, NULL, 'preview/audio.wav'"
         )
 
-    # Mark cloud five-step contract complete for a successful Driver ingest.
-    # Partial UDF stages still land as completed once artifacts exist and ingest runs.
     for step_id in SDK_PIPELINE_STEPS:
         statements.append(
             f"INSERT INTO TABLE {p}pipeline_step PARTITION (ds={_sql_literal(ds)}) "
@@ -1796,11 +2569,31 @@ def ingest_sdk_run(
     clip_id: str,
     run_id: str,
     ds: str,
-    run_dir: Path,
+    run_dir: Path | None = None,
     table_prefix: str = "aig_sdk__",
     bag_oss_key: str = "",
+    label_row: dict[str, Any] | None = None,
+    embed_row: dict[str, Any] | None = None,
+    run_doc: dict[str, Any] | None = None,
 ) -> None:
     """Execute all ingest statements for one successful SDK run."""
+    # Resolve clip_dir_name / bag key the same way as build_ingest_statements.
+    resolved_doc = run_doc
+    if resolved_doc is None and run_dir is not None:
+        resolved_doc = _read_json_object(Path(run_dir) / SDK_RUN_JSON)
+    resolved_doc = resolved_doc or {}
+    clip_dir_name = str(resolved_doc.get("source_run_dir") or clip_id)
+    effective_bag_key = str(bag_oss_key or resolved_doc.get("bag_oss_key") or "")
+
+    upsert_dim_clip_active_run(
+        odps,
+        clip_id=clip_id,
+        run_id=run_id,
+        table_prefix=table_prefix,
+        bag_oss_key=effective_bag_key,
+        clip_dir_name=clip_dir_name,
+    )
+
     statements = build_ingest_statements(
         clip_id=clip_id,
         run_id=run_id,
@@ -1808,6 +2601,10 @@ def ingest_sdk_run(
         run_dir=run_dir,
         table_prefix=table_prefix,
         bag_oss_key=bag_oss_key,
+        label_row=label_row,
+        embed_row=embed_row,
+        run_doc=run_doc,
+        include_dim_clip=False,
     )
     for sql in statements:
         odps.execute_sql(sql)
@@ -1832,9 +2629,30 @@ except ImportError:  # pragma: no cover - DW paste without path
         parts = {t.strip().lower() for t in str(raw).split(",") if t.strip()}
         return frozenset(parts)
 
-def split_stages(raw: str | None) -> tuple[frozenset[str], frozenset[str]]:
+# MaxFrame AI stages: when ai_submitter=driver, run on Driver (bare AI), not nested in DPE UDF.
+MC_AI_STAGES = frozenset({"asr", "label", "embed"})
+# Stages safe inside apply_chunk with SDK 0.3.2 (no nested MaxFrame AI).
+DPE_SDK_SAFE_STAGES = frozenset({"extract", "preview", "upload"})
+
+def split_stages(
+    raw: str | None,
+    *,
+    ai_submitter: str = "driver",
+) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """Return (driver_stages, udf_stages, driver_ai_stages).
+
+    ``ai_submitter=driver`` (default): asr/label/embed → Driver bare MaxFrame AI.
+    ``ai_submitter=udf``: keep nested path (known broken for model_backend=mc).
+    """
     stages = parse_stages(raw)
-    return stages & DRIVER_STAGES, stages & UDF_STAGES
+    driver = stages & DRIVER_STAGES
+    udf = stages & UDF_STAGES
+    mode = (ai_submitter or "driver").strip().lower()
+    if mode in {"driver", "bare", "job2"}:
+        driver_ai = udf & MC_AI_STAGES
+        udf = udf - MC_AI_STAGES
+        return driver, udf, driver_ai
+    return driver, udf, frozenset()
 
 def content_hash_to_clip_id(hex_digest: str) -> str:
     digest = hex_digest.strip().lower().removeprefix("sha256:")
@@ -1898,6 +2716,7 @@ def chunk_output_dtypes() -> dict[str, str]:
         "embeddings_relpath": "string",
         "videos_relpath": "string",
         "preview_ok": "boolean",
+        "audio_keys_json": "string",
     }
 
 def row_success_status(errors: list[dict[str, str]], *, require_files: bool = False) -> bool:
@@ -1924,6 +2743,1082 @@ def batch_summary(result_rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 # === END sdk_pipeline_driver_lib.py ===
 
+# === BEGIN sdk_driver_bare_asr.py (auto-bundled) ===
+# =============================================================================
+# Driver-side bare MaxFrame AI ASR（不经 OMS SDK McAsrClient）
+# 用于：DPE apply_chunk 只做 extract 后，在 Driver session 里跑 qwen3-asr-flash
+#
+# 注意：DataWorks o.account STS 通常无权直接 List/Get 业务桶；
+# WAV 由 DPE 挂载侧列出/读出（base64）或传 OSS URL + 长期 AK。
+# asr.jsonl 写回走 DPE 挂载（与 Job2 一致）。
+# =============================================================================
+
+import json
+import re
+from typing import Any
+
+DEFAULT_ASR_MODEL = "qwen3-asr-flash"
+DEFAULT_MODELSET_PROJECT = "bigdata_public_modelset"
+
+def _normalize_llm_output(raw: Any) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, dict):
+        choices = raw.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+            if content is not None:
+                return str(content).strip()
+        content = raw.get("content") or raw.get("text") or raw.get("output")
+        if content is not None:
+            return str(content).strip()
+        return ""
+    text = str(raw).strip()
+    if text.startswith("{") and "choices" in text:
+        try:
+            return _normalize_llm_output(json.loads(text))
+        except json.JSONDecodeError:
+            pass
+    return text
+
+def clip_id_from_audio_key(object_key: str) -> str:
+    """SDK subclip id from a wav object key.
+
+    Prefer the *innermost* ``.../clips/<id>/audio.wav`` (e.g. ``output_0000`` under
+    ``_sdk_work``). Do **not** take the outer OSS prefix ``clips/{sha256}/runs/...``,
+    which is the bag-level clip_id, not the SDK subclip directory name.
+    """
+    norm = object_key.replace("\\", "/").strip("/")
+    rooted = "/" + norm
+    m_work = re.search(r"/_sdk_work/.*/clips/([^/]+)/audio\.wav$", rooted)
+    if m_work:
+        return m_work.group(1)
+    m_tail = re.search(r"/clips/([^/]+)/audio\.wav$", rooted)
+    if m_tail:
+        return m_tail.group(1)
+    matches = re.findall(r"/clips/([^/]+)/", rooted)
+    if matches:
+        return matches[-1]
+    return "clip_0"
+
+def select_canonical_asr_audio_keys(wav_keys: list[str]) -> list[str]:
+    """Pick one canonical wav per SDK subclip for ASR.
+
+    Prefer ``_sdk_work/.../clips/*/audio.wav`` over ``preview/audio.wav`` (and any
+    other duplicates). Never ASR both work-clip and preview for the same bag/clip.
+    """
+    keys = sorted(
+        {str(k).replace("\\", "/").lstrip("/") for k in wav_keys if str(k).strip()}
+    )
+    if not keys:
+        return []
+
+    def _is_work_clip_wav(key: str) -> bool:
+        rooted = "/" + key
+        return bool(
+            "/_sdk_work/" in rooted
+            and re.search(r"/clips/[^/]+/audio\.wav$", rooted)
+        )
+
+    def _is_preview_wav(key: str) -> bool:
+        rooted = "/" + key
+        return "/preview/" in rooted or key.endswith("preview/audio.wav")
+
+    preferred = [k for k in keys if _is_work_clip_wav(k)]
+    pool = preferred or [k for k in keys if not _is_preview_wav(k)] or keys
+
+    chosen: dict[str, str] = {}
+    for key in pool:
+        sdk_id = clip_id_from_audio_key(key)
+        prev = chosen.get(sdk_id)
+        if prev is None:
+            chosen[sdk_id] = key
+            continue
+        # Prefer work-clip path if a weaker key was stored first.
+        if _is_work_clip_wav(key) and not _is_work_clip_wav(prev):
+            chosen[sdk_id] = key
+        elif (not _is_preview_wav(key)) and _is_preview_wav(prev):
+            chosen[sdk_id] = key
+    return [chosen[sid] for sid in sorted(chosen)]
+
+def parse_audio_keys_json(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return [text] if text.endswith("audio.wav") else []
+    if isinstance(data, list):
+        keys = [str(x).replace("\\", "/").lstrip("/") for x in data if str(x).strip()]
+        return select_canonical_asr_audio_keys(keys)
+    return []
+
+def attach_asr_text_to_pack_rows(
+    pack_rows: list[dict[str, Any]],
+    asr_rows: list[dict[str, Any]],
+    *,
+    bag_clip_id: str = "",
+) -> list[dict[str, Any]]:
+    """Join ASR transcripts onto label/embed pack rows (by sdk_clip_id / clip_id)."""
+    if not pack_rows or not asr_rows:
+        return pack_rows
+    asr_by: dict[str, dict[str, Any]] = {}
+    for rec in asr_rows:
+        if not isinstance(rec, dict):
+            continue
+        for key_name in ("sdk_clip_id", "clip_id"):
+            key = str(rec.get(key_name) or "").strip()
+            if key:
+                asr_by[key] = rec
+    bag = str(bag_clip_id or "").strip()
+    for pack in pack_rows:
+        if str(pack.get("asr_text") or "").strip():
+            continue
+        candidates = [
+            str(pack.get("sdk_clip_id") or "").strip(),
+            str(pack.get("clip_id") or "").strip(),
+            bag,
+        ]
+        matched: dict[str, Any] | None = None
+        for cand in candidates:
+            if cand and cand in asr_by:
+                matched = asr_by[cand]
+                break
+        if matched is None and len(asr_rows) == 1 and isinstance(asr_rows[0], dict):
+            matched = asr_rows[0]
+        if not matched:
+            continue
+        text = str(matched.get("text") or "").strip()
+        if not text:
+            continue
+        pack["asr_text"] = text
+        if matched.get("model"):
+            pack["asr_model"] = str(matched.get("model"))
+    return pack_rows
+
+def oss_internal_audio_url(*, cloud_region: str, bucket: str, object_key: str) -> str:
+    """Build MaxFrame-compatible internal OSS URL (audio / image / any object)."""
+    region_id = cloud_region.replace("_", "-")
+    key = str(object_key).replace("\\", "/").lstrip("/")
+    return f"oss://oss-{region_id}-internal.aliyuncs.com/{bucket}/{key}"
+
+# Alias used by label/embed URL builders (same format as ASR).
+oss_internal_object_url = oss_internal_audio_url
+
+def image_mime_from_key(object_key: str) -> str:
+    lower = str(object_key or "").lower()
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith(".webp"):
+        return "image/webp"
+    if lower.endswith(".gif"):
+        return "image/gif"
+    return "image/jpeg"
+
+def resolve_driver_oss_ak_sk(get_arg: Any) -> dict[str, str] | None:
+    """Long-term OSS AK/SK for MaxFrame audio OSS URL (Job2 oss_vl_* pattern)."""
+    ak = (
+        (get_arg("oss_vl_access_key_id") or get_arg("oss_access_key_id") or "")
+        or ""
+    ).strip()
+    sk = (
+        (get_arg("oss_vl_access_key_secret") or get_arg("oss_access_key_secret") or "")
+        or ""
+    ).strip()
+    if ak and sk and not ak.startswith("STS."):
+        return {"access_key_id": ak, "access_key_secret": sk}
+    return None
+
+def resolve_ai_media_mode(
+    get_arg: Any,
+    *,
+    oss_ak: dict[str, str] | None = None,
+) -> str:
+    """Choose Driver AI media transport: ``oss_url`` or ``dpe_base64``.
+
+    Param precedence (first non-empty):
+    ``ai_media_mode`` → ``label_image_mode`` → ``label_media_mode`` → ``embed_media_mode``.
+
+    ``auto`` (default): ``oss_url`` when long-term OSS AK is present, else ``dpe_base64``.
+    """
+    raw = (
+        get_arg("ai_media_mode")
+        or get_arg("label_image_mode")
+        or get_arg("label_media_mode")
+        or get_arg("embed_media_mode")
+        or "auto"
+    )
+    resolved = str(raw or "auto").strip().lower()
+    ak = oss_ak if oss_ak is not None else resolve_driver_oss_ak_sk(get_arg)
+    if resolved in ("auto", ""):
+        return "oss_url" if ak else "dpe_base64"
+    if resolved in ("oss_url", "url"):
+        if not ak:
+            raise ValueError(
+                "ai_media_mode=oss_url requires long-term OSS AK/SK "
+                "(oss_vl_access_key_id + oss_vl_access_key_secret, or oss_access_key_*)"
+            )
+        return "oss_url"
+    if resolved in ("base64", "dpe_base64", "b64"):
+        return "dpe_base64"
+    raise ValueError(
+        f"ai_media_mode must be auto|oss_url|base64, got {raw!r}"
+    )
+
+def configure_driver_mc_ai_session(
+    *,
+    inference_quota_name: str | None = None,
+    dpe_image_for_ai: str | None = None,
+) -> None:
+    """Driver 裸调 AI：与官方 demo / Job2 一致（DPE+MCSQL，勿沿用 extract 的「仅 DPE」）。"""
+    from maxframe.config import options as mf_options
+
+    mf_options.local_execution.enabled = False
+    mf_options.dag.settings = {
+        "engine_order": ["DPE", "MCSQL"],
+        "unavailable_engines": ["SPE"],
+    }
+    sql_settings = dict(mf_options.sql.settings or {})
+    sql_settings["odps.sql.python.version"] = "cp311"
+    sql_settings["odps.sql.using.public.model"] = "true"
+    if dpe_image_for_ai and str(dpe_image_for_ai).strip():
+        sql_settings["odps.session.image"] = str(dpe_image_for_ai).strip()
+    else:
+        sql_settings.pop("odps.session.image", None)
+    mf_options.sql.settings = sql_settings
+    if inference_quota_name and str(inference_quota_name).strip():
+        mf_options.session.inference_quota_name = str(inference_quota_name).strip()
+
+def ensure_odps_catalog_for_driver(odps_entry: Any, catalog_endpoint: str | None) -> None:
+    if odps_entry is None or not catalog_endpoint:
+        return
+    cat = str(catalog_endpoint).strip()
+    if not cat.startswith(("http://", "https://")):
+        cat = f"http://{cat.lstrip('/')}"
+    odps_entry._catalog_endpoint = cat.rstrip("/")
+    odps_entry._catalog_rest = None
+
+def build_asr_input_rows_from_b64(
+    items: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """items: {clip_id?, sdk_clip_id?, audio_oss_key, audio_b64}."""
+    rows: list[dict[str, str]] = []
+    for item in items:
+        b64 = str(item.get("audio_b64") or "")
+        key = str(item.get("audio_oss_key") or "")
+        sdk_clip_id = str(
+            item.get("sdk_clip_id") or clip_id_from_audio_key(key)
+        ).strip()
+        clip_id = str(item.get("clip_id") or sdk_clip_id).strip()
+        rows.append(
+            {
+                "clip_id": clip_id,
+                "sdk_clip_id": sdk_clip_id,
+                "audio_url": f"data:audio/wav;base64,{b64}",
+                "audio_oss_key": key,
+            }
+        )
+    return rows
+
+def build_asr_input_rows_from_oss_keys(
+    wav_keys: list[str],
+    *,
+    bucket: str,
+    cloud_region: str,
+    bag_clip_id: str = "",
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    bag = str(bag_clip_id or "").strip()
+    for key in select_canonical_asr_audio_keys(wav_keys):
+        sdk_clip_id = clip_id_from_audio_key(key)
+        rows.append(
+            {
+                "clip_id": bag or sdk_clip_id,
+                "sdk_clip_id": sdk_clip_id,
+                "audio_url": oss_internal_audio_url(
+                    cloud_region=cloud_region, bucket=bucket, object_key=key
+                ),
+                "audio_oss_key": key,
+            }
+        )
+    return rows
+
+def driver_bare_asr_generate(
+    odps_entry: Any,
+    *,
+    rows_in: list[dict[str, str]],
+    asr_model: str = DEFAULT_ASR_MODEL,
+    modelset_project: str = DEFAULT_MODELSET_PROJECT,
+    catalog_endpoint: str | None = None,
+    inference_quota_name: str | None = None,
+    parallel_partitions: int = 1,
+    audio_storage_options: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Run MaxFrame AI ASR on prebuilt audio_url rows; return asr_rows (no OSS write)."""
+    import pandas as pd
+    import maxframe.dataframe as md
+    from maxframe.learn.utils import read_odps_model
+    from maxframe.session import new_session
+
+    if not rows_in:
+        raise FileNotFoundError("no ASR audio rows (extract must leave audio.wav)")
+
+    configure_driver_mc_ai_session(inference_quota_name=inference_quota_name)
+    ensure_odps_catalog_for_driver(odps_entry, catalog_endpoint)
+
+    try:
+        model_obj = odps_entry.get_model(asr_model, modelset_project, None)
+        model_obj.reload()
+        fmt = getattr(getattr(model_obj, "type", None), "value", None) or getattr(
+            model_obj, "type", "?"
+        )
+        tasks = list(getattr(model_obj, "tasks", None) or [])
+        print(f"DRIVER_ASR_MODEL_META format={fmt} tasks={tasks}")
+    except Exception as meta_exc:  # noqa: BLE001
+        print(f"DRIVER_ASR_MODEL_META_WARN {type(meta_exc).__name__}: {meta_exc}")
+
+    llm = read_odps_model(asr_model, project=modelset_project, odps_entry=odps_entry)
+    clip_ids = [str(r["clip_id"]) for r in rows_in]
+    sdk_clip_ids = [
+        str(r.get("sdk_clip_id") or r.get("clip_id") or "") for r in rows_in
+    ]
+    for r in rows_in:
+        url = str(r.get("audio_url") or "")
+        mode = "b64" if url.startswith("data:") else "oss_url"
+        print(
+            f"DRIVER_ASR_WAV clip_id={r.get('clip_id')} "
+            f"sdk_clip_id={r.get('sdk_clip_id') or r.get('clip_id')} "
+            f"key={r.get('audio_oss_key')} mode={mode}"
+        )
+
+    # new_session BEFORE md.DataFrame so tunnel upload uses ODPS session (not local).
+    session = new_session(odps_entry)
+    try:
+        print(f"DRIVER_ASR_LOGVIEW={session.get_logview_address()}")
+        df = md.DataFrame(pd.DataFrame(rows_in))
+        if parallel_partitions > 1:
+            df = df.mf.rebalance(num_partitions=min(parallel_partitions, len(rows_in)))
+
+        params: dict[str, Any] = {"asr_options": {"enable_itn": True, "language": "zh"}}
+        gen_kwargs: dict[str, Any] = {"simple_output": True, "params": params}
+
+        if hasattr(llm, "content_part"):
+            from maxframe.learn.contrib.llm import AudioContentType
+
+            cp = llm.content_part
+            audio_part: dict[str, Any] = {
+                "data": getattr(df, "audio_url"),
+                "type": AudioContentType.URL,
+                "mime_type": "audio/wav",
+            }
+            if audio_storage_options:
+                audio_part["storage_options"] = {
+                    "access_key_id": audio_storage_options["access_key_id"],
+                    "access_key_secret": audio_storage_options["access_key_secret"],
+                }
+            messages = [{"role": "user", "content": [cp.audio(**audio_part)]}]
+            mc_mode = "content_part_audio"
+        else:
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_audio", "input_audio": {"data": "{audio_url}"}}
+                    ],
+                }
+            ]
+            mc_mode = "legacy_input_audio"
+
+        try:
+            result_df = llm.generate(df, messages=messages, **gen_kwargs)
+        except TypeError:
+            result_df = llm.generate(df, prompt_template=messages, **gen_kwargs)
+        pdf = result_df.execute().fetch()
+    finally:
+        session.destroy()
+
+    out_cols = list(pdf.columns)
+    text_col = next(
+        (c for c in ("output", "generated_text", "text", "content", "response") if c in out_cols),
+        out_cols[0] if out_cols else None,
+    )
+    if text_col is None:
+        raise RuntimeError(f"ASR result has no text column: {out_cols}")
+
+    asr_rows: list[dict[str, Any]] = []
+    for i, clip_id in enumerate(clip_ids):
+        raw = pdf.iloc[i][text_col] if i < len(pdf) else ""
+        text = _normalize_llm_output(raw)
+        sdk_clip_id = sdk_clip_ids[i] if i < len(sdk_clip_ids) else clip_id
+        asr_rows.append(
+            {
+                "clip_id": clip_id,
+                "sdk_clip_id": sdk_clip_id,
+                "model": asr_model,
+                "text": text,
+                "sentences": None,
+                "request_id": "",
+                "usage": None,
+                "backend": "maxframe_mc",
+                "mc_mode": mc_mode,
+                "skipped": False,
+                "submitter": "driver_bare",
+            }
+        )
+
+    return {
+        "row_count": len(asr_rows),
+        "clip_ids": clip_ids,
+        "sdk_clip_ids": sdk_clip_ids,
+        "mc_mode": mc_mode,
+        "texts": [r["text"] for r in asr_rows],
+        "asr_rows": asr_rows,
+    }
+
+def asr_jsonl_body(asr_rows: list[dict[str, Any]]) -> str:
+    return "\n".join(json.dumps(row, ensure_ascii=False) for row in asr_rows) + (
+        "\n" if asr_rows else ""
+    )
+
+# Back-compat aliases used by older call sites / docs
+def _clip_id_from_audio_key(object_key: str) -> str:
+    return clip_id_from_audio_key(object_key)
+
+def driver_bare_asr_for_run(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    raise RuntimeError(
+        "driver_bare_asr_for_run(oss_client download) removed: "
+        "DataWorks o.account STS cannot access the business OSS bucket. "
+        "Use extract audio_keys_json + driver_bare_asr_generate + DPE write."
+    )
+# === END sdk_driver_bare_asr.py ===
+
+# === BEGIN sdk_driver_bare_label.py (auto-bundled) ===
+# =============================================================================
+# Driver-side bare MaxFrame Omni label（不经 OMS SDK McOmniLabelClient）
+# DPE 挂载打包 frames/audio/taxonomy_prompt → Driver generate → DPE 写 labels.jsonl
+# =============================================================================
+
+import json
+from typing import Any
+
+DEFAULT_OMNI_MODEL = "qwen3.5-omni-plus"
+DEFAULT_MODELSET_PROJECT = "bigdata_public_modelset"
+
+def _normalize_llm_output(raw: Any) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, dict):
+        choices = raw.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+            if content is not None:
+                return str(content).strip()
+        content = raw.get("content") or raw.get("text") or raw.get("output")
+        if content is not None:
+            return str(content).strip()
+        return ""
+    text = str(raw).strip()
+    if text.startswith("{") and "choices" in text:
+        try:
+            return _normalize_llm_output(json.loads(text))
+        except json.JSONDecodeError:
+            pass
+    return text
+
+def parse_label_json(raw_text: str) -> dict[str, Any]:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1:
+        return {"scene_summary": "", "labels": {}, "raw": raw_text}
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return {"scene_summary": "", "labels": {}, "raw": raw_text}
+    return parsed if isinstance(parsed, dict) else {"scene_summary": "", "labels": {}, "raw": raw_text}
+
+def escape_mf_template_text(text: str) -> str:
+    # MaxFrame prompt templates treat { } specially.
+    return text.replace("{", "{{").replace("}", "}}")
+
+def build_label_user_prompt(
+    *,
+    duration_sec: float,
+    asr_text: str,
+    taxonomy_prompt: str,
+) -> str:
+    speech = ""
+    if asr_text.strip():
+        speech = f"[ASR transcript]\n{asr_text.strip()}"
+    intro = (
+        f"请分析这段完整车内 rosbag clip（时长 {duration_sec:.1f} 秒）。"
+        " 图像为多相机抽帧，音频覆盖整段。"
+        " 请为整段场景填写 taxonomy 标签。"
+        " 若提供了 ASR 文本，请以其为语音内容的依据，并与音视频交叉验证。"
+    )
+    parts = [intro]
+    if speech:
+        parts.append(f"\n\nMultimodal text context:\n{speech}")
+    if taxonomy_prompt.strip():
+        parts.append(f"\n\n{taxonomy_prompt.strip()}")
+    return "".join(parts)
+
+def _pack_oss_key(pack: dict[str, Any], *names: str) -> str:
+    for name in names:
+        val = str(pack.get(name) or "").strip()
+        if val:
+            return val.replace("\\", "/").lstrip("/")
+    return ""
+
+def driver_bare_label_generate(
+    odps_entry: Any,
+    *,
+    pack_rows: list[dict[str, Any]],
+    omni_model: str = DEFAULT_OMNI_MODEL,
+    modelset_project: str = DEFAULT_MODELSET_PROJECT,
+    catalog_endpoint: str | None = None,
+    inference_quota_name: str | None = None,
+    parallel_partitions: int = 1,
+    media_mode: str = "dpe_base64",
+    media_storage_options: dict[str, str] | None = None,
+    cloud_region: str = "cn_shanghai",
+    oss_bucket: str = "",
+) -> dict[str, Any]:
+    """pack_rows from DPE: clip meta + (image/audio b64 OR oss keys) + taxonomy_prompt."""
+    import pandas as pd
+    import maxframe.dataframe as md
+    from maxframe.learn.utils import read_odps_model
+    from maxframe.session import new_session
+
+    if not pack_rows:
+        raise FileNotFoundError("no label pack rows")
+
+    mode = str(media_mode or "dpe_base64").strip().lower()
+    if mode in ("base64", "b64"):
+        mode = "dpe_base64"
+    if mode not in ("oss_url", "dpe_base64"):
+        raise ValueError(f"media_mode must be oss_url|dpe_base64, got {media_mode!r}")
+    if mode == "oss_url":
+        if not oss_bucket:
+            raise ValueError("driver_bare_label_generate oss_url mode requires oss_bucket")
+        if not media_storage_options:
+            raise ValueError(
+                "driver_bare_label_generate oss_url mode requires media_storage_options "
+                "(oss_vl_* / oss_access_key_*)"
+            )
+
+    configure_driver_mc_ai_session(inference_quota_name=inference_quota_name)
+    ensure_odps_catalog_for_driver(odps_entry, catalog_endpoint)
+    llm = read_odps_model(omni_model, project=modelset_project, odps_entry=odps_entry)
+
+    rows_in: list[dict[str, Any]] = []
+    for pack in pack_rows:
+        duration = float(pack.get("duration_sec") or 0.0)
+        asr_text = str(pack.get("asr_text") or "")
+        tax = str(pack.get("taxonomy_prompt") or "")
+        prompt = escape_mf_template_text(
+            build_label_user_prompt(
+                duration_sec=duration, asr_text=asr_text, taxonomy_prompt=tax
+            )
+        )
+        row: dict[str, Any] = {
+            "clip_id": str(pack.get("clip_id") or ""),
+            "sdk_clip_id": str(pack.get("sdk_clip_id") or ""),
+            "prompt": prompt,
+        }
+        image_count = int(pack.get("image_count") or 0)
+        if mode == "oss_url":
+            audio_key = _pack_oss_key(pack, "audio_oss_key", "audio_key")
+            row["audio_url"] = (
+                oss_internal_object_url(
+                    cloud_region=cloud_region, bucket=oss_bucket, object_key=audio_key
+                )
+                if audio_key
+                else ""
+            )
+            row["audio_oss_key"] = audio_key
+            for i in range(min(image_count, 4)):
+                key = _pack_oss_key(pack, f"image_oss_key_{i}", f"image_key_{i}")
+                row[f"image_url_{i}"] = (
+                    oss_internal_object_url(
+                        cloud_region=cloud_region, bucket=oss_bucket, object_key=key
+                    )
+                    if key
+                    else ""
+                )
+                row[f"image_oss_key_{i}"] = key
+            has_audio = bool(row["audio_url"])
+        else:
+            row["audio_b64"] = str(pack.get("audio_b64") or "")
+            for i in range(min(image_count, 4)):
+                row[f"image_b64_{i}"] = str(pack.get(f"image_b64_{i}") or "")
+            has_audio = bool(row["audio_b64"])
+        rows_in.append(row)
+        print(
+            f"DRIVER_LABEL_PACK clip_id={row['clip_id']} "
+            f"sdk_clip_id={row['sdk_clip_id'] or '-'} images={image_count} "
+            f"media_mode={mode} audio={has_audio} asr_chars={len(asr_text)}"
+        )
+
+    # new_session BEFORE md.DataFrame so tunnel upload uses ODPS session.
+    session = new_session(odps_entry)
+    try:
+        print(
+            f"DRIVER_LABEL_LOGVIEW={session.get_logview_address()} "
+            f"rows={len(rows_in)} parallel={max(1, int(parallel_partitions or 1))} "
+            f"media_mode={mode}"
+        )
+        df = md.DataFrame(pd.DataFrame(rows_in))
+        if parallel_partitions > 1:
+            df = df.mf.rebalance(
+                num_partitions=min(int(parallel_partitions), len(rows_in))
+            )
+        gen_kwargs: dict[str, Any] = {
+            "simple_output": True,
+            "params": {"temperature": 0.2, "max_tokens": 4096},
+        }
+
+        if hasattr(llm, "content_part"):
+            from maxframe.learn.contrib.llm import AudioContentType, ImageContentType
+
+            cp = llm.content_part
+            content: list[Any] = [cp.text(getattr(df, "prompt"))]
+            max_images = max(int(r.get("image_count") or 0) for r in pack_rows)
+            for i in range(min(max_images, 4)):
+                if mode == "oss_url":
+                    col = f"image_url_{i}"
+                    if col not in df.columns:
+                        continue
+                    key_col = f"image_oss_key_{i}"
+                    sample_key = next(
+                        (str(r.get(key_col) or "") for r in rows_in if r.get(key_col)),
+                        "",
+                    )
+                    img_kwargs: dict[str, Any] = {
+                        "data": getattr(df, col),
+                        "type": ImageContentType.URL,
+                        "mime_type": image_mime_from_key(sample_key),
+                        "storage_options": {
+                            "access_key_id": media_storage_options["access_key_id"],
+                            "access_key_secret": media_storage_options[
+                                "access_key_secret"
+                            ],
+                        },
+                    }
+                    content.append(cp.image(**img_kwargs))
+                else:
+                    col = f"image_b64_{i}"
+                    if col in df.columns:
+                        content.append(
+                            cp.image(
+                                data=getattr(df, col),
+                                type=ImageContentType.BASE64,
+                                mime_type="image/jpeg",
+                            )
+                        )
+            if mode == "oss_url":
+                if "audio_url" in df.columns:
+                    audio_part: dict[str, Any] = {
+                        "data": getattr(df, "audio_url"),
+                        "type": AudioContentType.URL,
+                        "mime_type": "audio/wav",
+                        "storage_options": {
+                            "access_key_id": media_storage_options["access_key_id"],
+                            "access_key_secret": media_storage_options[
+                                "access_key_secret"
+                            ],
+                        },
+                    }
+                    content.append(cp.audio(**audio_part))
+            elif "audio_b64" in df.columns:
+                content.append(
+                    cp.audio(
+                        data=getattr(df, "audio_b64"),
+                        type=AudioContentType.BASE64,
+                        mime_type="audio/wav",
+                    )
+                )
+            messages = [{"role": "user", "content": content}]
+            mc_mode = "omni_images_audio_url" if mode == "oss_url" else "omni_images_audio"
+        else:
+            messages = [{"role": "user", "content": "{prompt}"}]
+            mc_mode = "legacy_text"
+
+        try:
+            result_df = llm.generate(df, messages=messages, **gen_kwargs)
+        except TypeError:
+            result_df = llm.generate(df, prompt_template=messages, **gen_kwargs)
+        pdf = result_df.execute().fetch()
+    finally:
+        session.destroy()
+
+    out_cols = list(pdf.columns)
+    text_col = next(
+        (c for c in ("output", "generated_text", "text", "content", "response") if c in out_cols),
+        out_cols[0] if out_cols else None,
+    )
+    if text_col is None:
+        raise RuntimeError(f"label result has no text column: {out_cols}")
+
+    label_rows: list[dict[str, Any]] = []
+    for i, pack in enumerate(pack_rows):
+        raw = pdf.iloc[i][text_col] if i < len(pdf) else ""
+        text = _normalize_llm_output(raw)
+        parsed = parse_label_json(text)
+        labels = parsed.get("labels") if isinstance(parsed.get("labels"), dict) else {}
+        topics = pack.get("source_topics")
+        if isinstance(topics, str):
+            try:
+                topics = json.loads(topics)
+            except json.JSONDecodeError:
+                topics = []
+        label_rows.append(
+            {
+                "clip_id": str(pack.get("clip_id") or ""),
+                "sdk_clip_id": str(pack.get("sdk_clip_id") or ""),
+                "bag_name": str(pack.get("bag_name") or ""),
+                "start_timestamp_ns": int(pack.get("start_timestamp_ns") or 0),
+                "end_timestamp_ns": int(pack.get("end_timestamp_ns") or 0),
+                "duration_sec": float(pack.get("duration_sec") or 0.0),
+                "model": omni_model,
+                "source_topics": topics or [],
+                "scene_summary": str(parsed.get("scene_summary") or ""),
+                "labels": labels,
+                "asr_text": str(pack.get("asr_text") or ""),
+                "asr_model": str(pack.get("asr_model") or "qwen3-asr-flash"),
+                "raw_response": text,
+                "usage": None,
+                "request_id": "",
+                "backend": "maxframe_mc",
+                "omni_model_requested": omni_model,
+                "mc_mode": mc_mode,
+                "media_mode": mode,
+                "submitter": "driver_bare",
+            }
+        )
+
+    return {
+        "row_count": len(label_rows),
+        "clip_ids": [r["clip_id"] for r in label_rows],
+        "mc_mode": mc_mode,
+        "media_mode": mode,
+        "label_rows": label_rows,
+    }
+
+def labels_jsonl_body(label_rows: list[dict[str, Any]]) -> str:
+    return "\n".join(json.dumps(row, ensure_ascii=False) for row in label_rows) + (
+        "\n" if label_rows else ""
+    )
+# === END sdk_driver_bare_label.py ===
+
+# === BEGIN sdk_driver_bare_embed.py (auto-bundled) ===
+# =============================================================================
+# Driver-side bare MaxFrame fusion embed（不经 OMS SDK McFusionEmbeddingClient）
+# DPE 打包 embedding frames + acoustic_panel + text → Driver embed → DPE 写 fusion_embeddings.jsonl
+# =============================================================================
+
+import json
+from typing import Any
+
+DEFAULT_EMBED_MODEL = "qwen3-vl-embedding"
+DEFAULT_EMBED_DIM = 1024
+DEFAULT_MODELSET_PROJECT = "bigdata_public_modelset"
+
+def _normalize_embedding_vector(vector_raw: Any) -> list[float]:
+    if isinstance(vector_raw, str):
+        try:
+            vector_raw = json.loads(vector_raw)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(vector_raw, list) or not vector_raw:
+        return []
+    while (
+        isinstance(vector_raw, list)
+        and vector_raw
+        and isinstance(vector_raw[0], (list, tuple))
+    ):
+        if len(vector_raw) == 1:
+            vector_raw = list(vector_raw[0])
+            continue
+        dim = len(vector_raw[0])
+        if dim <= 0 or any(
+            not isinstance(v, (list, tuple)) or len(v) != dim for v in vector_raw
+        ):
+            vector_raw = list(vector_raw[0])
+            break
+        n = float(len(vector_raw))
+        vector_raw = [sum(float(v[i]) for v in vector_raw) / n for i in range(dim)]
+        break
+    if not isinstance(vector_raw, list):
+        return []
+    try:
+        return [float(x) for x in vector_raw]
+    except (TypeError, ValueError):
+        return []
+
+def build_embed_text(*, asr_text: str, scene_summary: str, duration_sec: float) -> str:
+    parts: list[str] = []
+    if asr_text.strip():
+        parts.append(f"[ASR transcript]\n{asr_text.strip()}")
+    if scene_summary.strip():
+        parts.append(f"[scene_summary]\n{scene_summary.strip()}")
+    parts.append(f"[audio_duration_sec={duration_sec:.2f}]")
+    return "\n\n".join(parts)
+
+def _pack_oss_key(pack: dict[str, Any], *names: str) -> str:
+    for name in names:
+        val = str(pack.get(name) or "").strip()
+        if val:
+            return val.replace("\\", "/").lstrip("/")
+    return ""
+
+def driver_bare_embed_generate(
+    odps_entry: Any,
+    *,
+    pack_rows: list[dict[str, Any]],
+    label_by_clip: dict[str, dict[str, Any]] | None = None,
+    embedding_model: str = DEFAULT_EMBED_MODEL,
+    embedding_dimension: int = DEFAULT_EMBED_DIM,
+    modelset_project: str = DEFAULT_MODELSET_PROJECT,
+    catalog_endpoint: str | None = None,
+    inference_quota_name: str | None = None,
+    parallel_partitions: int = 1,
+    media_mode: str = "dpe_base64",
+    media_storage_options: dict[str, str] | None = None,
+    cloud_region: str = "cn_shanghai",
+    oss_bucket: str = "",
+) -> dict[str, Any]:
+    import pandas as pd
+    import maxframe.dataframe as md
+    from maxframe.learn.utils import read_odps_model
+    from maxframe.session import new_session
+
+    if not pack_rows:
+        raise FileNotFoundError("no embed pack rows")
+
+    mode = str(media_mode or "dpe_base64").strip().lower()
+    if mode in ("base64", "b64"):
+        mode = "dpe_base64"
+    if mode not in ("oss_url", "dpe_base64"):
+        raise ValueError(f"media_mode must be oss_url|dpe_base64, got {media_mode!r}")
+    if mode == "oss_url":
+        if not oss_bucket:
+            raise ValueError("driver_bare_embed_generate oss_url mode requires oss_bucket")
+        if not media_storage_options:
+            raise ValueError(
+                "driver_bare_embed_generate oss_url mode requires media_storage_options "
+                "(oss_vl_* / oss_access_key_*)"
+            )
+
+    label_by_clip = label_by_clip or {}
+    configure_driver_mc_ai_session(inference_quota_name=inference_quota_name)
+    ensure_odps_catalog_for_driver(odps_entry, catalog_endpoint)
+    llm = read_odps_model(
+        embedding_model, project=modelset_project, odps_entry=odps_entry
+    )
+
+    rows_in: list[dict[str, Any]] = []
+    for pack in pack_rows:
+        clip_id = str(pack.get("clip_id") or "")
+        label = label_by_clip.get(clip_id) or {}
+        if not label and pack.get("sdk_clip_id"):
+            label = label_by_clip.get(str(pack.get("sdk_clip_id"))) or {}
+        text = build_embed_text(
+            asr_text=str(pack.get("asr_text") or label.get("asr_text") or ""),
+            scene_summary=str(label.get("scene_summary") or ""),
+            duration_sec=float(pack.get("duration_sec") or 0.0),
+        )
+        row: dict[str, Any] = {
+            "clip_id": clip_id,
+            "sdk_clip_id": str(pack.get("sdk_clip_id") or ""),
+            "text": text,
+        }
+        image_count = int(pack.get("embed_image_count") or pack.get("image_count") or 0)
+        if mode == "oss_url":
+            for i in range(min(image_count, 8)):
+                key = _pack_oss_key(
+                    pack,
+                    f"embed_image_oss_key_{i}",
+                    f"image_oss_key_{i}",
+                    f"embed_image_key_{i}",
+                )
+                if not key:
+                    # fallback: label pack keys if embed keys absent
+                    key = _pack_oss_key(pack, f"image_oss_key_{i}")
+                row[f"image_oss_key_{i}"] = key
+                row[f"image_url_{i}"] = (
+                    oss_internal_object_url(
+                        cloud_region=cloud_region, bucket=oss_bucket, object_key=key
+                    )
+                    if key
+                    else ""
+                )
+        else:
+            for i in range(min(image_count, 8)):
+                # prefer embed_image_b64_* then image_b64_*
+                val = pack.get(f"embed_image_b64_{i}")
+                if val is None or str(val) == "":
+                    val = pack.get(f"image_b64_{i}")
+                row[f"image_b64_{i}"] = str(val or "")
+        rows_in.append(row)
+        print(
+            f"DRIVER_EMBED_PACK clip_id={clip_id} "
+            f"sdk_clip_id={row['sdk_clip_id'] or '-'} "
+            f"images={image_count} media_mode={mode} text_chars={len(text)}"
+        )
+
+    # new_session BEFORE md.DataFrame / embed so tunnel uses ODPS session.
+    session = new_session(odps_entry)
+    try:
+        print(
+            f"DRIVER_EMBED_LOGVIEW={session.get_logview_address()} "
+            f"rows={len(rows_in)} parallel={max(1, int(parallel_partitions or 1))} "
+            f"media_mode={mode}"
+        )
+        df = md.DataFrame(pd.DataFrame(rows_in))
+        if parallel_partitions > 1:
+            df = df.mf.rebalance(
+                num_partitions=min(int(parallel_partitions), len(rows_in))
+            )
+        embed_kwargs: dict[str, Any] = {
+            "params": {"enable_fusion": True, "dimension": int(embedding_dimension)},
+        }
+
+        max_images = 0
+        url_col = "image_url_{}" if mode == "oss_url" else "image_b64_{}"
+        for r in rows_in:
+            for i in range(8):
+                if r.get(url_col.format(i)):
+                    max_images = max(max_images, i + 1)
+
+        if hasattr(llm, "content_part") and max_images > 0:
+            from maxframe.learn.contrib.llm import ImageContentType
+
+            cp = llm.content_part
+            parts: list[Any] = [cp.text(getattr(df, "text"))]
+            for i in range(max_images):
+                if mode == "oss_url":
+                    col = f"image_url_{i}"
+                    if col not in df.columns:
+                        continue
+                    sample_key = next(
+                        (
+                            str(r.get(f"image_oss_key_{i}") or "")
+                            for r in rows_in
+                            if r.get(f"image_oss_key_{i}")
+                        ),
+                        "",
+                    )
+                    parts.append(
+                        cp.image(
+                            data=getattr(df, col),
+                            type=ImageContentType.URL,
+                            mime_type=image_mime_from_key(sample_key),
+                            storage_options={
+                                "access_key_id": media_storage_options["access_key_id"],
+                                "access_key_secret": media_storage_options[
+                                    "access_key_secret"
+                                ],
+                            },
+                        )
+                    )
+                else:
+                    col = f"image_b64_{i}"
+                    if col in df.columns:
+                        parts.append(
+                            cp.image(
+                                data=getattr(df, col),
+                                type=ImageContentType.BASE64,
+                                mime_type="image/jpeg",
+                            )
+                        )
+            try:
+                result = llm.embed(df, input=parts, simple_output=True, **embed_kwargs)
+            except TypeError:
+                result = llm.embed(df, input=parts, **embed_kwargs)
+        else:
+            text_df = md.DataFrame(pd.DataFrame({"text": [r["text"] for r in rows_in]}))
+            result = llm.embed(text_df["text"], simple=True, **embed_kwargs)
+
+        pdf = result.execute().fetch()
+    finally:
+        session.destroy()
+
+    out_cols = list(pdf.columns)
+    vec_col = next(
+        (c for c in ("output", "embedding", "embeddings", "vector") if c in out_cols),
+        out_cols[0] if out_cols else None,
+    )
+    if vec_col is None:
+        raise RuntimeError(f"embed result has no vector column: {out_cols}")
+
+    image_mode_label = "oss_url" if mode == "oss_url" else "base64"
+    embed_rows: list[dict[str, Any]] = []
+    for i, pack in enumerate(pack_rows):
+        raw = pdf.iloc[i][vec_col] if i < len(pdf) else []
+        vector = _normalize_embedding_vector(raw)
+        if embedding_dimension > 0 and len(vector) > embedding_dimension:
+            vector = vector[:embedding_dimension]
+        topics = pack.get("source_topics")
+        if isinstance(topics, str):
+            try:
+                topics = json.loads(topics)
+            except json.JSONDecodeError:
+                topics = []
+        clip_id = str(pack.get("clip_id") or "")
+        label = label_by_clip.get(clip_id) or {}
+        if not label and pack.get("sdk_clip_id"):
+            label = label_by_clip.get(str(pack.get("sdk_clip_id"))) or {}
+        embed_rows.append(
+            {
+                "clip_id": clip_id,
+                "sdk_clip_id": str(pack.get("sdk_clip_id") or ""),
+                "bag_name": str(pack.get("bag_name") or ""),
+                "start_timestamp_ns": int(pack.get("start_timestamp_ns") or 0),
+                "end_timestamp_ns": int(pack.get("end_timestamp_ns") or 0),
+                "duration_sec": float(pack.get("duration_sec") or 0.0),
+                "model": embedding_model,
+                "dimension": embedding_dimension,
+                "embedding_type": "fusion",
+                "embedding": vector,
+                "source_topics": topics or [],
+                "inputs": {
+                    "text": rows_in[i]["text"] if i < len(rows_in) else "",
+                    "asr_text": str(pack.get("asr_text") or ""),
+                    "scene_summary": str(label.get("scene_summary") or ""),
+                    "backend": "maxframe_mc",
+                    "image_mode": image_mode_label,
+                    "media_mode": mode,
+                    "submitter": "driver_bare",
+                },
+                "usage": {},
+                "request_id": "",
+            }
+        )
+        print(f"DRIVER_EMBED_OK clip_id={clip_id} dim={len(vector)}")
+
+    return {
+        "row_count": len(embed_rows),
+        "clip_ids": [r["clip_id"] for r in embed_rows],
+        "media_mode": mode,
+        "embed_rows": embed_rows,
+    }
+
+def embeddings_jsonl_body(embed_rows: list[dict[str, Any]]) -> str:
+    return "\n".join(json.dumps(row, ensure_ascii=False) for row in embed_rows) + (
+        "\n" if embed_rows else ""
+    )
+# === END sdk_driver_bare_embed.py ===
+
 # === BEGIN sdk_pipeline_driver_node.py ===
 # =============================================================================
 # DataWorks PyODPS3: SDK single-driver (discover + pipeline apply_chunk)
@@ -1933,6 +3828,7 @@ def batch_summary(result_rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -1943,15 +3839,14 @@ def _explicit_bag_from_args() -> list[dict[str, str]] | None:
     bag_oss_key = get_dw_arg("bag_oss_key")
     clip_id = get_dw_arg("clip_id")
     run_id = get_dw_arg("run_id")
-    explicit_values = (bag_oss_key, clip_id, run_id)
-    if any(explicit_values):
-        if not all(explicit_values):
-            raise ValueError("bag_oss_key, clip_id, and run_id must be provided together")
+    if bag_oss_key or clip_id:
+        if not bag_oss_key or not clip_id:
+            raise ValueError("bag_oss_key and clip_id must be provided together")
         return [
             {
                 "bag_oss_key": str(bag_oss_key),
                 "clip_id": str(clip_id),
-                "run_id": str(run_id),
+                "run_id": str(run_id or make_run_id()),
             }
         ]
     return None
@@ -1970,13 +3865,22 @@ def _list_bag_keys_from_oss(
     oss_bucket: str,
     cloud_region: str,
 ) -> list[str]:
-    from oss_v2_dw import iter_object_keys, make_oss_client
+    """Scan bags on OSS. Prefer long-term AK (oss_access_key_*); o.account STS often AccessDenied."""
 
+    endpoint = resolve_oss_http_endpoint(
+        cloud_region,
+        get_arg=get_dw_arg,
+        explicit_endpoint=get_dw_arg("oss_endpoint"),
+    )
+    access_id, secret, token = resolve_dispatch_oss_credentials(
+        account, get_arg=get_dw_arg
+    )
     client = make_oss_client(
-        access_key_id=str(account.access_id),
-        access_key_secret=str(account.secret_access_key),
+        access_key_id=access_id,
+        access_key_secret=secret,
         region=cloud_region,
-        endpoint=get_dw_arg("oss_endpoint"),
+        endpoint=endpoint,
+        security_token=token or None,
     )
     return list(
         iter_object_keys(
@@ -2074,14 +3978,16 @@ def _build_pipeline_chunk_udf(
     cleanup_work: bool,
 ):
     def _pipeline_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        import json
         import os
         from pathlib import Path
-
-        from oms_multimodal import ClipConfig, OmsMultimodalClient, run_stages
 
         for key, value in sdk_env.items():
             if value:
                 os.environ[key] = str(value)
+        patch_mc_catalog_runtime_for_dpe()
+
+        from oms_multimodal import ClipConfig, OmsMultimodalClient, run_stages
 
         rows_out: list[dict[str, Any]] = []
         for _, row in df.iterrows():
@@ -2128,6 +4034,25 @@ def _build_pipeline_chunk_udf(
                 # Any capability error blocks Driver-side mc_write for this row.
                 ok = len(result.errors) == 0
                 error = str(result.errors[0])[:500] if result.errors else ""
+                # Prefer _sdk_work/.../clips/*/audio.wav over preview/audio.wav
+                # (never ASR both for the same bag/subclip). Logic inlined for DPE pickle.
+                all_wav = sorted(
+                    {
+                        p.relative_to(Path(mount_path)).as_posix()
+                        for p in run_out.rglob("audio.wav")
+                        if p.is_file()
+                    }
+                )
+                work_wav = [
+                    k
+                    for k in all_wav
+                    if "/_sdk_work/" in f"/{k}"
+                    and "/clips/" in k
+                    and k.endswith("/audio.wav")
+                ]
+                wav_keys = work_wav if work_wav else [
+                    k for k in all_wav if "/preview/" not in f"/{k}"
+                ] or all_wav
                 rows_out.append(
                     {
                         "clip_id": clip_id,
@@ -2142,6 +4067,7 @@ def _build_pipeline_chunk_udf(
                         "embeddings_relpath": f"{run_relpath}/fusion_embeddings.jsonl",
                         "videos_relpath": f"{run_relpath}/clip_videos.jsonl",
                         "preview_ok": bool(result.preview_ok),
+                        "audio_keys_json": json.dumps(wav_keys, ensure_ascii=False),
                     }
                 )
             except Exception as exc:  # noqa: BLE001
@@ -2159,6 +4085,7 @@ def _build_pipeline_chunk_udf(
                         "embeddings_relpath": f"{run_relpath}/fusion_embeddings.jsonl",
                         "videos_relpath": f"{run_relpath}/clip_videos.jsonl",
                         "preview_ok": False,
+                        "audio_keys_json": "[]",
                     }
                 )
         return pd.DataFrame(rows_out)
@@ -2172,9 +4099,409 @@ def _build_pipeline_chunk_udf(
         storage_options_dict=storage_options_dict,
     )
 
+def _build_load_audio_b64_udf(
+    *,
+    dpe_cpu: int,
+    dpe_memory: int,
+    oss_mount_url: str,
+    mount_path: str,
+    storage_options_dict: dict[str, str],
+):
+    """Read audio.wav from OSS mount → base64 (Driver STS cannot List/Get business bucket)."""
+
+    def _load_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        import base64
+        from pathlib import Path
+
+        rows_out: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            key = str(row["audio_oss_key"]).replace("\\", "/").lstrip("/")
+            path = Path(mount_path) / key
+            data = path.read_bytes()
+            rows_out.append(
+                {
+                    "clip_id": str(row["clip_id"]),
+                    "run_id": str(row["run_id"]),
+                    "run_relpath": str(row["run_relpath"]),
+                    "audio_oss_key": key,
+                    "audio_b64": base64.b64encode(data).decode("ascii"),
+                    "bytes": len(data),
+                }
+            )
+        return pd.DataFrame(rows_out)
+
+    return wrap_dpe_udf(
+        _load_chunk,
+        dpe_cpu=dpe_cpu,
+        dpe_memory=dpe_memory,
+        oss_mount_url=oss_mount_url,
+        mount_path=mount_path,
+        storage_options_dict=storage_options_dict,
+    )
+
+def _build_write_text_file_udf(
+    *,
+    dpe_cpu: int,
+    dpe_memory: int,
+    oss_mount_url: str,
+    mount_path: str,
+    storage_options_dict: dict[str, str],
+):
+    def _write_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        from pathlib import Path
+
+        rows_out: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            rel = str(row["relpath"]).replace("\\", "/").lstrip("/")
+            path = Path(mount_path) / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(row["body"]), encoding="utf-8")
+            rows_out.append({"relpath": rel, "written": 1})
+        return pd.DataFrame(rows_out)
+
+    return wrap_dpe_udf(
+        _write_chunk,
+        dpe_cpu=max(1, dpe_cpu // 4) if dpe_cpu > 1 else 1,
+        dpe_memory=max(2, min(dpe_memory, 4)),
+        oss_mount_url=oss_mount_url,
+        mount_path=mount_path,
+        storage_options_dict=storage_options_dict,
+    )
+
+def _build_write_asr_jsonl_udf(
+    *,
+    dpe_cpu: int,
+    dpe_memory: int,
+    oss_mount_url: str,
+    mount_path: str,
+    storage_options_dict: dict[str, str],
+):
+    def _write_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        from pathlib import Path
+
+        rows_out: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            rel = str(row["asr_relpath"]).replace("\\", "/").lstrip("/")
+            path = Path(mount_path) / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(row["asr_jsonl"]), encoding="utf-8")
+            rows_out.append({"asr_relpath": rel, "written": 1})
+        return pd.DataFrame(rows_out)
+
+    return wrap_dpe_udf(
+        _write_chunk,
+        dpe_cpu=max(1, dpe_cpu // 4) if dpe_cpu > 1 else 1,
+        dpe_memory=max(2, min(dpe_memory, 4)),
+        oss_mount_url=oss_mount_url,
+        mount_path=mount_path,
+        storage_options_dict=storage_options_dict,
+    )
+
+def _build_media_pack_udf(
+    *,
+    dpe_cpu: int,
+    dpe_memory: int,
+    oss_mount_url: str,
+    mount_path: str,
+    storage_options_dict: dict[str, str],
+    media_mode: str = "dpe_base64",
+):
+    """Pack per-clip frames/audio/taxonomy_prompt for Driver label+embed.
+
+    media_mode:
+      - oss_url: return OSS object keys only (no file bytes / base64)
+      - dpe_base64: existing base64 pack for Tunnel fallback
+    """
+
+    def _pack_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        import base64
+        import json
+        from pathlib import Path
+
+        pack_mode = str(media_mode or "dpe_base64").strip().lower()
+        if pack_mode in ("base64", "b64"):
+            pack_mode = "dpe_base64"
+        use_oss_keys = pack_mode == "oss_url"
+
+        rows_out: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            run_relpath = str(row["run_relpath"]).replace("\\", "/").strip("/")
+            run_dir = Path(mount_path) / run_relpath
+            work = run_dir / "_sdk_work"
+            bases = [run_dir, work, Path(mount_path)]
+
+            # Taxonomy prompt via SDK wheel on DPE image.
+            taxonomy_prompt = ""
+            try:
+                from oms_multimodal import bundled_taxonomy_path
+                from oms_multimodal.taxonomy import load_taxonomy, taxonomy_prompt_block
+
+                taxonomy_prompt = taxonomy_prompt_block(
+                    load_taxonomy(bundled_taxonomy_path())
+                )
+            except Exception as tax_exc:  # noqa: BLE001
+                taxonomy_prompt = (
+                    "请输出 JSON：{scene_summary, labels:{<id>:{value,confidence,evidence}}}"
+                )
+                print(f"PACK_TAXONOMY_WARN {type(tax_exc).__name__}: {tax_exc}")
+
+            asr_map: dict[str, dict[str, Any]] = {}
+            asr_path = run_dir / "asr.jsonl"
+            if asr_path.is_file():
+                for line in asr_path.read_text(encoding="utf-8").splitlines():
+                    text = line.strip()
+                    if not text:
+                        continue
+                    try:
+                        rec = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(rec, dict):
+                        continue
+                    for key_name in ("sdk_clip_id", "clip_id"):
+                        key = str(rec.get(key_name) or "").strip()
+                        if key:
+                            asr_map[key] = rec
+
+            # Bag-level sha256 clip_id from Driver (OSS prefix / MC join key).
+            bag_clip_id = str(row.get("bag_clip_id") or row.get("clip_id") or "").strip()
+
+            index_path = run_dir / "clips_index.jsonl"
+            if not index_path.is_file():
+                raise FileNotFoundError(f"missing {index_path}")
+
+            def _resolve(path_str: str) -> Path | None:
+                raw = str(path_str or "").strip()
+                if not raw:
+                    return None
+                p = Path(raw)
+                if p.is_file():
+                    return p
+                for base in bases:
+                    for cand in (base / raw, base / raw.lstrip("/\\")):
+                        if cand.is_file():
+                            return cand
+                name = Path(raw).name
+                if work.exists():
+                    for hit in work.rglob(name):
+                        if hit.is_file():
+                            return hit
+                return None
+
+            def _find_clip_dir(clip_id: str) -> Path | None:
+                if not work.exists():
+                    return None
+                for hit in work.rglob(clip_id):
+                    if hit.is_dir() and (hit / "audio.wav").is_file():
+                        return hit
+                return None
+
+            def _b64(path: Path | None) -> str:
+                if path is None or not path.is_file():
+                    return ""
+                return base64.b64encode(path.read_bytes()).decode("ascii")
+
+            def _oss_key(path: Path | None) -> str:
+                if path is None:
+                    return ""
+                try:
+                    if not path.is_file():
+                        return ""
+                except OSError:
+                    return ""
+                mount = Path(mount_path)
+                try:
+                    rel = path.resolve().relative_to(mount.resolve())
+                    return str(rel).replace("\\", "/")
+                except (OSError, ValueError):
+                    raw = str(path).replace("\\", "/")
+                    prefix = str(mount).replace("\\", "/").rstrip("/") + "/"
+                    if raw.startswith(prefix):
+                        return raw[len(prefix) :].lstrip("/")
+                    return ""
+
+            for line in index_path.read_text(encoding="utf-8").splitlines():
+                text = line.strip()
+                if not text:
+                    continue
+                clip_row = json.loads(text)
+                if not isinstance(clip_row, dict):
+                    continue
+                # SDK subclip dir name (output_0000); MC / outer id is bag_clip_id.
+                sdk_clip_id = str(clip_row.get("clip_id") or "").strip()
+                clip_dir = _find_clip_dir(sdk_clip_id)
+                asr_rec = (
+                    asr_map.get(sdk_clip_id)
+                    or asr_map.get(bag_clip_id)
+                    or (next(iter(asr_map.values())) if len(asr_map) == 1 else {})
+                )
+                asr_text = str(
+                    asr_rec.get("text")
+                    or clip_row.get("asr_text")
+                    or ""
+                )
+                asr_model = str(
+                    asr_rec.get("model") or clip_row.get("asr_model") or "qwen3-asr-flash"
+                )
+
+                label_frames: list[Path] = []
+                for fr in (clip_row.get("frames") or [])[:12]:
+                    if not isinstance(fr, dict):
+                        continue
+                    resolved = _resolve(str(fr.get("image_path") or ""))
+                    if resolved is not None:
+                        label_frames.append(resolved)
+                    if len(label_frames) >= 4:
+                        break
+                if not label_frames and clip_dir is not None:
+                    label_frames = sorted(clip_dir.rglob("*.jpg"))[:4]
+
+                embed_frames: list[Path] = []
+                for fr in (clip_row.get("embedding_frames") or clip_row.get("frames") or []):
+                    if not isinstance(fr, dict):
+                        continue
+                    resolved = _resolve(str(fr.get("image_path") or ""))
+                    if resolved is not None:
+                        embed_frames.append(resolved)
+                    if len(embed_frames) >= 3:
+                        break
+                panel = None
+                if clip_row.get("acoustic_panel_path"):
+                    panel = _resolve(str(clip_row.get("acoustic_panel_path")))
+                if panel is None and clip_dir is not None:
+                    cand = clip_dir / "acoustic_panel.png"
+                    if cand.is_file():
+                        panel = cand
+                embed_images = list(embed_frames)
+                if panel is not None:
+                    embed_images.append(panel)
+
+                audio_path = None
+                audio_obj = clip_row.get("audio") or {}
+                if isinstance(audio_obj, dict):
+                    audio_path = _resolve(str(audio_obj.get("audio_path") or ""))
+                if audio_path is None and clip_dir is not None:
+                    cand = clip_dir / "audio.wav"
+                    if cand.is_file():
+                        audio_path = cand
+
+                primary_clip_id = bag_clip_id or sdk_clip_id
+                out: dict[str, Any] = {
+                    "run_relpath": run_relpath,
+                    "clip_id": primary_clip_id,
+                    "sdk_clip_id": sdk_clip_id,
+                    "bag_name": str(clip_row.get("bag_name") or ""),
+                    "start_timestamp_ns": int(clip_row.get("start_timestamp_ns") or 0),
+                    "end_timestamp_ns": int(clip_row.get("end_timestamp_ns") or 0),
+                    "duration_sec": float(clip_row.get("duration_sec") or 0.0),
+                    "source_topics": json.dumps(
+                        clip_row.get("source_topics") or [], ensure_ascii=False
+                    ),
+                    "asr_text": asr_text,
+                    "asr_model": asr_model,
+                    "taxonomy_prompt": taxonomy_prompt,
+                    "image_count": 0,
+                    "embed_image_count": 0,
+                    "audio_b64": "",
+                    "audio_oss_key": "",
+                }
+                for i in range(4):
+                    out[f"image_b64_{i}"] = ""
+                    out[f"image_oss_key_{i}"] = ""
+                for i in range(8):
+                    out[f"embed_image_b64_{i}"] = ""
+                    out[f"embed_image_oss_key_{i}"] = ""
+
+                if use_oss_keys:
+                    out["audio_oss_key"] = _oss_key(audio_path)
+                    for i, fp in enumerate(label_frames[:4]):
+                        out[f"image_oss_key_{i}"] = _oss_key(fp)
+                        out["image_count"] = i + 1
+                    for i, fp in enumerate(embed_images[:8]):
+                        out[f"embed_image_oss_key_{i}"] = _oss_key(fp)
+                        out["embed_image_count"] = i + 1
+                    media_ok = bool(out["audio_oss_key"]) or out["image_count"] > 0
+                else:
+                    out["audio_b64"] = _b64(audio_path)
+                    out["audio_oss_key"] = _oss_key(audio_path)
+                    for i, fp in enumerate(label_frames[:4]):
+                        out[f"image_b64_{i}"] = _b64(fp)
+                        out[f"image_oss_key_{i}"] = _oss_key(fp)
+                        out["image_count"] = i + 1
+                    for i, fp in enumerate(embed_images[:8]):
+                        out[f"embed_image_b64_{i}"] = _b64(fp)
+                        out[f"embed_image_oss_key_{i}"] = _oss_key(fp)
+                        out["embed_image_count"] = i + 1
+                    media_ok = bool(out["audio_b64"]) or out["image_count"] > 0
+
+                rows_out.append(out)
+                print(
+                    f"PACK_CLIP clip_id={primary_clip_id} sdk_clip_id={sdk_clip_id} "
+                    f"label_images={out['image_count']} "
+                    f"embed_images={out['embed_image_count']} "
+                    f"media_mode={pack_mode} media_ok={media_ok} "
+                    f"asr_chars={len(asr_text)}"
+                )
+
+        if not rows_out:
+            raise FileNotFoundError(f"no clips packed under {run_relpath}")
+        return pd.DataFrame(rows_out)
+
+    return wrap_dpe_udf(
+        _pack_chunk,
+        dpe_cpu=dpe_cpu,
+        dpe_memory=dpe_memory,
+        oss_mount_url=oss_mount_url,
+        mount_path=mount_path,
+        storage_options_dict=storage_options_dict,
+    )
+
 def main() -> None:
+    import json as _json
+
+    resolved_preview = {
+        k: resolved_v
+        for k, resolved_v in _all_dw_arg_sources().items()
+        if k not in {"odps_access_key", "odps_access_id", "dashscope_api_key"}
+    }
+    print(
+        "DW_ARGS_DEBUG="
+        + _json.dumps(
+            {
+                "keys": sorted(resolved_preview.keys()),
+                "skynet_args_nonempty": bool(os.environ.get("SKYNET_ARGS", "").strip()),
+            },
+            ensure_ascii=False,
+        )
+    )
+
     stages_raw = get_dw_arg("stages")
-    driver_stages, udf_stages = split_stages(stages_raw)
+    ai_submitter = (get_dw_arg("ai_submitter", "driver") or "driver").strip().lower()
+    driver_stages, udf_stages, driver_ai_stages = split_stages(
+        stages_raw, ai_submitter=ai_submitter
+    )
+    print(
+        f"STAGES_SPLIT driver={sorted(driver_stages)} "
+        f"udf={sorted(udf_stages)} driver_ai={sorted(driver_ai_stages)} "
+        f"ai_submitter={ai_submitter}"
+    )
+    if driver_ai_stages - {"asr", "label", "embed"}:
+        print(
+            "WARN: unsupported driver_ai stages: "
+            + ",".join(sorted(driver_ai_stages - {"asr", "label", "embed"}))
+        )
+    cleanup_work = (get_dw_arg("cleanup_work", "false") or "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if driver_ai_stages & {"asr", "label", "embed"} and cleanup_work:
+        print(
+            "WARN: cleanup_work=true would delete _sdk_work media needed by "
+            "driver bare AI; forcing cleanup_work=false"
+        )
+        cleanup_work = False
     ds = get_dw_arg("ds") or datetime.now(timezone.utc).strftime("%Y%m%d")
     account = o.account  # type: ignore[name-defined]
     oss_bucket = get_dw_arg("oss_bucket")
@@ -2188,6 +4515,9 @@ def main() -> None:
     batch_rows = int(get_dw_arg("batch_rows", "1") or "1")
     if batch_rows < 1:
         raise ValueError("batch_rows must be >= 1")
+    dpe_parallel = int(get_dw_arg("dpe_parallel", "1") or "1")
+    if dpe_parallel < 1:
+        raise ValueError("dpe_parallel must be >= 1")
     hash_batch_rows = int(get_dw_arg("hash_batch_rows", "32") or "32")
     if hash_batch_rows < 1:
         raise ValueError("hash_batch_rows must be >= 1")
@@ -2196,13 +4526,7 @@ def main() -> None:
     clip_min_sec = get_dw_float_arg("clip_min_sec", 15.0)
     clip_max_sec = get_dw_float_arg("clip_max_sec", 20.0)
     sample_fps = get_dw_float_arg("sample_fps", 1.0)
-    cleanup_work = (get_dw_arg("cleanup_work", "false") or "false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    sdk_env = collect_sdk_env_for_dpe(account)
+    sdk_env = collect_sdk_env_for_dpe(account, odps_entry=o)  # type: ignore[name-defined]
     # Workflow secret args override account-derived values; project/endpoint
     # fall back to the current Driver ODPS entry when available.
     odps_env_values = {
@@ -2227,8 +4551,33 @@ def main() -> None:
         oss_bucket,
         get_dw_arg("oss_mount_prefix", "") or "",
     )
-    mount_storage = storage_options(get_dw_arg("oss_ram_role_arn"), account)
+    mount_storage = storage_options(
+        get_dw_arg("oss_ram_role_arn"),
+        account,
+        oss_bucket=oss_bucket,
+    )
+    mc_env_preview = collect_sdk_env_for_dpe(account, odps_entry=o)  # type: ignore[name-defined]
+    inference_quota = (
+        mc_env_preview.get("MC_INFERENCE_QUOTA_NAME")
+        or mc_env_preview.get("AI_INFERENCE_QUOTA_NAME")
+        or ""
+    )
+    if inference_quota and (
+        "dataworks" in inference_quota.lower() or "resource_group" in inference_quota.lower()
+    ):
+        print(
+            "WARN: inference_quota_name looks like a DataWorks resource group, not MC Token "
+            "Inference Quota. Use MC console → Quota 管理 (e.g. ai_InferenceQuota)."
+        )
+    print(
+        f"MOUNT_URL={mount_url} MOUNT_BUCKET={oss_bucket} "
+        f"ODPS_CATALOG_ENDPOINT={mc_env_preview.get('ODPS_CATALOG_ENDPOINT', '')} "
+        f"ODPS_STS_TOKEN_SET={bool(mc_env_preview.get('ODPS_STS_TOKEN'))} "
+        f"INFERENCE_QUOTA_SET={bool(inference_quota)} "
+        f"INFERENCE_QUOTA_NAME={inference_quota or '(unset)'}"
+    )
     session = new_session(o)  # type: ignore[name-defined]
+    ok_rows: list[dict[str, Any]] = []
     try:
         print(f"Logview: {session.get_logview_address()}")
         explicit_bags = _explicit_bag_from_args()
@@ -2249,6 +4598,13 @@ def main() -> None:
                 )
             hash_input_df = md.DataFrame(
                 pd.DataFrame([{"bag_oss_key": key} for key in bag_keys])
+            )
+            hash_parallel = min(max(dpe_parallel, 1), len(bag_keys))
+            if hash_parallel > 1:
+                hash_input_df = hash_input_df.mf.rebalance(num_partitions=hash_parallel)
+            print(
+                f"DPE_HASH_PARALLEL partitions={hash_parallel} "
+                f"bags={len(bag_keys)} batch_rows={hash_batch_rows}"
             )
             hash_udf = _build_hash_chunk_udf(
                 dpe_cpu=dpe_cpu,
@@ -2321,6 +4677,9 @@ def main() -> None:
             + json.dumps(
                 {
                     "driver_stages": sorted(driver_stages),
+                    "udf_stages": sorted(udf_stages),
+                    "driver_ai_stages": sorted(driver_ai_stages),
+                    "ai_submitter": ai_submitter,
                     "hashed_count": len(discovered_bags),
                     "skipped_completed": len(discovered_bags) - len(
                         filter_already_completed(
@@ -2341,7 +4700,11 @@ def main() -> None:
             print("No UDF stages selected; skipping pipeline apply_chunk")
             return
 
-        input_df = md.DataFrame(pd.DataFrame(job_rows))
+        input_df, extract_parallel = make_batch_input_df(job_rows, dpe_parallel)
+        print(
+            f"DPE_EXTRACT_PARALLEL partitions={extract_parallel} "
+            f"bags={len(job_rows)} batch_rows={batch_rows}"
+        )
         pipeline_udf = _build_pipeline_chunk_udf(
             dpe_cpu=dpe_cpu,
             dpe_memory=dpe_memory,
@@ -2379,82 +4742,697 @@ def main() -> None:
             or row.get("ok") == 1
             or str(row.get("ok")).lower() == "true"
         ]
-        postprocess_stages = driver_stages & {"mc_write", "dispatch"}
-        if postprocess_stages and not ok_rows:
-            print(
-                "WARNING: no successful rows; skipping Driver stages "
-                + ",".join(sorted(postprocess_stages))
-            )
-
-        if "mc_write" in driver_stages:
-            table_prefix = (
-                get_dw_arg("sdk_table_prefix")
-                or get_dw_arg("table_prefix")
-                or "aig_sdk__"
-            )
-            for row in ok_rows:
-                ingest_sdk_run(
-                    o,  # type: ignore[name-defined]
-                    clip_id=str(row["clip_id"]),
-                    run_id=str(row["run_id"]),
-                    ds=str(row["ds"]),
-                    run_dir=Path(mount_path) / str(row["run_relpath"]),
-                    table_prefix=table_prefix,
-                    bag_oss_key=str(row["bag_oss_key"]),
-                )
-
-        if "dispatch" in driver_stages and ok_rows:
-            items = [
-                {
-                    "clip_id": str(row["clip_id"]),
-                    "run_id": str(row["run_id"]),
-                    "bag_oss_key": str(row["bag_oss_key"]),
-                    "ds": str(row["ds"]),
-                    "run_relpath": str(row["run_relpath"]),
-                    "run_oss_prefix": run_oss_prefix_from_relpath(
-                        str(row["run_relpath"])
-                    ),
-                }
-                for row in ok_rows
-            ]
-            payload: dict[str, Any] = {
-                "action": "run",
-                "layout_version": "sdk_v1",
-                "pipeline_version": "sdk_v1",
-                "batch_size": len(items),
-                "items": items,
-                "run_oss_prefix": items[0]["run_oss_prefix"],
-                "dispatched_at": utc_now_iso(),
-            }
-            if len(items) == 1:
-                payload.update(items[0])
-            dispatch_key = (
-                get_dw_arg("dispatch_oss_key", DEFAULT_DISPATCH_OSS_KEY)
-                or DEFAULT_DISPATCH_OSS_KEY
-            )
-            dispatch_endpoint = resolve_oss_http_endpoint(
-                cloud_region,
-                get_arg=get_dw_arg,
-                explicit_endpoint=get_dw_arg("oss_endpoint"),
-            )
-            write_dispatch_to_oss(
-                bucket_name=oss_bucket,
-                object_key=dispatch_key,
-                endpoint=dispatch_endpoint,
-                account=account,
-                payload=payload,
-                region=cloud_region,
-                get_arg=get_dw_arg,
-            )
-            print(
-                "DISPATCH_JSON="
-                + json.dumps(payload, ensure_ascii=False, default=str)
-            )
     except Exception:
         print(f"Logview: {session.get_logview_address()}")
         raise
     finally:
+        # Destroy extract/hash session before Driver bare MaxFrame AI (Job2 pattern).
         session.destroy()
+
+    postprocess_stages = driver_stages & {"mc_write", "dispatch"}
+    if (postprocess_stages or driver_ai_stages) and not ok_rows:
+        print(
+            "WARNING: no successful extract rows; skipping Driver AI / postprocess "
+            + ",".join(sorted(postprocess_stages | set(driver_ai_stages)))
+        )
+
+    # Per bag-run artifacts kept for mc_write (Driver has no OSS mount).
+    run_label_rows: dict[str, list[dict[str, Any]]] = {}
+    run_embed_rows: dict[str, list[dict[str, Any]]] = {}
+    run_asr_rows: dict[str, list[dict[str, Any]]] = {}
+
+    def _dpe_write_texts(writes: list[dict[str, str]]) -> None:
+        if not writes:
+            return
+        import maxframe.dataframe as md
+        from maxframe.session import new_session
+
+        configure_dpe_engine()
+        apply_dpe_runtime_settings(dpe_image)
+        write_session = new_session(o)  # type: ignore[name-defined]
+        try:
+            print(f"DRIVER_WRITE_LOGVIEW={write_session.get_logview_address()}")
+            write_udf = _build_write_text_file_udf(
+                dpe_cpu=dpe_cpu,
+                dpe_memory=dpe_memory,
+                oss_mount_url=mount_url,
+                mount_path=mount_path,
+                storage_options_dict=mount_storage,
+            )
+            (
+                md.DataFrame(pd.DataFrame(writes))
+                .mf.apply_chunk(
+                    write_udf,
+                    batch_rows=max(1, len(writes)),
+                    output_type="dataframe",
+                    dtypes={"relpath": "string", "written": "int64"},
+                    skip_infer=True,
+                )
+                .execute()
+                .fetch()
+            )
+        finally:
+            write_session.destroy()
+
+    asr_ok = 0
+    asr_fail = 0
+    if "asr" in driver_ai_stages and ok_rows:
+        # Job2 同款：o.account STS 不能直连业务桶 → 挂载读 WAV / 写 asr.jsonl；
+        # AI 在 Driver。无长期 AK 时走 DPE base64；有 oss_vl_/oss_access_ AK 时走 OSS URL。
+        # Multi-bag: collect audio rows across ok_rows → one bare generate + rebalance.
+        catalog_ep = (
+            get_dw_arg("odps_catalog_endpoint")
+            or sdk_env.get("ODPS_CATALOG_ENDPOINT")
+            or ""
+        )
+        asr_model = (
+            get_dw_arg("mc_asr_model")
+            or get_dw_arg("asr_model")
+            or "qwen3-asr-flash"
+        )
+        modelset = (
+            get_dw_arg("mc_modelset_project")
+            or sdk_env.get("MC_MODELSET_PROJECT")
+            or "bigdata_public_modelset"
+        )
+        parallel = int(get_dw_arg("asr_parallel_partitions", "1") or "1")
+        oss_ak = resolve_driver_oss_ak_sk(get_dw_arg)
+        audio_mode = "oss_url" if oss_ak else "dpe_base64"
+
+        import maxframe.dataframe as md
+        from maxframe.session import new_session
+
+        # Re-apply DPE-only engine for mount I/O helpers (AI session reconfigures elsewhere).
+        configure_dpe_engine()
+        apply_dpe_runtime_settings(dpe_image)
+
+        # (run_relpath, bag_row, audio_oss_key) alignment for result split.
+        audio_meta: list[tuple[str, dict[str, Any], str]] = []
+        load_rows: list[dict[str, Any]] = []
+        rows_in: list[dict[str, str]] = []
+        audio_storage: dict[str, str] | None = None
+
+        try:
+            for row in ok_rows:
+                wav_keys = parse_audio_keys_json(row.get("audio_keys_json"))
+                if not wav_keys:
+                    raise FileNotFoundError(
+                        f"audio_keys_json empty for run_relpath={row.get('run_relpath')} "
+                        "(extract must keep audio.wav; cleanup_work=false)"
+                    )
+                bag_clip_id = str(row.get("clip_id") or "").strip()
+                run_key = str(row["run_relpath"])
+                if audio_mode == "oss_url":
+                    bag_rows = build_asr_input_rows_from_oss_keys(
+                        wav_keys,
+                        bucket=oss_bucket,
+                        cloud_region=cloud_region,
+                        bag_clip_id=bag_clip_id,
+                    )
+                    for br in bag_rows:
+                        key = str(br.get("audio_oss_key") or "")
+                        audio_meta.append((run_key, row, key))
+                        rows_in.append(br)
+                    audio_storage = oss_ak
+                else:
+                    for key in wav_keys:
+                        audio_meta.append((run_key, row, key))
+                        load_rows.append(
+                            {
+                                "clip_id": bag_clip_id or clip_id_from_audio_key(key),
+                                "sdk_clip_id": clip_id_from_audio_key(key),
+                                "run_id": str(row["run_id"]),
+                                "run_relpath": run_key,
+                                "audio_oss_key": key,
+                            }
+                        )
+
+            if audio_mode == "dpe_base64":
+                load_session = new_session(o)  # type: ignore[name-defined]
+                try:
+                    print(f"DRIVER_ASR_LOAD_LOGVIEW={load_session.get_logview_address()}")
+                    load_udf = _build_load_audio_b64_udf(
+                        dpe_cpu=dpe_cpu,
+                        dpe_memory=dpe_memory,
+                        oss_mount_url=mount_url,
+                        mount_path=mount_path,
+                        storage_options_dict=mount_storage,
+                    )
+                    loaded = (
+                        md.DataFrame(pd.DataFrame(load_rows))
+                        .mf.apply_chunk(
+                            load_udf,
+                            batch_rows=max(1, len(load_rows)),
+                            output_type="dataframe",
+                            dtypes={
+                                "clip_id": "string",
+                                "run_id": "string",
+                                "run_relpath": "string",
+                                "audio_oss_key": "string",
+                                "audio_b64": "string",
+                                "bytes": "int64",
+                            },
+                            skip_infer=True,
+                        )
+                        .execute()
+                        .fetch()
+                    )
+                finally:
+                    load_session.destroy()
+                b64_by_key: dict[str, dict[str, Any]] = {}
+                for _, lr in loaded.iterrows():
+                    item = lr.to_dict()
+                    b64_by_key[str(item.get("audio_oss_key") or "")] = item
+                key_to_sdk = {
+                    str(r["audio_oss_key"]): str(r.get("sdk_clip_id") or "")
+                    for r in load_rows
+                }
+                b64_items: list[dict[str, Any]] = []
+                for run_key, row, key in audio_meta:
+                    item = dict(b64_by_key.get(key) or {})
+                    if not item.get("audio_b64"):
+                        raise FileNotFoundError(f"ASR load missing audio_b64 key={key}")
+                    bag_clip_id = str(row.get("clip_id") or "").strip()
+                    item["sdk_clip_id"] = key_to_sdk.get(key) or clip_id_from_audio_key(key)
+                    item["clip_id"] = bag_clip_id or item["sdk_clip_id"]
+                    item["run_relpath"] = run_key
+                    print(
+                        f"DRIVER_ASR_LOADED key={key} bytes={item.get('bytes')} "
+                        f"run={run_key}"
+                    )
+                    b64_items.append(item)
+                rows_in = build_asr_input_rows_from_b64(b64_items)
+
+            print(
+                f"DRIVER_BARE_ASR start rows={len(rows_in)} bags={len(ok_rows)} "
+                f"model={asr_model} quota={inference_quota or '(unset)'} "
+                f"parallel={parallel} audio_mode={audio_mode}"
+            )
+            summary = driver_bare_asr_generate(
+                o,  # type: ignore[name-defined]
+                rows_in=rows_in,
+                asr_model=asr_model,
+                modelset_project=modelset,
+                catalog_endpoint=catalog_ep or None,
+                inference_quota_name=inference_quota or None,
+                parallel_partitions=max(1, parallel),
+                audio_storage_options=audio_storage,
+            )
+            asr_rows_all = list(summary.pop("asr_rows"))
+            if len(asr_rows_all) != len(audio_meta):
+                raise RuntimeError(
+                    f"ASR row count mismatch got={len(asr_rows_all)} "
+                    f"expected={len(audio_meta)}"
+                )
+            for i, (run_key, _row, _key) in enumerate(audio_meta):
+                run_asr_rows.setdefault(run_key, []).append(asr_rows_all[i])
+
+            write_payload = [
+                {
+                    "asr_relpath": f"{run_key.rstrip('/')}/asr.jsonl",
+                    "asr_jsonl": asr_jsonl_body(rows),
+                }
+                for run_key, rows in run_asr_rows.items()
+            ]
+            configure_dpe_engine()
+            apply_dpe_runtime_settings(dpe_image)
+            write_session = new_session(o)  # type: ignore[name-defined]
+            try:
+                print(f"DRIVER_ASR_WRITE_LOGVIEW={write_session.get_logview_address()}")
+                write_udf = _build_write_asr_jsonl_udf(
+                    dpe_cpu=dpe_cpu,
+                    dpe_memory=dpe_memory,
+                    oss_mount_url=mount_url,
+                    mount_path=mount_path,
+                    storage_options_dict=mount_storage,
+                )
+                (
+                    md.DataFrame(pd.DataFrame(write_payload))
+                    .mf.apply_chunk(
+                        write_udf,
+                        batch_rows=max(1, len(write_payload)),
+                        output_type="dataframe",
+                        dtypes={"asr_relpath": "string", "written": "int64"},
+                        skip_infer=True,
+                    )
+                    .execute()
+                    .fetch()
+                )
+            finally:
+                write_session.destroy()
+
+            asr_ok = len(run_asr_rows)
+            print(
+                "DRIVER_ASR_SUMMARY_JSON="
+                + json.dumps(
+                    {
+                        "bags": len(ok_rows),
+                        "audio_rows": len(rows_in),
+                        "parallel": parallel,
+                        "audio_mode": audio_mode,
+                        "runs": sorted(run_asr_rows.keys()),
+                        **summary,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+        except Exception as asr_exc:  # noqa: BLE001
+            asr_fail = len(ok_rows)
+            asr_ok = 0
+            print(f"DRIVER_ASR_FAIL bags={len(ok_rows)} {type(asr_exc).__name__}: {asr_exc}")
+        print(
+            "DRIVER_ASR_BATCH_JSON="
+            + json.dumps(
+                {
+                    "ok_count": asr_ok,
+                    "fail_count": asr_fail,
+                    "audio_rows": len(rows_in),
+                    "parallel": parallel,
+                    "submitter": "driver_bare",
+                    "audio_mode": audio_mode,
+                },
+                ensure_ascii=False,
+            )
+        )
+        if asr_fail:
+            raise RuntimeError(
+                f"driver bare ASR failed for {asr_fail}/{asr_ok + asr_fail} run(s)"
+            )
+
+    # Per bag-run artifacts kept for mc_write (Driver has no OSS mount).
+    # (run_label_rows / run_embed_rows initialized above)
+
+    def _media_pack_dtypes() -> dict[str, str]:
+        dtypes: dict[str, str] = {
+            "run_relpath": "string",
+            "clip_id": "string",
+            "sdk_clip_id": "string",
+            "bag_name": "string",
+            "start_timestamp_ns": "int64",
+            "end_timestamp_ns": "int64",
+            "duration_sec": "double",
+            "source_topics": "string",
+            "asr_text": "string",
+            "asr_model": "string",
+            "taxonomy_prompt": "string",
+            "image_count": "int64",
+            "embed_image_count": "int64",
+            "audio_b64": "string",
+            "audio_oss_key": "string",
+        }
+        for i in range(4):
+            dtypes[f"image_b64_{i}"] = "string"
+            dtypes[f"image_oss_key_{i}"] = "string"
+        for i in range(8):
+            dtypes[f"embed_image_b64_{i}"] = "string"
+            dtypes[f"embed_image_oss_key_{i}"] = "string"
+        return dtypes
+
+    if driver_ai_stages & {"label", "embed"} and ok_rows:
+        import maxframe.dataframe as md
+        from maxframe.session import new_session
+
+        catalog_ep = (
+            get_dw_arg("odps_catalog_endpoint")
+            or sdk_env.get("ODPS_CATALOG_ENDPOINT")
+            or ""
+        )
+        modelset = (
+            get_dw_arg("mc_modelset_project")
+            or sdk_env.get("MC_MODELSET_PROJECT")
+            or "bigdata_public_modelset"
+        )
+        omni_model = (
+            get_dw_arg("omni_model")
+            or sdk_env.get("OMNI_MODEL")
+            or "qwen3.5-omni-plus"
+        )
+        embedding_model = (
+            get_dw_arg("embedding_model")
+            or sdk_env.get("EMBEDDING_MODEL")
+            or "qwen3-vl-embedding"
+        )
+        embedding_dimension = int(
+            get_dw_arg("embedding_dimension")
+            or sdk_env.get("EMBEDDING_DIMENSION")
+            or "1024"
+        )
+        label_parallel = int(
+            get_dw_arg("label_parallel_partitions")
+            or get_dw_arg("asr_parallel_partitions", "1")
+            or "1"
+        )
+        embed_parallel = int(
+            get_dw_arg("embed_parallel_partitions")
+            or get_dw_arg("asr_parallel_partitions", "1")
+            or "1"
+        )
+        # Prefer OSS URL + storage_options when long-term AK present (same as ASR).
+        label_embed_oss_ak = resolve_driver_oss_ak_sk(get_dw_arg)
+        ai_media_mode = resolve_ai_media_mode(get_dw_arg, oss_ak=label_embed_oss_ak)
+        media_storage = label_embed_oss_ak if ai_media_mode == "oss_url" else None
+        print(
+            f"DRIVER_LABEL_EMBED_MEDIA_MODE={ai_media_mode} "
+            f"oss_ak_set={bool(label_embed_oss_ak)}"
+        )
+        label_ok = 0
+        label_fail = 0
+        embed_ok = 0
+        embed_fail = 0
+        bag_by_run = {str(r["run_relpath"]): r for r in ok_rows}
+
+        try:
+            # One DPE pack session for all ok bags.
+            configure_dpe_engine()
+            apply_dpe_runtime_settings(dpe_image)
+            pack_inputs = [
+                {
+                    "run_relpath": str(row["run_relpath"]),
+                    "bag_clip_id": str(row.get("clip_id") or ""),
+                }
+                for row in ok_rows
+            ]
+            pack_session = new_session(o)  # type: ignore[name-defined]
+            try:
+                print(
+                    f"DRIVER_PACK_LOGVIEW={pack_session.get_logview_address()} "
+                    f"bags={len(pack_inputs)} media_mode={ai_media_mode}"
+                )
+                pack_udf = _build_media_pack_udf(
+                    dpe_cpu=dpe_cpu,
+                    dpe_memory=dpe_memory,
+                    oss_mount_url=mount_url,
+                    mount_path=mount_path,
+                    storage_options_dict=mount_storage,
+                    media_mode=ai_media_mode,
+                )
+                packed = (
+                    md.DataFrame(pd.DataFrame(pack_inputs))
+                    .mf.apply_chunk(
+                        pack_udf,
+                        batch_rows=max(1, len(pack_inputs)),
+                        output_type="dataframe",
+                        dtypes=_media_pack_dtypes(),
+                        skip_infer=True,
+                    )
+                    .execute()
+                    .fetch()
+                )
+            finally:
+                pack_session.destroy()
+
+            all_pack_rows = [r.to_dict() for _, r in packed.iterrows()]
+            # Attach ASR per run (in-memory; mount asr.jsonl may miss ids).
+            attached: list[dict[str, Any]] = []
+            for pack in all_pack_rows:
+                run_key = str(pack.get("run_relpath") or "")
+                bag_row = bag_by_run.get(run_key) or {}
+                attached.extend(
+                    attach_asr_text_to_pack_rows(
+                        [pack],
+                        run_asr_rows.get(run_key) or [],
+                        bag_clip_id=str(bag_row.get("clip_id") or ""),
+                    )
+                )
+            all_pack_rows = attached
+            packs_by_run: dict[str, list[dict[str, Any]]] = {}
+            for pack in all_pack_rows:
+                packs_by_run.setdefault(str(pack.get("run_relpath") or ""), []).append(pack)
+            print(
+                f"DRIVER_PACK_OK bags={len(packs_by_run)} clips={len(all_pack_rows)} "
+                f"media_mode={ai_media_mode} "
+                f"asr_chars={[len(str(p.get('asr_text') or '')) for p in all_pack_rows]}"
+            )
+
+            if "label" in driver_ai_stages:
+                label_summary = driver_bare_label_generate(
+                    o,  # type: ignore[name-defined]
+                    pack_rows=all_pack_rows,
+                    omni_model=omni_model,
+                    modelset_project=modelset,
+                    catalog_endpoint=catalog_ep or None,
+                    inference_quota_name=inference_quota or None,
+                    parallel_partitions=max(1, label_parallel),
+                    media_mode=ai_media_mode,
+                    media_storage_options=media_storage,
+                    cloud_region=cloud_region,
+                    oss_bucket=oss_bucket,
+                )
+                label_rows_all = list(label_summary.pop("label_rows"))
+                if len(label_rows_all) != len(all_pack_rows):
+                    raise RuntimeError(
+                        f"label row count mismatch got={len(label_rows_all)} "
+                        f"expected={len(all_pack_rows)}"
+                    )
+                writes: list[dict[str, str]] = []
+                for i, pack in enumerate(all_pack_rows):
+                    run_key = str(pack.get("run_relpath") or "")
+                    run_label_rows.setdefault(run_key, []).append(label_rows_all[i])
+                for run_key, rows in run_label_rows.items():
+                    writes.append(
+                        {
+                            "relpath": f"{run_key.rstrip('/')}/labels.jsonl",
+                            "body": labels_jsonl_body(rows),
+                        }
+                    )
+                _dpe_write_texts(writes)
+                label_ok = len(run_label_rows)
+                print(
+                    "DRIVER_LABEL_SUMMARY_JSON="
+                    + json.dumps(
+                        {
+                            "bags": label_ok,
+                            "clips": len(label_rows_all),
+                            "parallel": label_parallel,
+                            **label_summary,
+                            "scene_summaries": [
+                                r.get("scene_summary") for r in label_rows_all
+                            ],
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                )
+
+            if "embed" in driver_ai_stages:
+                label_by_clip: dict[str, dict[str, Any]] = {}
+                for rows in run_label_rows.values():
+                    for r in rows:
+                        cid = str(r.get("clip_id") or "")
+                        if cid:
+                            label_by_clip[cid] = r
+                        sid = str(r.get("sdk_clip_id") or "")
+                        if sid:
+                            label_by_clip[sid] = r
+                embed_summary = driver_bare_embed_generate(
+                    o,  # type: ignore[name-defined]
+                    pack_rows=all_pack_rows,
+                    label_by_clip=label_by_clip,
+                    embedding_model=embedding_model,
+                    embedding_dimension=embedding_dimension,
+                    modelset_project=modelset,
+                    catalog_endpoint=catalog_ep or None,
+                    inference_quota_name=inference_quota or None,
+                    parallel_partitions=max(1, embed_parallel),
+                    media_mode=ai_media_mode,
+                    media_storage_options=media_storage,
+                    cloud_region=cloud_region,
+                    oss_bucket=oss_bucket,
+                )
+                embed_rows_all = list(embed_summary.pop("embed_rows"))
+                if len(embed_rows_all) != len(all_pack_rows):
+                    raise RuntimeError(
+                        f"embed row count mismatch got={len(embed_rows_all)} "
+                        f"expected={len(all_pack_rows)}"
+                    )
+                writes = []
+                for i, pack in enumerate(all_pack_rows):
+                    run_key = str(pack.get("run_relpath") or "")
+                    run_embed_rows.setdefault(run_key, []).append(embed_rows_all[i])
+                for run_key, rows in run_embed_rows.items():
+                    writes.append(
+                        {
+                            "relpath": f"{run_key.rstrip('/')}/fusion_embeddings.jsonl",
+                            "body": embeddings_jsonl_body(rows),
+                        }
+                    )
+                _dpe_write_texts(writes)
+                embed_ok = len(run_embed_rows)
+                print(
+                    "DRIVER_EMBED_SUMMARY_JSON="
+                    + json.dumps(
+                        {
+                            "bags": embed_ok,
+                            "clips": len(embed_rows_all),
+                            "parallel": embed_parallel,
+                            **embed_summary,
+                            "dims": [len(r.get("embedding") or []) for r in embed_rows_all],
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                )
+        except Exception as ai_exc:  # noqa: BLE001
+            if "label" in driver_ai_stages and not run_label_rows:
+                label_fail = len(ok_rows)
+            elif "label" in driver_ai_stages:
+                label_fail = max(0, len(ok_rows) - len(run_label_rows))
+            if "embed" in driver_ai_stages and not run_embed_rows:
+                embed_fail = len(ok_rows)
+            elif "embed" in driver_ai_stages:
+                embed_fail = max(0, len(ok_rows) - len(run_embed_rows))
+            print(
+                "DRIVER_LABEL_EMBED_FAIL "
+                f"bags={len(ok_rows)} {type(ai_exc).__name__}: {ai_exc}"
+            )
+
+        if "label" in driver_ai_stages:
+            print(
+                "DRIVER_LABEL_BATCH_JSON="
+                + json.dumps(
+                    {
+                        "ok_count": label_ok,
+                        "fail_count": label_fail,
+                        "parallel": label_parallel,
+                        "media_mode": ai_media_mode,
+                        "submitter": "driver_bare",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            if label_fail:
+                raise RuntimeError(
+                    f"driver bare label failed for {label_fail}/{label_ok + label_fail} run(s)"
+                )
+        if "embed" in driver_ai_stages:
+            print(
+                "DRIVER_EMBED_BATCH_JSON="
+                + json.dumps(
+                    {
+                        "ok_count": embed_ok,
+                        "fail_count": embed_fail,
+                        "parallel": embed_parallel,
+                        "media_mode": ai_media_mode,
+                        "submitter": "driver_bare",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            if embed_fail:
+                raise RuntimeError(
+                    f"driver bare embed failed for {embed_fail}/{embed_ok + embed_fail} run(s)"
+                )
+
+    # Hybrid default stages omit SDK "upload"; write run.json after AI artifacts land.
+    if ok_rows and (
+        "mc_write" in driver_stages
+        or "dispatch" in driver_stages
+        or bool(driver_ai_stages & {"asr", "label", "embed"})
+    ):
+        run_json_writes: list[dict[str, str]] = []
+        for row in ok_rows:
+            done = [
+                s.strip()
+                for s in str(row.get("stages_done") or "").split(",")
+                if s.strip()
+            ]
+            for stage in ("asr", "label", "embed"):
+                if stage in driver_ai_stages and stage not in done:
+                    done.append(stage)
+            if "upload" not in done:
+                done.append("upload")
+            doc = build_run_json_document(
+                clip_id=str(row["clip_id"]),
+                run_id=str(row["run_id"]),
+                ds=str(row["ds"]),
+                bag_oss_key=str(row["bag_oss_key"]),
+                stages_done=done,
+                model_backend=model_backend,
+            )
+            run_json_writes.append(
+                {
+                    "relpath": f"{str(row['run_relpath']).rstrip('/')}/run.json",
+                    "body": format_run_json_body(doc),
+                }
+            )
+        _dpe_write_texts(run_json_writes)
+        print(f"RUN_JSON_WRITTEN count={len(run_json_writes)}")
+
+    if "mc_write" in driver_stages and ok_rows:
+        table_prefix = (
+            get_dw_arg("sdk_table_prefix")
+            or get_dw_arg("table_prefix")
+            or "aig_sdk__"
+        )
+        for row in ok_rows:
+            run_key = str(row["run_relpath"])
+            labels = run_label_rows.get(run_key) or []
+            embeds = run_embed_rows.get(run_key) or []
+            if not labels or not embeds:
+                raise RuntimeError(
+                    "mc_write requires labels.jsonl + fusion_embeddings.jsonl in memory; "
+                    f"run={run_key} labels={len(labels)} embeds={len(embeds)}. "
+                    "Include stages label,embed with ai_submitter=driver."
+                )
+            ingest_sdk_run(
+                o,  # type: ignore[name-defined]
+                clip_id=str(row["clip_id"]),
+                run_id=str(row["run_id"]),
+                ds=str(row["ds"]),
+                table_prefix=table_prefix,
+                bag_oss_key=str(row["bag_oss_key"]),
+                label_row=labels[0],
+                embed_row=embeds[0],
+                run_doc={
+                    "bag_oss_key": str(row["bag_oss_key"]),
+                    "source_run_dir": str(
+                        labels[0].get("sdk_clip_id") or row["clip_id"]
+                    ),
+                },
+            )
+            print(
+                f"MC_WRITE_OK clip_id={row.get('clip_id')} run_id={row.get('run_id')} "
+                f"label_clips={len(labels)} embed_clips={len(embeds)}"
+            )
+
+    if "dispatch" in driver_stages and ok_rows:
+        items = [
+            {
+                "clip_id": str(row["clip_id"]),
+                "run_id": str(row["run_id"]),
+                "bag_oss_key": str(row["bag_oss_key"]),
+                "ds": str(row["ds"]),
+                "run_relpath": str(row["run_relpath"]),
+                "run_oss_prefix": run_oss_prefix_from_relpath(str(row["run_relpath"])),
+            }
+            for row in ok_rows
+        ]
+        payload: dict[str, Any] = {
+            "action": "run",
+            "layout_version": "sdk_v1",
+            "pipeline_version": "sdk_v1",
+            "batch_size": len(items),
+            "items": items,
+            "run_oss_prefix": items[0]["run_oss_prefix"],
+            "dispatched_at": utc_now_iso(),
+        }
+        # Compat: HMI / verify expect top-level clip_id/run_id even for multi-bag batches.
+        payload.update(items[0])
+        dispatch_key = (
+            get_dw_arg("dispatch_oss_key", DEFAULT_DISPATCH_OSS_KEY)
+            or DEFAULT_DISPATCH_OSS_KEY
+        )
+        # o.account STS often cannot PutObject; write via DPE mount (Job2 pattern).
+        _dpe_write_texts(
+            [
+                {
+                    "relpath": dispatch_key.lstrip("/"),
+                    "body": json.dumps(payload, ensure_ascii=False, indent=2),
+                }
+            ]
+        )
+        print("DISPATCH_JSON=" + json.dumps(payload, ensure_ascii=False, default=str))
 
 if __name__ == "__main__":
     main()

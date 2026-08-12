@@ -10,7 +10,7 @@ alwaysApply: false
 - **源码 + 构建**：`piplinesdk/`（`oms_multimodal/`、`pyproject.toml`、wheel）
 - **Wheel / 文档**：同目录 `oms_multimodal_sdk-0.3.0-py3-none-any.whl`、`docs/`
 - 详：`piplinesdk/README.md` · `piplinesdk/docs/SDK.md` · `piplinesdk/docs/DATAWORKS_SDK.md`
-- HMI 开发依赖：`hmi/requirements-dev.txt`（`-e ../piplinesdk`）
+- HMI 开发依赖：`hmi/requirements-dev.txt`（`-e ../piplinesdk[bbox]`，含 ultralytics 供 YOLO）
 - 仓库布局：`docs/REPO_LAYOUT.md`
 
 ## 单包能力（DataWorks 多节点：一节点一 capability）
@@ -37,6 +37,7 @@ CLI：`python -m oms_multimodal run --bag ...` · 仅本地：`--extract-only`
 - 必需：`DASHSCOPE_API_KEY` · Omni 必需：`DASHSCOPE_WORKSPACE_ID`
 - **`MODEL_BACKEND=api`**（默认）— DashScope / MaaS 直连
 - **`MODEL_BACKEND=mc`** — MaxFrame + `bigdata_modelset`；需 `pip install oms-multimodal-sdk[mc]`、`mc_odps_entry=o`；Omni 未上架前设 **`MC_OMNI_FALLBACK_MODEL`**（如 `qwen3.6-plus`）
+- **`BBOX_DETECTOR=yolo`** — 需 `pip install oms-multimodal-sdk[bbox]`（ultralytics）；HMI `requirements-dev` 已带；DPE `[dpe]` 镜像默认不含 YOLO
 
 ## DataWorks
 - 节点草稿：`pipeline/dataworks/sdk_infer_node.py`（`model_backend=api|mc`，mc 传 `mc_odps_entry=o`，默认 `mc_image_mode=base64`）

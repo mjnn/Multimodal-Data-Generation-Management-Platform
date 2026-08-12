@@ -16,6 +16,7 @@ OMNI_LABEL_PROMPT_KEYS = (
     "user_modality_hint",
     "user_taxonomy_task",
     "user_asr_hint",
+    "user_bbox_hint",
 )
 
 DEFAULT_OMNI_LABEL_PROMPT: dict[str, str] = {
@@ -44,6 +45,10 @@ DEFAULT_OMNI_LABEL_PROMPT: dict[str, str] = {
     ),
     "user_taxonomy_task": "请为整段场景填写 taxonomy 标签。",
     "user_asr_hint": "若提供了 ASR 文本，请以其为语音内容的依据，并与音视频交叉验证。",
+    "user_bbox_hint": (
+        "若提供了 Detected objects（BBox 检出类别），请作为画面中物体/人物的先验，"
+        "与图像交叉验证后再填写标签；不得仅凭类别列表臆造未见证据。"
+    ),
 }
 
 OMNI_LABEL_PROMPT_FIELD_META: list[dict[str, Any]] = [
@@ -101,6 +106,12 @@ OMNI_LABEL_PROMPT_FIELD_META: list[dict[str, Any]] = [
         "description": "当存在 ASR 或事件文本时，如何与音视频交叉验证。",
         "multiline": False,
     },
+    {
+        "key": "user_bbox_hint",
+        "label": "BBox 检出说明",
+        "description": "当存在 Detected objects（BBox 类别汇总）时，如何与图像交叉验证。",
+        "multiline": False,
+    },
 ]
 
 
@@ -136,9 +147,15 @@ def omni_label_prompt_overrides_only(merged: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def build_taxonomy_prompt_block(taxonomy: dict[str, Any], params: dict[str, str] | None) -> str:
+def build_taxonomy_prompt_block(
+    taxonomy: dict[str, Any],
+    params: dict[str, str] | None,
+    *,
+    tree_output_mode: str = "path",
+) -> str:
     """Build taxonomy + rules prompt section (from label_prompt params + taxonomy)."""
     from .taxonomy import _format_allowed_values  # noqa: PLC0415 — avoid cycle at import
+    from .taxonomy_tree import tree_output_mode_rule
 
     p = merge_omni_label_prompt(params)
     lines = [
@@ -152,6 +169,7 @@ def build_taxonomy_prompt_block(taxonomy: dict[str, Any], params: dict[str, str]
         rule = rule.strip()
         if rule:
             lines.append(f"- {rule}")
+    lines.append(f"- {tree_output_mode_rule(tree_output_mode)}")
     lines.extend(["", p["labels_section_title"]])
     for item in taxonomy.get("labels", []):
         schema = item.get("value_schema") or {}
@@ -161,11 +179,15 @@ def build_taxonomy_prompt_block(taxonomy: dict[str, Any], params: dict[str, str]
             f" | 说明={item.get('definition', '')}"
         )
         allowed = _format_allowed_values(schema)
-        if allowed:
-            line += f" | 允许取值={allowed}"
-        if schema.get("range_hint"):
-            line += f" | 范围={schema['range_hint']}"
-        lines.append(line)
+        if allowed and "\n" in allowed:
+            lines.append(line + " | 允许取值=")
+            lines.append(allowed)
+        else:
+            if allowed:
+                line += f" | 允许取值={allowed}"
+            if schema.get("range_hint"):
+                line += f" | 范围={schema['range_hint']}"
+            lines.append(line)
     return "\n".join(lines)
 
 
@@ -175,6 +197,7 @@ def build_omni_user_text(
     speech_context: str,
     event_text: str,
     params: dict[str, str] | None,
+    bbox_context: str = "",
 ) -> str:
     p = merge_omni_label_prompt(params)
     try:
@@ -182,10 +205,15 @@ def build_omni_user_text(
     except (KeyError, ValueError):
         intro = p["user_task_intro"].replace("{duration_sec:.1f}", f"{duration_sec:.1f}")
     parts = [intro, p["user_modality_hint"], p["user_taxonomy_task"], p["user_asr_hint"]]
+    bbox_block = (bbox_context or "").strip()
+    if bbox_block:
+        parts.append(p.get("user_bbox_hint", ""))
     user_text = " ".join(s.strip() for s in parts if s.strip())
     if speech_context:
         user_text += f"\n\nMultimodal text context:\n{speech_context}"
     elif event_text:
         user_text += f"\n\nEvent texts:\n{event_text}"
+    if bbox_block:
+        user_text += f"\n\nDetected objects:\n{bbox_block}"
     # speech_context 已含 Mel feature text（见 Clip.speech_context_text）
     return user_text

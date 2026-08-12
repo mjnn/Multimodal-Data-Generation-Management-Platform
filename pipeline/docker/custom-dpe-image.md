@@ -134,51 +134,50 @@ pip install maxframe pyodps pandas alibabacloud_oss_v2 pyarrow
 
 
 
-### 5. SDK v1：`sdk_pipeline_driver` DPE 镜像（必装 `[mc]`）
+### 5. SDK v1：`sdk_pipeline_driver` DPE 镜像（必装 SDK，用 `[dpe]`）
+
+**推荐云上路径**为单节点 `sdk_pipeline_driver_node.py`：DPE chunk UDF 内 `import oms_multimodal` 并按 `MODEL_BACKEND=mc` 嵌套 MaxFrame AI。镜像 **必须** 安装 SDK ≥ **0.3.2**；生产用 **`[dpe]`**（`oss2`），**不要**用 `[mc]`（会把 maxframe/pyodps 打进镜像）。
+
+在 `docker/dpe-deps/Dockerfile` 的 `pip install -r requirements.txt` 之后追加，或直接用现成构建包：
 
 
 
-**推荐云上路径**为单节点 `sdk_pipeline_driver_node.py`：DPE chunk UDF 内 `import oms_multimodal` 并按 `MODEL_BACKEND=mc` 嵌套 MaxFrame AI。镜像 **必须** 安装带 MC extra 的 SDK，版本 **≥ 0.3.2**。
+**B. 本地 wheel（离线 / 未发布时，推荐）**
 
+构建包（已含 wheel + Dockerfile）：
 
-
-在 `docker/dpe-deps/Dockerfile` 的 `pip install -r requirements.txt` 之后追加（二选一）：
-
-
-
-**A. PyPI / 镜像源（推荐生产登记前本地验证）**
-
-
-
-```dockerfile
-
-RUN conda run -n py311 pip install --no-cache-dir 'oms-multimodal-sdk[mc]>=0.3.2' && \
-
-    conda run -n py311 python -c "import oms_multimodal; print('sdk', oms_multimodal.__version__)"
-
+```powershell
+# 仓库内已生成：
+#   pipeline/dist/dpe-sdk-image-pack-0.3.2.zip
+# 或刷新：
+.\pipeline\scripts\pack_dpe_sdk_image.ps1
 ```
 
+解压后：
 
-
-**B. 本地 wheel（离线 / 未发布时）**
-
-
-
-```dockerfile
-
-# 本地先构建 wheel：cd piplinesdk && py -3 -m build
-
-COPY piplinesdk/dist/oms_multimodal_sdk-0.3.2-py3-none-any.whl /tmp/sdk.whl
-
-RUN conda run -n py311 pip install --no-cache-dir '/tmp/sdk.whl[mc]' && \
-
-    conda run -n py311 python -c "import oms_multimodal; print('sdk', oms_multimodal.__version__)"
-
+```powershell
+cd dpe-sdk-image-pack-0.3.2
+.\build.ps1 -ImageTag registry.cn-shanghai.aliyuncs.com/<ns>/rosbag-sdk-dpe:0.3.2
 ```
 
+Dockerfile 使用 **`whl[dpe]`**（只加 `oss2`）。**不要**用 `[mc]` 打进生产 DPE（会把 maxframe/pyodps 打进镜像；平台已提供）。
 
+手工 COPY 示例：
 
-**禁止** COPY 业务 `.py` 后在 DPE 内 subprocess。maxframe/pyodps 由 MaxCompute 平台提供，**勿**打进生产 DPE 镜像 unless 平台文档要求。
+```dockerfile
+COPY wheels/oms_multimodal_sdk-0.3.2-py3-none-any.whl /tmp/sdk.whl
+RUN conda run -n py311 pip install --no-cache-dir '/tmp/sdk.whl[dpe]' && \
+    conda run -n py311 python -c "import oms_multimodal; print('sdk', oms_multimodal.__version__)"
+```
+
+**A. PyPI（仅当已发布且接受在线装包）**
+
+```dockerfile
+# 生产勿用 [mc]；若平台已有 maxframe，用：
+RUN conda run -n py311 pip install --no-cache-dir 'oms-multimodal-sdk[dpe]>=0.3.2'
+```
+
+> **BBox / YOLO**：生产 DPE 镜像装 `[dpe]`（oss2），**不含** `ultralytics`。云端 Job 若需 `BBOX_DETECTOR=yolo`，须单独加 `[bbox]`（体积大、含 torch）或继续用本机 HMI/`stub`/`opencv`。默认云端打标走 MaxFrame AI，不依赖 YOLO。
 
 
 

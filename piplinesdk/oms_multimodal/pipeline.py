@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Iterator
@@ -14,12 +15,14 @@ from dotenv import load_dotenv
 
 from .acoustic_panel import AcousticPanelConfig
 from .asr_client import AsrClient, AsrConfig
-from .clip_video import ClipVideoConfig
+from .clip_video import ClipVideoConfig, render_clip_preview_video
 from .config import BagProcessResult, ClientConfig, ClipConfig, OutputConfig
 from .embedding_client import FusionEmbeddingClient
 from .omni_client import OmniLabelClient
 from .rosbag_parser import RosbagExtractor, inspect_bag
 from .taxonomy import load_taxonomy
+
+logger = logging.getLogger(__name__)
 
 
 def write_jsonl(path: Path, rows: Iterator[dict[str, Any]]) -> int:
@@ -42,6 +45,8 @@ def _clip_video_row(clip) -> dict[str, Any]:
         "video_frame_count": len(clip.video_frames),
         "clip_video_path": clip.clip_video_path,
         "clip_video_paths": clip.clip_video_paths,
+        "clip_video_bbox_path": getattr(clip, "clip_video_bbox_path", None),
+        "clip_video_bbox_paths": getattr(clip, "clip_video_bbox_paths", None),
         "audio_path": clip.audio.audio_path if clip.audio else None,
         "clip_video_config": clip.clip_video_config,
     }
@@ -73,6 +78,23 @@ class LabelEmbeddingPipeline:
         )
         self.omni_client = omni_client
         self.asr_client = asr_client
+
+    def _ensure_clip_preview_video(self, clip) -> None:
+        """Monolith process_bag/extract_bag still produce preview MP4 when enabled.
+
+        Atomic extract no longer encodes by default (see encode_preview capability);
+        this helper keeps the single-call pipeline behavior.
+        """
+        cfg = self.clip_video_config
+        if not cfg.enabled or clip.clip_video_path:
+            return
+        if not (clip.video_frames or clip.frames) or not clip.audio:
+            return
+        clip_dir = Path(clip.audio.audio_path).parent
+        try:
+            render_clip_preview_video(clip, clip_dir / cfg.filename, config=cfg)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Clip preview MP4 failed for %s: %s", clip.clip_id, exc)
 
     def _get_asr_client(self) -> AsrClient | None:
         if self.asr_client is not None:
@@ -122,6 +144,8 @@ class LabelEmbeddingPipeline:
                 clip_video_config=self.clip_video_config,
             )
         )
+        for clip in clips:
+            self._ensure_clip_preview_video(clip)
         count = write_jsonl(clips_out, (clip.to_meta() for clip in clips))
         videos_path = videos_out or OutputConfig().videos_out
         video_count = write_jsonl(videos_path, (_clip_video_row(clip) for clip in clips))
@@ -164,6 +188,7 @@ class LabelEmbeddingPipeline:
             acoustic_panel_config=self.acoustic_panel_config,
             clip_video_config=self.clip_video_config,
         ):
+            self._ensure_clip_preview_video(clip)
             video_rows.append(_clip_video_row(clip))
             try:
                 asr_meta = self._run_asr(clip)

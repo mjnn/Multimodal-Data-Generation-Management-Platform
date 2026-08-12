@@ -19,12 +19,20 @@ def make_oss_client(
     access_key_secret: str,
     region: str,
     endpoint: str | None = None,
+    security_token: str | None = None,
 ) -> oss.Client:
     cfg = oss.config.load_default()
-    cfg.credentials_provider = oss.credentials.StaticCredentialsProvider(
-        access_key_id,
-        access_key_secret,
-    )
+    if security_token:
+        cfg.credentials_provider = oss.credentials.StaticCredentialsProvider(
+            access_key_id,
+            access_key_secret,
+            security_token,
+        )
+    else:
+        cfg.credentials_provider = oss.credentials.StaticCredentialsProvider(
+            access_key_id,
+            access_key_secret,
+        )
     cfg.region = normalize_oss_region(region)
     if endpoint:
         cfg.endpoint = endpoint

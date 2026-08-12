@@ -77,15 +77,20 @@ http.interceptors.response.use(
   },
 )
 
-export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+export async function fetchJson<T>(
+  path: string,
+  init?: RequestInit & { timeout?: number },
+): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase()
   const headers = init?.headers as Record<string, string> | undefined
   const body = init?.body
+  const timeout = init?.timeout
 
   const res = await http.request<T>({
     url: path,
     method,
     headers,
+    timeout,
     data:
       body && typeof body === 'string' && headers?.['Content-Type'] !== 'multipart/form-data'
         ? JSON.parse(body)

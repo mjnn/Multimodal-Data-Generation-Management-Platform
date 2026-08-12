@@ -82,6 +82,19 @@ def apply_env_from_args(backend: ModelBackend) -> None:
     set_env_from_arg("OSS_VL_ACCESS_KEY_SECRET", "oss_vl_access_key_secret")
     set_env_from_arg("MC_OSS_ACCESS_KEY_ID", "oss_vl_access_key_id")
     set_env_from_arg("MC_OSS_ACCESS_KEY_SECRET", "oss_vl_access_key_secret")
+    set_env_from_arg("ODPS_CATALOG_ENDPOINT", "odps_catalog_endpoint")
+    if not os.environ.get("ODPS_CATALOG_ENDPOINT", "").strip():
+        endpoint = (os.environ.get("ODPS_ENDPOINT") or get_arg("odps_endpoint") or "").strip().rstrip("/")
+        if endpoint.endswith("/api"):
+            endpoint = endpoint[:-4]
+        if endpoint:
+            os.environ["ODPS_CATALOG_ENDPOINT"] = endpoint
+        else:
+            region = (get_arg("cloud_region", "cn_shanghai") or "cn_shanghai").replace("_", "-")
+            os.environ["ODPS_CATALOG_ENDPOINT"] = (
+                f"http://service.{region}.maxcompute.apsara-inc.com"
+            )
+    os.environ.setdefault("MC_USE_INTERNAL_CATALOG", "true")
 
 
 def validate_mc_backend() -> None:

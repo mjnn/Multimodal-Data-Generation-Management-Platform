@@ -44,7 +44,7 @@ from hmi.data_source import (
     LOCAL_ROOT,
 )
 from hmi.db import cache_clear
-from hmi.hmi_baseline_reset import reset_hmi_artifacts_to_baseline
+from hmi.hmi_baseline_reset import get_reset_progress, reset_hmi_artifacts_to_baseline
 from hmi.local.pipeline_router import router as pipeline_local_router
 from hmi.local.store import get_meta
 from hmi.router import clips_svc, search_svc
@@ -65,9 +65,11 @@ async def lifespan(_app: FastAPI):
     from hmi.data_source import ensure_runtime_layout
     from hmi.local.store import ensure_db
     from hmi.services import local_sdk_worker
+    from hmi.test_mode import enforce_data_source_for_test_mode, is_test_mode
 
     ensure_runtime_layout()
-    if get_data_source() == "local":
+    mode = enforce_data_source_for_test_mode()
+    if mode == "local":
         ensure_db()
         if os.getenv("HMI_MIRROR_ARTIFACTS_TO_OSS", "1").strip().lower() in {"1", "true", "yes", "on"}:
             try:
@@ -80,14 +82,20 @@ async def lifespan(_app: FastAPI):
                     )
             except Exception:
                 logging.getLogger(__name__).exception("artifact→OSS mirror on startup failed")
+    elif not is_test_mode():
+        logging.getLogger(__name__).info("HMI_TEST_MODE off → data_source forced to cloud")
     threading.Thread(target=_warmup, daemon=True).start()
     oss_sync_poller.start_poller()
     local_sdk_worker.start_poller()
+    from hmi.services import cloud_bag_trigger_poller
+
+    cloud_bag_trigger_poller.start_poller()
     try:
         yield
     finally:
         local_sdk_worker.stop_poller()
         oss_sync_poller.stop_poller()
+        cloud_bag_trigger_poller.stop_poller()
 
 
 app = FastAPI(title="多模数据管理平台 API", lifespan=lifespan)
@@ -121,10 +129,13 @@ class DataSourceBody(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    mode = get_data_source()
+    from hmi.test_mode import enforce_data_source_for_test_mode, is_test_mode
+
+    mode = enforce_data_source_for_test_mode()
     out: dict[str, Any] = {
         "ok": True,
         "data_source": mode,
+        "test_mode": is_test_mode(),
         "local_db": local_db_exists(),
     }
     if is_local_mode():
@@ -151,9 +162,11 @@ def health() -> dict[str, Any]:
         "last_sync_at": poll.get("last_sync_at"),
         "last_sync_clip_id": poll.get("last_sync_clip_id"),
     }
-    from hmi.services import local_sdk_worker
+    from hmi.services import cloud_bag_trigger_poller, local_sdk_worker
 
-    out["local_sdk_poller"] = local_sdk_worker.get_worker_status()
+    # Self-heal: switching to local via UI/env must not leave poller "enabled" but thread-dead.
+    out["local_sdk_poller"] = local_sdk_worker.ensure_poller_running()
+    out["cloud_bag_poller"] = cloud_bag_trigger_poller.get_poller_status()
     return out
 
 
@@ -167,6 +180,28 @@ def api_sync_poller_status(_user: dict = Depends(require_pipeline_access)) -> di
     return oss_sync_poller.get_poller_status()
 
 
+@app.get("/api/pipeline/cloud-bag-poller")
+def api_cloud_bag_poller_status(
+    _user: dict = Depends(require_pipeline_access),
+) -> dict[str, Any]:
+    from hmi.services import cloud_bag_trigger_poller
+
+    return cloud_bag_trigger_poller.get_poller_status()
+
+
+@app.post("/api/pipeline/cloud-bag-poller/scan")
+def api_cloud_bag_poller_scan_now(
+    _user: dict = Depends(require_pipeline_write),
+) -> dict[str, Any]:
+    """Manual orphan scan + DataWorks trigger (online mode)."""
+    from hmi.data_source import is_cloud_mode
+    from hmi.services import cloud_bag_trigger_poller
+
+    if not is_cloud_mode():
+        raise HTTPException(400, "cloud bag poller only runs in online mode")
+    return cloud_bag_trigger_poller.run_scan_now()
+
+
 @app.put("/api/sync/poller")
 def api_set_sync_poller(
     body: SyncPollerBody,
@@ -178,25 +213,50 @@ def api_set_sync_poller(
 
 
 @app.get("/api/config/data-source")
-def api_get_data_source() -> dict[str, str]:
-    return {"data_source": get_data_source()}
+def api_get_data_source() -> dict[str, Any]:
+    from hmi.test_mode import enforce_data_source_for_test_mode, is_test_mode
+
+    return {
+        "data_source": enforce_data_source_for_test_mode(),
+        "test_mode": is_test_mode(),
+    }
 
 
 @app.post("/api/config/data-source")
 def api_set_data_source(
     body: DataSourceBody,
     _user: dict[str, Any] = Depends(require_non_anonymous),
-) -> dict[str, str]:
+) -> dict[str, Any]:
+    from hmi.test_mode import is_test_mode
+
+    if body.data_source.strip().lower() == "local" and not is_test_mode():
+        raise HTTPException(
+            403,
+            detail={
+                "code": "TEST_MODE_REQUIRED",
+                "message": "非测试模式仅支持云端数据源；请在系统参数中开启 HMI_TEST_MODE",
+            },
+        )
     try:
         mode = set_data_source(body.data_source)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    from hmi.services import cloud_bag_trigger_poller, local_sdk_worker
+
     if mode == "local":
         from hmi.local.store import ensure_db
 
         ensure_db()
+        local_sdk_worker.start_poller()
+    else:
+        local_sdk_worker.stop_poller()
+        cloud_bag_trigger_poller.start_poller()
     cache_clear()
-    return {"data_source": mode}
+    return {
+        "data_source": mode,
+        "test_mode": is_test_mode(),
+        "local_sdk_poller": local_sdk_worker.get_worker_status(),
+    }
 
 
 @app.post("/api/cache-clear")
@@ -256,12 +316,35 @@ def api_list_demo_clips(
         raise HTTPException(500, str(exc)) from exc
 
 
+@app.get("/api/hmi/reset-artifacts/status")
+def api_reset_hmi_artifacts_status(
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    return get_reset_progress()
+
+
 @app.post("/api/hmi/reset-artifacts")
 def api_reset_hmi_artifacts(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     try:
         result = reset_hmi_artifacts_to_baseline()
         cache_clear()
         return result
+    except PermissionError as exc:
+        raise HTTPException(
+            403,
+            detail={"code": "TEST_MODE_REQUIRED", "message": str(exc)},
+        ) from exc
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "已有重置任务" in msg:
+            raise HTTPException(
+                409,
+                detail={"code": "RESET_IN_PROGRESS", "message": msg},
+            ) from exc
+        raise HTTPException(
+            500,
+            detail={"code": "HMI_RESET_FAILED", "message": msg},
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             500,
@@ -361,6 +444,47 @@ def api_timeline(
         raise HTTPException(404, str(exc)) from exc
 
 
+@app.get("/api/clips/{clip_id}/bboxes")
+def api_clip_bboxes(
+    clip_id: str,
+    run_id: str = Query(..., min_length=1),
+    timestamp_ns: int | None = Query(default=None),
+    window_ms: int = Query(200, ge=0, le=5000),
+    _user: dict[str, Any] = Depends(require_clip_explorer_access),
+) -> dict[str, Any]:
+    """BBox detections from bboxes.jsonl near the playhead (Clip 详情)."""
+    from hmi.data_source import is_local_mode
+    from hmi.media.bbox_jsonl import bboxes_at_timestamp, load_bbox_frames
+
+    clip_id = unquote(clip_id)
+    rid = run_id.strip()
+    if not is_local_mode():
+        return {
+            "clip_id": clip_id,
+            "run_id": rid,
+            "timestamp_ns": timestamp_ns,
+            "window_ms": window_ms,
+            "has_bboxes": False,
+            "frame_count": 0,
+            "frames_at_cursor": [],
+            "detections": [],
+            "message": "云端暂未提供 bboxes.jsonl 明细",
+        }
+    if timestamp_ns is None:
+        frames = load_bbox_frames(clip_id, rid)
+        return {
+            "clip_id": clip_id,
+            "run_id": rid,
+            "timestamp_ns": None,
+            "window_ms": window_ms,
+            "has_bboxes": bool(frames),
+            "frame_count": len(frames),
+            "frames_at_cursor": [],
+            "detections": [],
+        }
+    return bboxes_at_timestamp(clip_id, rid, int(timestamp_ns), window_ms=window_ms)
+
+
 @app.get("/api/clips/{clip_id}/events")
 def api_events(
     clip_id: str,
@@ -395,6 +519,31 @@ def api_search(
     _user: dict[str, Any] = Depends(require_clip_explorer_access),
 ) -> dict[str, Any]:
     return search_svc().search_labels(keyword, page, page_size)
+
+
+class OverviewClipQueryBody(BaseModel):
+    label_filters: dict[str, Any] | None = None
+    semantic_query: str = ""
+    top_k: int = 200
+    # Text lexical floor; embedding uses a higher fixed floor in clip_query_common.
+    min_score: float = 0.25
+
+
+@app.post("/api/clips/query")
+def api_clips_query(
+    body: OverviewClipQueryBody,
+    _user: dict[str, Any] = Depends(require_overview_access),
+) -> dict[str, Any]:
+    """数据总览：标签筛选 + 场景描述语义检索（返回匹配 clip_id 列表）。"""
+    top_k = max(1, min(int(body.top_k or 200), 500))
+    min_score = float(body.min_score if body.min_score is not None else 0.25)
+    min_score = max(0.0, min(min_score, 1.0))
+    return search_svc().query_overview_clips(
+        label_filters=body.label_filters,
+        semantic_query=body.semantic_query or "",
+        top_k=top_k,
+        min_score=min_score,
+    )
 
 
 @app.get("/api/search/clusters")
@@ -623,7 +772,15 @@ def api_oss_bag_pipeline(
 def api_get_pipeline_settings(
     _user: dict = Depends(require_pipeline_access),
 ) -> dict[str, Any]:
-    from hmi.local.pipeline_settings import get_model_option_lists, get_omni_label_prompt_schema, get_pipeline_settings
+    from hmi.local.pipeline_settings import (
+        get_bbox_detector_options,
+        get_bbox_yolo_class_catalog,
+        get_bbox_yolo_class_presets,
+        get_model_option_lists,
+        get_omni_label_prompt_schema,
+        get_pipeline_settings,
+        is_yolo_ready,
+    )
     from hmi.taxonomy_db import list_pipeline_taxonomy_versions
 
     from oms_multimodal.label_prompt import default_omni_label_prompt
@@ -645,6 +802,10 @@ def api_get_pipeline_settings(
             "taxonomy_versions": versions,
             "omni_label_prompt_defaults": default_omni_label_prompt(),
             "omni_label_prompt_fields": get_omni_label_prompt_schema(),
+            "bbox_detectors": get_bbox_detector_options(),
+            "bbox_yolo_classes": get_bbox_yolo_class_catalog(),
+            "bbox_yolo_presets": get_bbox_yolo_class_presets(),
+            "bbox_yolo_available": is_yolo_ready(),
         },
     }
 
@@ -654,7 +815,7 @@ def api_put_pipeline_settings(
     body: dict[str, Any],
     _user: dict = Depends(require_pipeline_write),
 ) -> dict[str, Any]:
-    from hmi.local.pipeline_settings import get_pipeline_settings, save_pipeline_settings
+    from hmi.local.pipeline_settings import save_pipeline_settings
 
     allowed = {
         "omni_model",
@@ -666,9 +827,22 @@ def api_put_pipeline_settings(
         "max_clips",
         "sdk_parallel",
         "omni_label_prompt",
+        "bbox_enabled",
+        "bbox_detector",
+        "bbox_element",
+        "encode_plain",
+        "encode_bbox",
+        "bbox_yolo_model",
+        "bbox_yolo_conf",
+        "bbox_yolo_classes",
+        "bbox_in_label_prompt",
+        "bbox_face_attrs",
     }
     updates = {k: body[k] for k in allowed if k in body}
-    saved = save_pipeline_settings(updates)
+    try:
+        saved = save_pipeline_settings(updates)
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"settings": saved}
 
 
@@ -676,42 +850,93 @@ def api_put_pipeline_settings(
 def api_list_pipeline_executions(
     page: int = 1,
     page_size: int = 10,
+    refresh: bool = Query(False, description="Bypass execution refresh throttle / bag cache"),
     _user: dict = Depends(require_pipeline_access),
 ) -> dict[str, Any]:
-    if not is_local_mode():
-        raise HTTPException(501, "pipeline executions API is local mode only")
-    from hmi.local.pipeline_execution import list_executions
+    if is_local_mode():
+        from hmi.local.pipeline_execution import list_executions
 
-    return list_executions(page=page, page_size=page_size)
+        return list_executions(page=page, page_size=page_size)
+    from hmi.services.cloud_pipeline_execution import list_executions as list_cloud_executions
+
+    return list_cloud_executions(page=page, page_size=page_size, refresh=refresh)
 
 
 @app.post("/api/pipeline/executions")
 async def api_create_pipeline_execution(
     files: list[UploadFile] = File(...),
+    trigger: bool = Query(
+        True,
+        description="Cloud only: false = upload to OSS only (no DataWorks OpenAPI). "
+        "Periodic DW schedules discover bags under rosbags/.",
+    ),
     _user: dict = Depends(require_pipeline_write),
 ) -> dict[str, Any]:
-    if not is_local_mode():
-        raise HTTPException(501, "pipeline executions API is local mode only")
     if not files:
-        raise HTTPException(400, "at least one .bag file required")
+        raise HTTPException(400, "at least one file required")
 
     from hmi.db import cache_clear
-    from hmi.local.pipeline_execution import enqueue_rosbags_batch
+    from hmi.local.source_upload import classify_source_filename
 
     batch_files: list[tuple[str, bytes]] = []
+    kinds: set[str] = set()
     for upload in files:
         name = upload.filename or ""
-        if not name.lower().endswith(".bag"):
-            raise HTTPException(400, f"only .bag files are accepted: {name}")
+        kind = classify_source_filename(name)
+        if kind is None:
+            raise HTTPException(
+                400,
+                f"unsupported file type: {name} "
+                "(accept .bag / video mp4|webm|mov|mkv / audio wav|mp3|m4a|flac|ogg / text txt|json|md|csv)",
+            )
+        kinds.add(kind)
         data = await upload.read()
         batch_files.append((name, data))
 
+    has_media = bool(kinds & {"video", "audio", "text"})
+
+    if is_local_mode():
+        from hmi.local.pipeline_execution import enqueue_pipeline_sources_batch, enqueue_rosbags_batch
+
+        try:
+            if has_media:
+                result = enqueue_pipeline_sources_batch(batch_files)
+            else:
+                result = enqueue_rosbags_batch(batch_files)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(500, f"enqueue failed: {exc}") from exc
+        cache_clear()
+        return result
+
+    if has_media:
+        raise HTTPException(
+            400,
+            "原始视频/音频/文本上传目前仅支持本地模式；云端请继续上传 .bag，或切换数据源为 local",
+        )
+
+    from hmi.services.cloud_pipeline_execution import enqueue_rosbags_cloud
+    from hmi.services.dataworks_trigger import DataWorksConfigError, DataWorksThrottleError
+
     try:
-        result = enqueue_rosbags_batch(batch_files)
+        result = enqueue_rosbags_cloud(batch_files, trigger=bool(trigger))
+    except DataWorksThrottleError as exc:
+        raise HTTPException(429, detail={"code": "DATAWORKS_THROTTLED", "message": str(exc)}) from exc
+    except DataWorksConfigError as exc:
+        raise HTTPException(503, detail={"code": "DATAWORKS_CONFIG", "message": str(exc)}) from exc
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, detail={"code": "BAD_REQUEST", "message": str(exc)}) from exc
     except Exception as exc:
-        raise HTTPException(500, f"enqueue failed: {exc}") from exc
+        logging.getLogger(__name__).exception("cloud enqueue failed")
+        msg = str(exc)
+        if "Throttling" in msg or "熔断" in msg or "调用次数已达上限" in msg:
+            raise HTTPException(
+                429, detail={"code": "DATAWORKS_THROTTLED", "message": msg}
+            ) from exc
+        raise HTTPException(
+            500, detail={"code": "CLOUD_ENQUEUE_FAILED", "message": f"cloud enqueue failed: {exc}"}
+        ) from exc
     cache_clear()
     return result
 

@@ -45,6 +45,7 @@ values:
   eating_while_driving: 驾驶中进食
   evening: 晚上
   evening_commute: 晚高峰通勤
+  evening_period: 晚间段
   execute_directly: 直接执行
   expressway: 快速路/高速
   external_event: 外部事件
@@ -76,11 +77,14 @@ values:
   local_street: 地方道路
   makeup: 化妆
   mild_fatigue: 轻度疲劳
+  midday_period: 日间段
   mixed: 混合光
   moderate_distraction: 中度分心
   moderate_fatigue: 中度疲劳
   morning: 上午
   morning_commute: 早高峰通勤
+  morning_period: 早间段
+  moderate_rain: 中雨
   mouth_open: mouth open
   music_player: 音乐播放器
   natural: 自然光
@@ -114,6 +118,7 @@ values:
   phone_while_driving: 驾驶中使用手机
   proactive_push: 主动推送
   reading: 阅读
+  rain: 雨
   rear_center: 后排中
   rear_left: 后排左
   rear_mirror: 内后视镜

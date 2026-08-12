@@ -51,7 +51,9 @@ def _w_params(ctx: LocalClipContext) -> tuple[str, str, str]:
 def _step_order_for_ids(step_ids: set[str]) -> tuple[str, ...]:
     if step_ids & set(SDK_PIPELINE_STEP_ORDER):
         return sdk_pipeline_step_order(local=True)
-    return PIPELINE_STEP_ORDER
+    if step_ids & (set(PIPELINE_STEP_ORDER) - {"job0_discover", "sdk_discover"}):
+        return PIPELINE_STEP_ORDER
+    return sdk_pipeline_step_order(local=True)
 
 
 def _pending_steps(step_ids: set[str] | None = None) -> list[dict[str, Any]]:
@@ -535,7 +537,9 @@ def get_timeline_meta(
         sync_mode = detect_sample_sync_mode(label_rows)
     cameras = _cameras_for_clip(cid, rid, ds)
     if preview_doc and isinstance(preview_doc.get("cameras"), dict):
-        cameras = sorted(preview_doc["cameras"].keys()) or cameras
+        cameras = sorted(
+            k for k in preview_doc["cameras"].keys() if str(k).lower().startswith("camera")
+        ) or cameras
     return {
         "sampled_timestamps_ns": sampled_ts,
         "sample_sync_mode": sync_mode,

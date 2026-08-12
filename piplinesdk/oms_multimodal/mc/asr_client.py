@@ -11,6 +11,7 @@ from ..asr_client import AsrConfig
 from ..exceptions import ConfigurationError
 from ..rosbag_parser import Clip
 from .config import McBackendConfig
+from .content_parts import build_asr_audio_parts, populate_media_columns
 from .runtime import (
     McRuntime,
     _fetch_series,
@@ -23,7 +24,7 @@ from .runtime import (
 
 
 class McAsrClient:
-    """通过 MaxFrame AI Function + input_audio 做 clip ASR。"""
+    """通过 MaxFrame AI Function 做 clip ASR（2.8+ 优先 content_part.audio）。"""
 
     def __init__(
         self,
@@ -63,14 +64,6 @@ class McAsrClient:
         import maxframe.dataframe as md
 
         llm = create_ai_model(model, self.runtime.odps_entry, modelset_project=self.config.modelset_project)
-        audio_url = self._resolve_audio_url(path)
-        df = md.DataFrame(pd.DataFrame([{"audio_url": audio_url}]))
-        messages = [
-            {
-                "role": "user",
-                "content": [{"type": "input_audio", "input_audio": {"data": "{audio_url}"}}],
-            }
-        ]
         params: dict[str, Any] = {"asr_options": {"enable_itn": self.asr_config.enable_itn}}
         if self.asr_config.language:
             params["asr_options"]["language"] = self.asr_config.language.split("-")[0].lower()
@@ -80,6 +73,30 @@ class McAsrClient:
         if running:
             gen_kwargs["running_options"] = running
         storage = self.config.storage_options()
+
+        mc_mode = "legacy_input_audio"
+        if hasattr(llm, "content_part"):
+            row: dict[str, Any] = {}
+            populate_media_columns(
+                row,
+                config=self.config,
+                local_path=str(path),
+                column_prefix="audio",
+            )
+            df = md.DataFrame(pd.DataFrame([row]))
+            cp = llm.content_part
+            parts = build_asr_audio_parts(cp=cp, df=df, config=self.config)
+            messages = [{"role": "user", "content": parts}]
+            mc_mode = "content_part_audio"
+        else:
+            audio_url = self._resolve_audio_url(path)
+            df = md.DataFrame(pd.DataFrame([{"audio_url": audio_url}]))
+            messages = [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_audio", "input_audio": {"data": "{audio_url}"}}],
+                }
+            ]
 
         def _generate(**extra: Any) -> Any:
             kwargs = {**gen_kwargs, **extra}
@@ -105,6 +122,7 @@ class McAsrClient:
             "request_id": "",
             "usage": None,
             "backend": "maxframe_mc",
+            "mc_mode": mc_mode,
         }
 
     def transcribe_clip(self, clip: Clip) -> dict[str, Any]:

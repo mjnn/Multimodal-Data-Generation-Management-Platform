@@ -4,6 +4,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Record<string, string> = {
   dataset_snapshot: '数据集快照',
   clip_label_review: 'Clip 校核',
   clip_label_field_review: '字段校核',
+  clip_bbox_qa: 'BBox 质量标记',
   aug_recipe: '扩增配方',
   taxonomy_proposal: '标签提案',
   review_assignment_batch: '校核派发批次',

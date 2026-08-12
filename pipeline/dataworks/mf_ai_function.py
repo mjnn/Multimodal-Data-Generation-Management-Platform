@@ -9,6 +9,7 @@ Do not import business modules from DPE UDF; call these from Driver only.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
@@ -135,7 +136,7 @@ def _account_security_token(account: Any) -> str:
 
 
 def ai_image_storage_options(account: Any) -> dict[str, str]:
-    """Long-term AK/SK or STS triple for MaxFrame VL IMAGE_URL reads."""
+    """Long-term AK/SK or STS triple for MaxFrame VL OSS URL reads."""
     access_id = str(account.access_id)
     opts: dict[str, str] = {
         "access_key_id": access_id,
@@ -153,7 +154,7 @@ def resolve_vl_storage_options(
     *,
     role_arn: str | None = None,
 ) -> dict[str, str]:
-    """Resolve OSS AK/SK for ``cp.image(IMAGE_URL)``.
+    """Resolve OSS AK/SK for ``cp.image(URL)``.
 
     MaxFrame VL **only** accepts ``access_key_id`` + ``access_key_secret`` here.
     ``role_arn`` is for DPE ``@with_fs_mount`` only and must not be passed to
@@ -176,7 +177,7 @@ def resolve_vl_storage_options(
             return resolved
 
     raise ValueError(
-        "VL IMAGE_URL requires long-term OSS access_key_id/access_key_secret "
+        "VL OSS URL mode requires long-term OSS access_key_id/access_key_secret "
         "(workflow: oss_vl_access_key_id + oss_vl_access_key_secret). "
         "oss_ram_role_arn is for DPE mount only, not MaxFrame cp.image."
     )
@@ -215,7 +216,7 @@ def build_vl_oss_storage_options(
     oss_access_key_id: str | None = None,
     oss_access_key_secret: str | None = None,
 ) -> dict[str, str] | None:
-    """Build ``storage_options`` for ``cp.image(IMAGE_URL)`` (AK/SK only)."""
+    """Build ``storage_options`` for ``cp.image(URL)`` (AK/SK only)."""
     del role_arn  # mount-only
     ak = (oss_access_key_id or "").strip()
     sk = (oss_access_key_secret or "").strip()
@@ -291,19 +292,37 @@ def build_label_prompt(taxonomy: dict[str, Any], *, compact: bool = True) -> str
 
 
 def ensure_odps_catalog_endpoint(odps_entry: Any) -> None:
-    """DataWorks internal ODPS may resolve catalog host without http(s) scheme."""
+    """DataWorks / DPE: use internal Catalog host for read_odps_model."""
     if odps_entry is None:
+        return
+    explicit = os.environ.get("ODPS_CATALOG_ENDPOINT", "").strip()
+    if explicit:
+        catalog = explicit
+        if not catalog.startswith(("http://", "https://")):
+            catalog = f"http://{catalog.lstrip('/')}"
+        odps_entry._catalog_endpoint = catalog.rstrip("/")
+        odps_entry._catalog_rest = None
         return
     try:
         catalog = odps_entry.catalog_endpoint
     except Exception:
         catalog = getattr(odps_entry, "_catalog_endpoint", None)
     if not catalog:
+        region = os.environ.get("MC_CLOUD_REGION", "cn_shanghai").replace("_", "-")
+        endpoint = os.environ.get("ODPS_ENDPOINT", "").strip().rstrip("/")
+        if endpoint.endswith("/api"):
+            endpoint = endpoint[:-4]
+        odps_entry._catalog_endpoint = (
+            endpoint.rstrip("/")
+            if endpoint
+            else f"http://service.{region}.maxcompute.apsara-inc.com"
+        )
+        odps_entry._catalog_rest = None
         return
     catalog_str = str(catalog).strip()
-    if catalog_str.startswith(("http://", "https://")):
-        return
-    odps_entry._catalog_endpoint = f"https://{catalog_str.lstrip('/')}"
+    if not catalog_str.startswith(("http://", "https://")):
+        catalog_str = f"http://{catalog_str.lstrip('/')}"
+    odps_entry._catalog_endpoint = catalog_str.rstrip("/")
     odps_entry._catalog_rest = None
 
 
@@ -489,7 +508,7 @@ def ai_embed_oss_image_urls(
     request_timeout: int | None = None,
     ai_memory: str | None = None,
 ) -> list[list[float]]:
-    """Embed OSS images via VL embedding model + IMAGE_URL."""
+    """Embed OSS images via VL embedding model + ``ImageContentType.URL``."""
     if not image_urls:
         return []
     if not model_name:
@@ -517,7 +536,7 @@ def ai_embed_oss_image_urls(
         image_input = [
             cp.image(
                 data=df.image_url,
-                type=ImageContentType.IMAGE_URL,
+                type=ImageContentType.URL,
                 storage_options=vl_storage_options,
             ),
         ]
@@ -639,7 +658,7 @@ def ai_transcribe_segments(
     request_timeout: int | None = None,
     ai_memory: str | None = None,
 ) -> list[dict[str, Any]]:
-    """ASR via Qwen-ASR + input_audio (OSS wav URL). Not text LLM + URL in prompt."""
+    """ASR via Qwen-ASR（MaxFrame 2.8+ 优先 ``content_part.audio``，否则 ``input_audio``）。"""
     if not model_name:
         return [
             {
@@ -685,21 +704,35 @@ def ai_transcribe_segments(
     if lang:
         asr_options["language"] = lang.split("-")[0].lower()
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_audio",
-                    "input_audio": {"data": "{audio_url}"},
-                }
-            ],
-        }
-    ]
     params: dict[str, Any] = {"asr_options": asr_options}
     oss_opts: dict[str, str] | None = None
     if storage_options:
         oss_opts = resolve_vl_storage_options(storage_options, odps_entry)
+
+    if hasattr(llm, "content_part"):
+        from maxframe.learn.contrib.llm import AudioContentType
+
+        cp = llm.content_part
+        audio_part: dict[str, Any] = {
+            "data": getattr(df, "audio_url"),
+            "type": AudioContentType.URL,
+            "mime_type": "audio/wav",
+        }
+        if oss_opts:
+            audio_part["storage_options"] = oss_opts
+        messages = [{"role": "user", "content": [cp.audio(**audio_part)]}]
+    else:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "{audio_url}"},
+                    }
+                ],
+            }
+        ]
 
     def _run_asr_generate(**extra: Any) -> md.DataFrame:
         gen_kwargs: dict[str, Any] = {"simple_output": True, "params": params, **extra}
@@ -851,7 +884,7 @@ def ai_label_sync_groups_with_model(
                 content_parts.append(
                     cp.image(
                         data=getattr(df, f"image_url_{idx}"),
-                        type=ImageContentType.IMAGE_URL,
+                        type=ImageContentType.URL,
                         storage_options=vl_storage_options,
                     )
                 )
@@ -1005,7 +1038,7 @@ def ai_label_frames_with_model(
             df = _rebalance_df(md.DataFrame(pd.DataFrame(rows)), partitions)
             image_part = cp.image(
                 data=df.image_url,
-                type=ImageContentType.IMAGE_URL,
+                type=ImageContentType.URL,
                 storage_options=vl_storage_options,
             )
 

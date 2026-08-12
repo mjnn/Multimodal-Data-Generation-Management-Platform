@@ -1,4 +1,5 @@
-"""Short TTL cache for overview list + batch stats (local / cloud)."""
+# Short TTL cache for overview list + batch stats (local / cloud).
+# Frontend must NOT always pass refresh=1 or this is ineffective.
 
 from __future__ import annotations
 

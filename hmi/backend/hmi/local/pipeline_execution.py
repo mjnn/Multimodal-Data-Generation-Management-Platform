@@ -57,6 +57,82 @@ def enqueue_rosbags_batch(files: list[tuple[str, bytes]]) -> dict[str, Any]:
                 "bag_oss_key": saved["bag_oss_key"],
                 "local_path": saved.get("local_path"),
                 "size_bytes": saved.get("size_bytes"),
+                "source_kind": "rosbag",
+            }
+        )
+
+    return {
+        "run_id": run_id,
+        "label": label,
+        "started_at": started_at,
+        "ds": ds,
+        "clips": clips,
+    }
+
+
+def enqueue_pipeline_sources_batch(files: list[tuple[str, bytes]]) -> dict[str, Any]:
+    """Enqueue a mixed batch: each .bag → one clip; non-bag media → one shared source clip."""
+    if not files:
+        raise ValueError("at least one file required")
+
+    from hmi.local.source_upload import classify_source_filename, save_uploaded_sources
+
+    bags: list[tuple[str, bytes]] = []
+    media: list[tuple[str, bytes]] = []
+    for filename, data in files:
+        kind = classify_source_filename(filename)
+        if kind == "bag":
+            bags.append((filename, data))
+        elif kind in {"video", "audio", "text"}:
+            media.append((filename, data))
+        else:
+            raise ValueError(f"unsupported upload file: {filename}")
+
+    if not bags and not media:
+        raise ValueError("no rosbag or media files found")
+
+    run_id = str(uuid.uuid4())
+    started_at = _utc_now_z()
+    label = execution_label_now()
+    create_execution_record(run_id=run_id, label=label, started_at=started_at)
+    ds = datetime.now(ZoneInfo("UTC")).strftime("%Y%m%d")
+    clips: list[dict[str, Any]] = []
+
+    for filename, data in bags:
+        saved = bag_upload.save_uploaded_rosbag(
+            filename,
+            data,
+            run_id=run_id,
+            ds=ds,
+            execution_started_at=started_at,
+        )
+        clips.append(
+            {
+                "clip_id": saved["clip_id"],
+                "oss_key": saved["oss_key"],
+                "bag_oss_key": saved["bag_oss_key"],
+                "local_path": saved.get("local_path"),
+                "size_bytes": saved.get("size_bytes"),
+                "source_kind": "rosbag",
+            }
+        )
+
+    if media:
+        saved = save_uploaded_sources(
+            media,
+            run_id=run_id,
+            ds=ds,
+            execution_started_at=started_at,
+        )
+        clips.append(
+            {
+                "clip_id": saved["clip_id"],
+                "oss_key": saved["oss_key"],
+                "bag_oss_key": saved["bag_oss_key"],
+                "local_path": saved.get("local_path"),
+                "size_bytes": saved.get("size_bytes"),
+                "source_kind": "raw_media",
+                "modalities": saved.get("modalities"),
             }
         )
 

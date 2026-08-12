@@ -9,21 +9,27 @@ MediaInputMode = Literal["local", "oss", "auto"]
 
 # DataWorks step_id → SDK 原子能力（多节点编排时一节点一能力）
 CAPABILITY_IDS = (
-    "extract",      # sdk_extract — 解析 bag，无 AI
-    "transcribe",   # sdk_asr
-    "label",        # sdk_label
-    "embed",        # sdk_embed
-    "preview",      # sdk_preview — 整理 preview/ 目录
+    "ingest_sources",  # sdk_ingest — 原始 video/audio/text → clips_index（含抽帧）
+    "extract",         # sdk_extract — 解析 bag，无 AI
+    "annotate_bbox",   # sdk_bbox — 帧级检测 + 画框
+    "encode_preview",  # sdk_encode — 可选 plain / bbox MP4（已有成片则跳过）
+    "transcribe",      # sdk_asr
+    "label",           # sdk_label
+    "embed",           # sdk_embed
+    "preview",         # sdk_preview — 整理 preview/ 目录
 )
 
 STEP_TO_CAPABILITY: dict[str, str] = {
+    "sdk_ingest": "ingest_sources",
     "sdk_extract": "extract",
     "sdk_discover": "extract",  # discover 可只做登记；extract 含解析
+    "sdk_bbox": "annotate_bbox",
+    "sdk_encode": "encode_preview",
     "sdk_asr": "transcribe",
     "sdk_label": "label",
     "sdk_embed": "embed",
     "sdk_preview": "preview",
-    "sdk_infer": "infer_full",  # 复合：extract→asr→label→embed→preview（单节点便利）
+    "sdk_infer": "infer_full",  # 复合：extract→…→label→embed→preview（单节点便利）
 }
 
 
@@ -76,6 +82,10 @@ class RunContext:
     def videos_path(self) -> Path:
         return self.run_dir / "clip_videos.jsonl"
 
+    @property
+    def bboxes_path(self) -> Path:
+        return self.run_dir / "bboxes.jsonl"
+
 
 @dataclass
 class ExtractResult:
@@ -105,6 +115,24 @@ class LabelResult:
 class EmbedResult:
     embeddings_out: Path
     row_count: int
+    errors: list[dict[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class BBoxResult:
+    bboxes_out: Path
+    frame_count: int
+    box_count: int
+    clip_count: int
+    errors: list[dict[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class EncodePreviewResult:
+    videos_out: Path
+    plain_count: int
+    bbox_count: int
+    variants: list[str] = field(default_factory=list)
     errors: list[dict[str, str]] = field(default_factory=list)
 
 

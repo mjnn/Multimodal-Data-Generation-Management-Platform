@@ -72,18 +72,21 @@ class OmniLabelClient:
         """
         content: list[dict[str, Any]] = []
 
-        if len(clip.frames) >= 2:
+        from .mc.content_parts import omni_frame_paths
+
+        frame_paths = omni_frame_paths(clip, limit=None)
+        if len(frame_paths) >= 2:
             content.append(
                 {
                     "type": "video",
-                    "video": [self._frame_data_uri(f.image_path) for f in clip.frames],
+                    "video": [self._frame_data_uri(p) for p in frame_paths],
                 }
             )
-        elif len(clip.frames) == 1:
+        elif len(frame_paths) == 1:
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": self._frame_data_uri(clip.frames[0].image_path)},
+                    "image_url": {"url": self._frame_data_uri(frame_paths[0])},
                 }
             )
 
@@ -101,6 +104,7 @@ class OmniLabelClient:
             speech_context=speech_context,
             event_text=event_text,
             params=prompt_params,
+            bbox_context=getattr(clip, "bbox_context_text", None) or "",
         )
         content.append({"type": "text", "text": f"{user_text}\n\n{prompt}"})
 

@@ -62,7 +62,14 @@ function formatFilterJson(filter: DatasetSnapshot['filter_json']): string {
   if (filter.max_per_class) parts.push(`每类最多 ${filter.max_per_class}`)
   if (filter.label_filters && Object.keys(filter.label_filters).length > 0) {
     const labels = Object.entries(filter.label_filters)
-      .map(([k, v]) => `${k}=${String(v)}`)
+      .map(([k, v]) => {
+        if (Array.isArray(v)) return `${k}∈[${v.join(',')}]`
+        if (v && typeof v === 'object') {
+          const r = v as { min?: unknown; max?: unknown }
+          return `${k}∈[${r.min ?? '−∞'},${r.max ?? '+∞'}]`
+        }
+        return `${k}=${String(v)}`
+      })
       .join('；')
     parts.push(`按标签筛选: ${labels}`)
   }
@@ -116,7 +123,11 @@ export function DatasetDetailPage() {
   const deriveBalanceOptions = useMemo(
     () =>
       deriveTaxonomyNodes
-        .filter((n) => n.is_active !== false && n.dtype === 'enum')
+        .filter((n) => {
+          if (n.is_active === false) return false
+          const d = (n.dtype || '').toLowerCase()
+          return d === 'enum' || d === 'enum_tree'
+        })
         .map((n) => ({
           value: n.label_id,
           label: `${n.name ?? n.label_id} (${n.label_id})`,

@@ -16,6 +16,7 @@ import { useAuth } from '../auth/AuthContext'
 import { canAccessReview } from '../auth/roles'
 import { ContentCard } from './ui'
 import { ClipLabelTreeView } from './ClipLabelTreeView'
+import { ClipBboxDetailSection, clipBboxCollapseLabel } from './ClipBboxDetailSection'
 import { extractAiHintsFromLabels } from '../utils/labelDisplay'
 
 interface Props {
@@ -174,6 +175,13 @@ export function MomentDetailPanel({
       ),
     },
     {
+      key: 'bbox',
+      label: clipBboxCollapseLabel(),
+      children: (
+        <ClipBboxDetailSection clipId={clip.clip_id} runId={runId} cursorNs={cursorNs} />
+      ),
+    },
+    {
       key: 'asr',
       label: (
         <Typography.Text strong>
@@ -223,7 +231,7 @@ export function MomentDetailPanel({
         <Collapse
           className="clip-detail-panel__collapse"
           bordered={false}
-          defaultActiveKey={[]}
+          defaultActiveKey={['bbox']}
           items={collapseItems}
         />
       </ContentCard>

@@ -1,5 +1,49 @@
 # 进度变更日志（倒序）
 
+## 2026-08-12 — HMI-SDK-MODALITY（原始媒体 + Planner 模态门控）
+
+- **Planner**：`source_manifest` / 显式模态 → 跳过 encode（成片）、ASR（无音频）、bbox/encode（无视频）；新增 `ingest_sources`（抽帧）
+- **HMI**：管线管理暂存区支持 video/audio/text；本地落盘 `sources/…/source_manifest.json`；worker `plan_and_run`
+- **验收**：`acceptance/HMI-SDK-MODALITY.md`；`tests.test_planner` 8/8；`test_source_upload_modality.py` 2/2
+- **剩余**：云端原始媒体、多视频分 clip、Playwright；推荐下一步仍为 HMI 在线 H-2
+
+## 2026-08-12 — HMI-SDK-BBOX OpenCV 5 Haar 修复
+
+- **根因**：`opencv-python-headless` 5.0 的 `cv2/data` 无 cascade XML，且主包已移除 `CascadeClassifier`
+- **修复**：`resolve_haar_cascade_path` 多路径 + env；打包 Haar XML + YuNet ONNX；cv2≥5 自动 `FaceDetectorYN`
+- **验收**：`acceptance/HMI-SDK-BBOX.md` A-4；`unittest tests.test_bbox_capability` pass
+
+## 2026-08-12 — HMI-SDK-BBOX（local-first）
+
+- **管线参数**：`bbox_enabled` / `bbox_detector` / `bbox_element` / `encode_*` / YOLO 字段 → `BBOX_*`/`ENCODE_*`
+- **Worker**：`local_sdk_worker` 改 `infer_full`（annotate_bbox + encode_preview）
+- **预览**：SDK `cameras_bbox` + HMI `bbox_url`；Explorer Plain|BBox 切换
+- **Taxonomy**：Hub `enum_tree` 编辑/展示；insights 叶子 id
+- **验收**：`acceptance/HMI-SDK-BBOX.md`；`test_hmi_sdk_bbox.py` **5/5**
+- **下一步仍推荐**：HMI 在线 H-2（未抢跑 M9.3 出口）
+
+## 2026-08-11 — HMI 测试模式开关 + 重置测试数据
+
+- **系统参数**：`HMI_TEST_MODE`（系统参数页 Switch）；关=强制云端、隐藏本地/云端切换与重置
+- **重置**：文案「重置测试数据」；OSS 管理页（admin）+ 侧栏（测试模式）；云端清 OSS 前缀 + MC `aig_sdk__*`/`aig_rosbag__*`
+- **验收**：`acceptance/HMI-TEST-MODE.md`；`test_test_mode_reset.py` 3/3
+
+## 2026-08-10 — M9.3 hybrid DW 4-bag + meta repair · HMI 在线预备
+
+- **Cloud E2E**：DataWorks hybrid 单 Driver（DPE extract+preview `dpe_parallel=4` + Driver MaxFrame AI asr/label/embed `ai_media_mode=oss_url`）4-bag；ds=`20260810`
+- **验数**：clip1 `sha256:9a4ac3a…` / `bb319286-…` → `verify_sdk_v1_run.py` **18/18**
+- **Meta**：Driver 写 `run.json`；dispatch top-level 取自 first item；`dim_clip` INSERT OVERWRITE upsert `active_run_id`；4 runs repair
+- **进度**：CURRENT → 推荐 **HMI 在线**；M9.3 A-C 基本闭合、**H-2 pending**；`acceptance/M9.3.md` 更新
+- **HMI**：设置已指向 `aig_sdk__` + bucket2；侧栏「在线」开关恢复；cloud overview/timeline 避开不存在的 v2 帧表
+
+## 2026-08-05 — MaxFrame 2.8 content_part（SDK MC Omni/ASR）
+
+- **SDK 0.3.2**：`mc/content_parts.py`；Omni **`cp.video`+`cp.audio`+`cp.text`（含 ASR）**；ASR Job2 `cp.audio`；`maxframe>=2.8.0`
+- **Legacy**：`mf_ai_function.py` `ImageContentType.URL` + ASR content_part；rebundle job2/3/4 bundled
+- **验数**：本机 `run_mc_oss_verify` → `mc_mode=omni_native` / `content_part_audio`；cloud **18/18**
+- **文档**：`SDK.md` · `DATAWORKS_SDK.md` · runbook · `.env.example` · cursor rules
+- **DPE 镜像重建**：`rosbag-sdk-dpe:0.3.2` + `pipeline/dist/rosbag-sdk-dpe-0.3.2.tar` + `dpe-sdk-image-pack-0.3.2.zip`（含新 wheel）
+
 ## 2026-08-03 — M9.3 原子 DataWorks 节点 + sdk_node_common
 
 - **节点**：`sdk_extract_node` · `sdk_asr_node` · `sdk_preview_node` · `sdk_label_node` · `sdk_embed_node`

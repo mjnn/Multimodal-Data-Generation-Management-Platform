@@ -9,7 +9,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "pipeline" / "dataworks"))
 
-from sdk_mc_ingest import build_ingest_statements  # noqa: E402
+from sdk_mc_ingest import (  # noqa: E402
+    build_dim_clip_upsert_sql,
+    build_ingest_statements,
+    build_run_json_document,
+)
 
 
 class TestSdkMcIngest(unittest.TestCase):
@@ -49,8 +53,18 @@ class TestSdkMcIngest(unittest.TestCase):
         sql = "\n".join(statements)
         self.assertIn("aig_sdk__fact_clip_label", sql)
         self.assertIn("aig_sdk__fact_clip_embedding", sql)
-        self.assertIn("'rosbags/explicit.bag'", sql)
         self.assertIn('"scene": "road"', sql)
+        self.assertNotIn("INSERT INTO TABLE aig_sdk__dim_clip", sql)
+        upsert = build_dim_clip_upsert_sql(
+            clip_id="sha256:abc",
+            clip_dir_name="source-run",
+            content_hash="abc",
+            bag_oss_key="rosbags/explicit.bag",
+            run_id="run-1",
+            created_at="2026-08-05T00:00:00Z",
+            updated_at="2026-08-05T00:00:00Z",
+        )
+        self.assertIn("'rosbags/explicit.bag'", upsert)
         for step_id in (
             "sdk_discover",
             "sdk_infer",
@@ -60,6 +74,33 @@ class TestSdkMcIngest(unittest.TestCase):
         ):
             self.assertIn(f"'{step_id}'", sql)
         self.assertIn("aig_sdk__pipeline_step", sql)
+
+    def test_dim_clip_upsert_sets_active_run_id(self) -> None:
+        sql = build_dim_clip_upsert_sql(
+            clip_id="sha256:abc",
+            clip_dir_name="source-run",
+            content_hash="abc",
+            bag_oss_key="rosbags/x.bag",
+            run_id="run-new",
+            created_at="2026-08-05T00:00:00Z",
+            updated_at="2026-08-10T00:00:00Z",
+        )
+        self.assertIn("INSERT OVERWRITE TABLE aig_sdk__dim_clip", sql)
+        self.assertIn("'run-new'", sql)
+        self.assertIn("WHERE clip_id != 'sha256:abc'", sql)
+
+    def test_run_json_document_schema(self) -> None:
+        doc = build_run_json_document(
+            clip_id="sha256:abc",
+            run_id="run-1",
+            ds="20260810",
+            bag_oss_key="rosbags/x.bag",
+            stages_done=["extract", "preview", "upload"],
+            completed_at="2026-08-10T00:00:00Z",
+        )
+        self.assertEqual(doc["layout_version"], "sdk_v1")
+        self.assertEqual(doc["clip_id"], "sha256:abc")
+        self.assertIn("labels", doc["sdk_files"])
 
 
 if __name__ == "__main__":

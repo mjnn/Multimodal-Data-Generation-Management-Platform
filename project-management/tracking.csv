@@ -1,4 +1,4 @@
-id,type,milestone,title,status,percent,owner,priority,plan_start,plan_end,actual_start,actual_end,depends_on,notes
+﻿id,type,milestone,title,status,percent,owner,priority,plan_start,plan_end,actual_start,actual_end,depends_on,notes
 DOC-PRD,doc,governance,PRD v0.2 gap review,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,,docs/prd-rosbag-labels.md P0=0
 DOC-M1,doc,M1,M1 implementation notes v1.0,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,DOC-PRD,docs/m1-implementation-notes.md
 BOOT-E,doc,governance,project-management Bootstrap,done,100,TBD,P0,2026-07-21,2026-07-21,2026-07-21,2026-07-21,DOC-M1,CURRENT+handoff rule+AGENTS
@@ -71,7 +71,7 @@ M9.1,task,M9,GET admin audit API + query_audit_logs,done,100,TBD,P1,2026-07-31,2
 M9.4,task,M9,taxonomy R10 dataset hints,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.1,taxonomy_hint.py preview detail UI
 M9.5,task,M9,AdminAuditPage route menu,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.1,/admin/audit listAuditLogs
 M9.2,task,M9,PostgreSQL migration path,done,100,TBD,P2,2026-08-12,2026-08-15,2026-07-31,2026-07-31,M9.1,docs/postgresql-migration-path.md acceptance/M9.2.md
-M9.3,task,M9,sdk_v1 cloud full chain E2E,in_progress,60,TBD,P1,2026-08-12,2026-08-15,2026-08-03,,M9.1,verify_sdk_v1_run runbook A-1~A-2 pass; A-C/H pending DW
+M9.3,task,M9,sdk_v1 cloud full chain E2E,in_progress,90,TBD,P1,2026-08-12,2026-08-15,2026-08-03,,M9.1,hybrid DW 4-bag A-C-2 18/18 H-1 pass; H-2 pending HMI online aig_sdk__+bucket2
 M9.6,task,M9,M9 acceptance hardening,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9.4;M9.5,acceptance/M9.md npm build
 M9,milestone,M9,M9 deployment governance exit,done,100,TBD,P1,2026-07-31,2026-08-15,2026-07-31,2026-07-31,M9.6,audit API taxonomy hints PG cloud deferred
 DOC-M10,doc,M10,M10 implementation notes v1.0,done,100,TBD,P0,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M9,docs/m10-implementation-notes.md R11-R15
@@ -87,3 +87,6 @@ M10.8,task,M10,similar clip to proposal entry,done,100,TBD,P2,2026-08-08,2026-08
 M10.9,task,M10,M10 acceptance + E2E,done,100,TBD,P0,2026-08-10,2026-08-11,2026-07-31,2026-07-31,M10.4;M10.5;M10.6;M10.7,test_taxonomy_m10.py e2e/taxonomy-hub.spec.ts
 M10.10,task,M10,Hub diff impact lineage UI polish,done,100,TBD,P1,2026-07-31,2026-07-31,2026-07-31,2026-07-31,M10.4,LineageBar VersionMetaPanel publish impact modal
 M10,milestone,M10,M10 taxonomy semantic hub exit,done,100,TBD,P0,2026-07-31,2026-08-11,2026-07-31,2026-07-31,M10.9,hub context coverage diff proposal R11-R15
+HMI-TEST-MODE,task,HMI,test mode switch + reset test data,done,100,TBD,P1,2026-08-11,2026-08-11,2026-08-11,2026-08-11,,HMI_TEST_MODE OSS reset cloud MC+OSS acceptance/HMI-TEST-MODE.md
+HMI-SDK-BBOX,task,HMI,SDK BBox+enum_tree HMI local,done,100,TBD,P1,2026-08-12,2026-08-12,2026-08-12,2026-08-12,,acceptance/HMI-SDK-BBOX.md infer_full Plain|BBox
+HMI-SDK-MODALITY,task,HMI,raw video/audio/text upload + planner modality gate,done,100,TBD,P1,2026-08-12,2026-08-12,2026-08-12,2026-08-12,,acceptance/HMI-SDK-MODALITY.md local ingest_sources; cloud media TBD

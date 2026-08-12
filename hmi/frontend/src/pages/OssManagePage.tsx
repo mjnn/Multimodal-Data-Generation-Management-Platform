@@ -20,8 +20,11 @@ import { api } from '../api'
 import type { OssInfo, OssListItem } from '../api/types'
 import { isOssPreviewableFile, OssFilePreviewPanel } from '../components/oss/OssFilePreviewPanel'
 import { OssShortcutBar } from '../components/oss/OssShortcutBar'
+import { ResetTestDataButton } from '../components/ResetTestDataButton'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
+import { useAuth } from '../auth/AuthContext'
+import { canManageUsers } from '../auth/roles'
 import { downloadOssObject } from '../utils/ossDownload'
 
 function formatSize(bytes: number): string {
@@ -39,7 +42,8 @@ function formatSize(bytes: number): string {
 export function OssManagePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { dataSource, dataRevision } = useDataSourceMode()
+  const { user } = useAuth()
+  const { dataSource, dataRevision, testMode } = useDataSourceMode()
   const [info, setInfo] = useState<OssInfo | null>(null)
   const [prefix, setPrefix] = useState('')
   const [parentPrefix, setParentPrefix] = useState('')
@@ -48,6 +52,7 @@ export function OssManagePage() {
   const [pipelineNavKey, setPipelineNavKey] = useState<string | null>(null)
   const [previewFile, setPreviewFile] = useState<{ key: string; name: string } | null>(null)
   const initialPrefix = searchParams.get('prefix') ?? ''
+  const showReset = testMode && canManageUsers(user?.roles)
 
   const loadList = useCallback((p = prefix) => {
     setLoading(true)
@@ -138,6 +143,7 @@ export function OssManagePage() {
         title="OSS 管理"
         description="浏览本地磁盘或云端桶内产物；上传 rosbag 与自动同步请前往「管线管理」。"
         icon={<CloudServerOutlined />}
+        extra={showReset ? <ResetTestDataButton danger /> : null}
       />
 
       {info && (

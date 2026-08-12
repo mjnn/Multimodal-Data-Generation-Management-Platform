@@ -20,6 +20,10 @@ cd hmi
 py -3 -m pip install -r requirements-dev.txt
 ```
 
+`requirements-dev.txt` 以 editable 方式安装 `oms-multimodal-sdk[bbox]`（含 **ultralytics**）。管线参数选 `BBOX_DETECTOR=yolo` 时需要该 extra；缺省会在保存设置 / 跑批前给出明确错误。
+
+仅装核心 SDK（无 YOLO）时：`pip install -e ../piplinesdk`。
+
 ## 运行
 
 ```powershell

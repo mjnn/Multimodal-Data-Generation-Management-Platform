@@ -114,20 +114,23 @@ labels:
   level_name: 天气
   id: L1.3.weather
   name: 天气类型
-  definition: 主流天气分类
-  dtype: enum
+  definition: 主流天气分类（嵌套：雨天下级为大/中/小雨）
+  dtype: enum_tree
   value_schema:
-    type: enum
+    type: enum_tree
     values:
-    - sunny
-    - cloudy
-    - overcast
-    - light_rain
-    - heavy_rain
-    - snow
-    - fog
-    - dust_storm
-  values_hint: sunny/cloudy/overcast/light_rain/heavy_rain/snow/fog/dust_storm
+    - id: sunny
+    - id: cloudy
+    - id: overcast
+    - id: rain
+      children:
+      - id: light_rain
+      - id: moderate_rain
+      - id: heavy_rain
+    - id: snow
+    - id: fog
+    - id: dust_storm
+  values_hint: sunny/cloudy/overcast/rain→light|moderate|heavy/snow/fog/dust_storm
   selection_reason: 天气影响DMS策略与疲劳特征
 - 'no': ⑨
   level_code: L1.3

@@ -18,6 +18,13 @@ from hmi.labels_util import (
 )
 from hmi.local import assets, store
 from hmi.local.clip_context import resolve_clip_context
+from hmi.services.clip_query_common import (
+    DEFAULT_MIN_TEXT_SCORE,
+    apply_semantic_rank_cutoff,
+    normalize_label_filters,
+    score_clip_candidate,
+    try_embed_query_text,
+)
 from hmi.services.clips import composite_id, parse_composite_id
 from hmi.services.search import LABEL_KEYWORDS
 from hmi.vec import parse_embedding, similar_filtered
@@ -341,3 +348,96 @@ def find_similar(composite_id_str: str, top_k: int = 8, min_score: float = 0.75)
         }
         for item, score in scored
     ]
+
+
+def query_overview_clips(
+    *,
+    label_filters: dict[str, Any] | None = None,
+    semantic_query: str = "",
+    top_k: int = 200,
+    min_score: float = DEFAULT_MIN_TEXT_SCORE,
+) -> dict[str, Any]:
+    """Clip-level overview search: structured label filters + scene semantic query."""
+    filters = normalize_label_filters(label_filters)
+    query = (semantic_query or "").strip()
+    if not filters and not query:
+        return {
+            "total": 0,
+            "items": [],
+            "semantic_mode": "none",
+            "embedding_used": False,
+            "message": "请至少设置标签筛选或场景描述检索",
+        }
+
+    text_floor = float(min_score) if min_score is not None else DEFAULT_MIN_TEXT_SCORE
+    pairs = store.query(
+        """
+        SELECT d.clip_id, d.active_run_id AS run_id
+        FROM dim_clip d
+        WHERE d.active_run_id IS NOT NULL AND d.active_run_id != ''
+        """
+    )
+    query_vec = try_embed_query_text(query) if query else None
+    embedding_used = query_vec is not None
+    items: list[dict[str, Any]] = []
+
+    for pair in pairs:
+        clip_id = str(pair["clip_id"])
+        run_id = str(pair["run_id"])
+        try:
+            ds = resolve_ds_for_run(clip_id, run_id)
+        except ValueError:
+            continue
+        view = get_clip_label_view(clip_id, run_id, ds=ds)
+        labels_json = view.get("labels_json") if isinstance(view.get("labels_json"), dict) else {}
+        if filters and not labels_json:
+            continue
+        emb = get_clip_embedding_row(clip_id, run_id, ds=ds)
+        scored = score_clip_candidate(
+            labels_json=labels_json or {},
+            scene_summary=str(view.get("scene_summary") or "") or None,
+            vector_json=str(emb.get("vector_json")) if emb else None,
+            label_filters=filters,
+            semantic_query=query,
+            query_vec=query_vec,
+            min_semantic_score=text_floor if query else 0.0,
+        )
+        if scored is None:
+            continue
+        items.append(
+            {
+                "clip_id": clip_id,
+                "run_id": run_id,
+                "score": scored["score"],
+                "match_mode": scored["match_mode"],
+                "scene_description": scored.get("scene_description") or "",
+                "label_preview": scored.get("label_preview") or str(view.get("label_preview") or ""),
+                "text_score": scored.get("text_score"),
+                "embedding_score": scored.get("embedding_score"),
+            }
+        )
+
+    if query:
+        items = apply_semantic_rank_cutoff(items, top_k=top_k)
+    else:
+        items.sort(key=lambda r: (-float(r.get("score") or 0), str(r.get("clip_id"))))
+    mode = "none"
+    if query and embedding_used:
+        mode = "embedding+text"
+    elif query:
+        mode = "text"
+    elif filters:
+        mode = "label"
+    return {
+        "total": len(items),
+        "items": items,
+        "semantic_mode": mode,
+        "embedding_used": embedding_used,
+        "message": None
+        if items
+        else (
+            "未匹配到相关 Clip（相关度未达阈值）。可换用更贴近场景描述的语句，或放宽标签条件。"
+            if (filters or query)
+            else None
+        ),
+    }

@@ -180,6 +180,17 @@ def _resolve_media_path(run_dir: Path, raw: str | None) -> Path | None:
     return None
 
 
+def _is_bbox_preview_mp4(path: Path | str | None) -> bool:
+    """True when path/name is a bbox preview MP4 (not plain)."""
+    if path is None:
+        return False
+    name = Path(str(path)).name.lower()
+    stem = Path(str(path)).stem.lower()
+    if "bbox" in name or stem.startswith("clip_preview_bbox"):
+        return True
+    return False
+
+
 def _camera_frame_counts(video_row: dict[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
     cfg = video_row.get("clip_video_config")
@@ -195,30 +206,42 @@ def _camera_frame_counts(video_row: dict[str, Any]) -> dict[str, int]:
 
 
 def _collect_sdk_camera_videos(run_dir: Path, video_row: dict[str, Any]) -> dict[str, Path]:
+    """Locate plain (non-bbox) clip_preview_cameraN.mp4 only."""
     found: dict[str, Path] = {}
     paths_map = video_row.get("clip_video_paths")
     if isinstance(paths_map, dict):
         for topic, raw in paths_map.items():
             cam = _topic_to_camera(str(topic))
             resolved = _resolve_media_path(run_dir, str(raw))
-            if resolved:
+            if resolved and not _is_bbox_preview_mp4(resolved):
                 found[cam] = resolved
 
     cfg = video_row.get("clip_video_config")
     if isinstance(cfg, dict):
-        for entry in cfg.get("encoded_cameras") or []:
-            if not isinstance(entry, dict):
-                continue
-            cam = _topic_to_camera(str(entry.get("camera_topic") or ""))
-            resolved = _resolve_media_path(run_dir, str(entry.get("path") or ""))
-            if resolved:
-                found[cam] = resolved
+        # When encode_plain=off, encoded_cameras often still points at bbox MP4s — skip those.
+        stem = str(cfg.get("filename_stem") or "").lower()
+        if "bbox" not in stem:
+            for entry in cfg.get("encoded_cameras") or []:
+                if not isinstance(entry, dict):
+                    continue
+                cam = _topic_to_camera(str(entry.get("camera_topic") or ""))
+                resolved = _resolve_media_path(run_dir, str(entry.get("path") or ""))
+                if resolved and not _is_bbox_preview_mp4(resolved):
+                    found[cam] = resolved
 
     clip_dir = _clip_output_dir(run_dir)
     if clip_dir.is_dir():
         for mp4 in sorted(clip_dir.glob("clip_preview_camera*.mp4")):
-            m = re.match(r"clip_preview_(camera\d+)", mp4.stem, re.I)
-            if m:
+            m = re.match(r"clip_preview_(camera\d+)$", mp4.stem, re.I)
+            if m and not _is_bbox_preview_mp4(mp4):
+                found.setdefault(m.group(1).lower(), mp4)
+
+    # Prefer SDK materialize_preview flat preview/ plain cams
+    preview_dir = run_dir / PREVIEW_REL_DIR
+    if preview_dir.is_dir():
+        for mp4 in sorted(preview_dir.glob("clip_preview_camera*.mp4")):
+            m = re.match(r"clip_preview_(camera\d+)$", mp4.stem, re.I)
+            if m and not _is_bbox_preview_mp4(mp4):
                 found.setdefault(m.group(1).lower(), mp4)
 
     if not found:
@@ -226,9 +249,37 @@ def _collect_sdk_camera_videos(run_dir: Path, video_row: dict[str, Any]) -> dict
             run_dir,
             str(video_row.get("clip_video_path") or ""),
         )
-        if legacy:
+        if legacy and not _is_bbox_preview_mp4(legacy):
             found[_camera_from_video_row(video_row)] = legacy
     return found
+
+
+def _collect_sdk_bbox_camera_videos(run_dir: Path, video_row: dict[str, Any]) -> dict[str, Path]:
+    """Locate clip_preview_bbox_cameraN.mp4 (and topic map from clip_video_bbox_paths)."""
+    found: dict[str, Path] = {}
+    paths_map = video_row.get("clip_video_bbox_paths")
+    if isinstance(paths_map, dict):
+        for topic, raw in paths_map.items():
+            cam = _topic_to_camera(str(topic)) if topic != "default" else "camera0"
+            resolved = _resolve_media_path(run_dir, str(raw))
+            if resolved:
+                found[cam] = resolved
+
+    for root in (_clip_output_dir(run_dir), run_dir / PREVIEW_REL_DIR):
+        if not root.is_dir():
+            continue
+        for mp4 in sorted(root.glob("clip_preview_bbox_camera*.mp4")):
+            m = re.match(r"clip_preview_bbox_(camera\d+)$", mp4.stem, re.I)
+            if m:
+                found.setdefault(m.group(1).lower(), mp4)
+        legacy = root / "clip_preview_bbox.mp4"
+        if legacy.is_file():
+            found.setdefault("camera0", legacy)
+    return found
+
+
+def _sdk_bbox_preview_mp4_name(camera: str) -> str:
+    return f"clip_preview_bbox_{camera}.mp4"
 
 
 def _camera_from_video_row(video_row: dict[str, Any]) -> str:
@@ -276,6 +327,15 @@ def materialize_run_media(run_dir: Path) -> dict[str, str | None]:
             shutil.copy2(src, dest)
         if dest.is_file():
             copied[f"clip_preview_{cam}.mp4"] = str(dest)
+
+    for cam, src in _collect_sdk_bbox_camera_videos(run_dir, video_row).items():
+        dest = out_dir / f"clip_preview_bbox_{cam}.mp4"
+        if src.is_file() and (
+            not dest.is_file() or dest.stat().st_mtime < src.stat().st_mtime
+        ):
+            shutil.copy2(src, dest)
+        if dest.is_file():
+            copied[f"clip_preview_bbox_{cam}.mp4"] = str(dest)
 
     audio_src = _resolve_media_path(run_dir, str(video_row.get("audio_path") or ""))
     if audio_src and audio_src.is_file():
@@ -359,6 +419,10 @@ def _copy_sdk_jsonl_bundle(run_dir: Path, run_root: Path) -> None:
         if not src.is_file():
             raise FileNotFoundError(f"missing {name} under {run_dir}")
         shutil.copy2(src, run_root / name)
+    for optional in ("bboxes.jsonl", "asr.jsonl", "clips_index.jsonl"):
+        src = run_dir / optional
+        if src.is_file():
+            shutil.copy2(src, run_root / optional)
 
 
 def _write_sdk_run_json(
@@ -444,16 +508,17 @@ def _build_sdk_mp4_preview_media(
     label_row: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], str | None] | None:
     camera_sources = _collect_sdk_camera_videos(run_dir, video_row)
-    if not camera_sources and _clip_output_dir(run_dir).is_dir():
-        camera_sources = _collect_sdk_camera_videos(run_dir, video_row)
-    if not camera_sources:
+    bbox_sources = _collect_sdk_bbox_camera_videos(run_dir, video_row)
+    if not camera_sources and not bbox_sources:
         legacy = _resolve_media_path(
             run_dir,
             str(video_row.get("clip_video_path") or label_row.get("clip_video_path") or ""),
         )
-        if legacy:
+        if legacy and not _is_bbox_preview_mp4(legacy):
             camera_sources = {_camera_from_video_row(video_row): legacy}
-    if not camera_sources:
+        elif legacy and _is_bbox_preview_mp4(legacy):
+            bbox_sources = {"camera0": legacy}
+    if not camera_sources and not bbox_sources:
         return None
 
     duration_sec = float(
@@ -484,13 +549,42 @@ def _build_sdk_mp4_preview_media(
         cam_meta[cam] = {
             "relpath": rel,
             "frame_count": int(per_cam_frames.get(cam) or frame_count or 0),
+            "variant": "plain",
         }
 
+    cam_bbox_meta: dict[str, dict[str, Any]] = {}
+    bbox_staged: dict[str, Path] = {}
+    for cam in ("camera0", "camera1", "camera2", "camera3"):
+        src = bbox_sources.get(cam)
+        if not src or not src.is_file():
+            continue
+        sdk_name = _sdk_bbox_preview_mp4_name(cam)
+        dest = preview_dir / sdk_name
+        shutil.copy2(src, dest)
+        bbox_staged[cam] = dest
+        rel = f"{PREVIEW_REL_DIR}/{sdk_name}"
+        cam_bbox_meta[cam] = {
+            "relpath": rel,
+            "frame_count": int(per_cam_frames.get(cam) or frame_count or 0),
+            "variant": "bbox",
+        }
+
+    # Drop stale plain files when this run is bbox-only (avoid identical fake plains).
+    if not staged and bbox_staged:
+        for cam in ("camera0", "camera1", "camera2", "camera3"):
+            stale = preview_dir / _sdk_preview_mp4_name(cam)
+            if stale.is_file():
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+
+    grid_sources = staged or bbox_staged
     grid_path = preview_dir / GRID_MP4_NAME
-    if len(staged) >= 2:
-        build_grid_mp4_from_camera_mp4s(staged, grid_path)
-    elif len(staged) == 1:
-        shutil.copy2(next(iter(staged.values())), grid_path)
+    if len(grid_sources) >= 2:
+        build_grid_mp4_from_camera_mp4s(grid_sources, grid_path)
+    elif len(grid_sources) == 1:
+        shutil.copy2(next(iter(grid_sources.values())), grid_path)
     else:
         return None
 
@@ -503,8 +597,10 @@ def _build_sdk_mp4_preview_media(
         "end_time_ns": end_ns,
         "grid_relpath": grid_rel,
         "cameras": cam_meta,
+        "cameras_bbox": cam_bbox_meta,
         "source": "sdk_clip_video",
         "camera_count": len(staged),
+        "bbox_camera_count": len(cam_bbox_meta),
     }
     write_preview_manifest(run_root / MANIFEST_REL, manifest)
 
@@ -517,13 +613,15 @@ def _build_sdk_mp4_preview_media(
         shutil.copy2(audio_src, dest)
 
     frame_rows: list[dict[str, Any]] = []
-    for cam in sorted(staged.keys()):
+    row_cams = staged or bbox_staged
+    meta_for_rows = cam_meta if staged else cam_bbox_meta
+    for cam in sorted(row_cams.keys()):
         frame_rows.append(
             {
                 "camera": cam,
                 "frame_idx": 0,
                 "timestamp_ns": start_ns,
-                "image_path": cam_meta[cam]["relpath"],
+                "image_path": meta_for_rows[cam]["relpath"],
             }
         )
     if not frame_rows:
@@ -1072,6 +1170,10 @@ def _purge_clip_from_stores(clip_id: str, run_id: str) -> None:
                 "DELETE FROM clip_label_field_review WHERE clip_id=? AND run_id=?",
                 (clip_id, run_id),
             )
+            conn.execute(
+                "DELETE FROM clip_bbox_qa WHERE clip_id=? AND run_id=?",
+                (clip_id, run_id),
+            )
             conn.commit()
     root = artifacts_dir(clip_id, run_id) if run_id else None
     if root and root.is_dir():
@@ -1107,7 +1209,7 @@ def purge_non_real_clips() -> list[str]:
             (f"{REAL_DATA_BAG_OSS_PREFIX}%",),
         )
         kept_ids = {str(r["clip_id"]) for r in kept}
-        for table in ("clip_label_review", "clip_label_field_review"):
+        for table in ("clip_label_review", "clip_label_field_review", "clip_bbox_qa"):
             for row in conn.execute(f"SELECT DISTINCT clip_id FROM {table}").fetchall():
                 cid = str(row[0])
                 if cid not in kept_ids:

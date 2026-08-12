@@ -18,6 +18,8 @@ export type ClipTimelineState = {
   snapshot: TimelineSnapshot | null
   /** Clip-centric HMI: no frame composite; similar-search uses clip embedding elsewhere. */
   previewCompositeId: string | null
+  /** Mirrors meta.preview — whether baked bbox MP4s are available. */
+  hasBboxPreview: boolean
 }
 
 type ClipTimelinePanelProps = {
@@ -112,12 +114,18 @@ export function ClipTimelinePanel({
 
   useEffect(() => {
     if (!onTimelineStateChange || !clip || !meta || cursorNs == null) return
+    const preview = meta.preview?.mode === 'mp4' ? meta.preview : null
+    const hasBboxPreview = Boolean(
+      preview?.has_bbox_preview ||
+        preview?.cameras?.some((c) => Boolean(c.bbox_url)),
+    )
     onTimelineStateChange({
       clip,
       meta,
       cursorNs,
       snapshot: null,
       previewCompositeId: null,
+      hasBboxPreview,
     })
   }, [clip, meta, cursorNs, onTimelineStateChange])
 
@@ -149,6 +157,15 @@ export function ClipTimelinePanel({
       <ClipPreviewVideo
         gridUrl={mp4Preview.grid_url}
         cameras={mp4Preview.cameras}
+        hasBboxPreview={Boolean(
+          mp4Preview.has_bbox_preview ||
+            mp4Preview.cameras?.some((c) => Boolean(c.bbox_url)),
+        )}
+        hasPlainPreview={
+          typeof mp4Preview.has_plain_preview === 'boolean'
+            ? mp4Preview.has_plain_preview
+            : undefined
+        }
         startNs={clip.start_time_ns}
         endNs={clip.end_time_ns}
         cursorNs={cursorNs}

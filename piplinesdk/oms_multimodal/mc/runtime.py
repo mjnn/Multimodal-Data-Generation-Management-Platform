@@ -38,13 +38,53 @@ def require_maxframe() -> Any:
     return md
 
 
+def normalize_catalog_endpoint(url: str) -> str:
+    """Normalize Catalog URL; prefer internal host for DPE / DataWorks workers."""
+    catalog = (url or "").strip()
+    if not catalog:
+        return catalog
+    if not catalog.startswith(("http://", "https://")):
+        catalog = f"https://{catalog.lstrip('/')}"
+    use_internal = os.getenv("MC_USE_INTERNAL_CATALOG", "true").strip().lower()
+    if use_internal in {"1", "true", "yes", "on"}:
+        catalog = catalog.replace(".maxcompute.aliyun.com", ".maxcompute.aliyun-inc.com")
+    return catalog.rstrip("/")
+
+
+def resolve_mc_catalog_endpoint(
+    *,
+    odps_endpoint: str | None = None,
+    cloud_region: str | None = None,
+    explicit: str | None = None,
+) -> str:
+    """Catalog API for ``read_odps_model``; DPE workers need ``*.aliyun-inc.com``."""
+    if explicit and str(explicit).strip():
+        return normalize_catalog_endpoint(str(explicit).strip())
+    env_catalog = os.getenv("ODPS_CATALOG_ENDPOINT", "").strip()
+    if env_catalog:
+        return normalize_catalog_endpoint(env_catalog)
+
+    endpoint = (odps_endpoint or os.getenv("ODPS_ENDPOINT", "")).strip()
+    region_raw = (cloud_region or os.getenv("MC_CLOUD_REGION", "") or "").strip()
+    region_id = region_raw.replace("_", "-") if region_raw else ""
+    if not region_id and endpoint:
+        match = re.search(r"\.(cn-[a-z0-9-]+)\.maxcompute\.", endpoint)
+        if match:
+            region_id = match.group(1)
+    if not region_id:
+        region_id = "cn-shanghai"
+    return normalize_catalog_endpoint(f"https://catalogapi.{region_id}.maxcompute.aliyun-inc.com")
+
+
 def resolve_odps_entry(entry: Any | None) -> Any:
     if entry is not None:
+        ensure_odps_catalog_endpoint(entry)
         return entry
     access_id = os.getenv("ODPS_ACCESS_ID", os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID", "")).strip()
     secret = os.getenv("ODPS_ACCESS_KEY", os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "")).strip()
     project = os.getenv("ODPS_PROJECT", "").strip()
     endpoint = os.getenv("ODPS_ENDPOINT", "").strip()
+    sts_token = os.getenv("ODPS_STS_TOKEN", "").strip()
     if not all([access_id, secret, project, endpoint]):
         raise ConfigurationError(
             "MODEL_BACKEND=mc requires odps_entry or ODPS_ACCESS_ID/ODPS_ACCESS_KEY/"
@@ -56,7 +96,31 @@ def resolve_odps_entry(entry: Any | None) -> Any:
         raise ConfigurationError(
             "MODEL_BACKEND=mc requires pyodps: pip install 'oms-multimodal-sdk[mc]'"
         ) from exc
-    return ODPS(access_id, secret, project=project, endpoint=endpoint)
+    catalog = resolve_mc_catalog_endpoint(odps_endpoint=endpoint)
+    # pyodps rejects ODPS(..., sts_token=...); use StsAccount instead.
+    if sts_token:
+        try:
+            from odps.accounts import StsAccount
+        except ImportError as exc:
+            raise ConfigurationError(
+                "MODEL_BACKEND=mc with STS requires odps.accounts.StsAccount"
+            ) from exc
+        odps = ODPS(
+            account=StsAccount(access_id, secret, sts_token),
+            project=project,
+            endpoint=endpoint,
+            catalog_endpoint=catalog,
+        )
+    else:
+        odps = ODPS(
+            access_id,
+            secret,
+            project=project,
+            endpoint=endpoint,
+            catalog_endpoint=catalog,
+        )
+    ensure_odps_catalog_endpoint(odps)
+    return odps
 
 
 def is_asr_capable_model(model_name: str) -> bool:
@@ -83,15 +147,27 @@ def is_omni_model_name(model_name: str) -> bool:
 
 
 def ensure_odps_catalog_endpoint(odps_entry: Any) -> None:
+    if odps_entry is None:
+        return
+    if not (
+        hasattr(odps_entry, "_catalog_endpoint")
+        or hasattr(odps_entry, "catalog_endpoint")
+        or hasattr(odps_entry, "_catalog_rest")
+    ):
+        return
+    explicit = os.getenv("ODPS_CATALOG_ENDPOINT", "").strip()
+    if explicit:
+        odps_entry._catalog_endpoint = normalize_catalog_endpoint(explicit)
+        odps_entry._catalog_rest = None
+        return
     catalog = getattr(odps_entry, "catalog_endpoint", None)
     if not catalog:
         catalog = getattr(odps_entry, "_catalog_endpoint", None)
     if not catalog:
+        odps_entry._catalog_endpoint = resolve_mc_catalog_endpoint()
+        odps_entry._catalog_rest = None
         return
-    catalog_str = str(catalog).strip()
-    if catalog_str.startswith(("http://", "https://")):
-        return
-    odps_entry._catalog_endpoint = f"https://{catalog_str.lstrip('/')}"
+    odps_entry._catalog_endpoint = normalize_catalog_endpoint(str(catalog).strip())
     odps_entry._catalog_rest = None
 
 
@@ -106,6 +182,7 @@ def configure_mf_ai_engine(*, dpe_image: str | None = None) -> None:
     sql_settings["odps.sql.python.version"] = "cp311"
     if dpe_image:
         sql_settings["odps.session.image"] = dpe_image
+    sql_settings.setdefault("odps.sql.using.public.model", "true")
     mf_options.sql.settings = sql_settings
 
 

@@ -96,10 +96,26 @@ def validate_dispatch_manifest(
     errors: list[str] = []
     if doc.get("layout_version") != SDK_LAYOUT_VERSION:
         errors.append(f"layout_version={doc.get('layout_version')!r}")
-    if str(doc.get("clip_id") or "") != clip_id:
-        errors.append(f"clip_id={doc.get('clip_id')!r}")
-    if str(doc.get("run_id") or "") != run_id:
-        errors.append(f"run_id={doc.get('run_id')!r}")
+    top_clip = str(doc.get("clip_id") or "")
+    top_run = str(doc.get("run_id") or "")
+    matched = top_clip == clip_id and top_run == run_id
+    if not matched:
+        items = doc.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if (
+                    str(item.get("clip_id") or "") == clip_id
+                    and str(item.get("run_id") or "") == run_id
+                ):
+                    matched = True
+                    break
+    if not matched:
+        errors.append(
+            f"clip_id/run_id not at top-level or in items[] "
+            f"(top clip_id={top_clip!r} run_id={top_run!r})"
+        )
     if not str(doc.get("run_oss_prefix") or "").strip():
         errors.append("run_oss_prefix empty")
     return errors

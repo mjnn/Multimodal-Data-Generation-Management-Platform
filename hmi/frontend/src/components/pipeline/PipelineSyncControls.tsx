@@ -2,15 +2,18 @@ import { Alert, Space, Switch, Tag, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../../api'
 import type { OssSyncPollerStatus } from '../../api/types'
+import { useDataSourceMode } from '../../context/DataSourceModeContext'
 import { formatSyncStatus } from '../../utils/uiLabels'
 
 export function PipelineSyncControls() {
+  const { dataSource } = useDataSourceMode()
   const [syncStatus, setSyncStatus] = useState<OssSyncPollerStatus | null>(null)
   const [syncSaving, setSyncSaving] = useState(false)
+  const cloud = dataSource === 'cloud'
 
   useEffect(() => {
     api.getSyncPollerStatus().then(setSyncStatus).catch(() => {})
-  }, [])
+  }, [dataSource])
 
   const onToggleAutoSync = async (checked: boolean) => {
     setSyncSaving(true)
@@ -30,8 +33,12 @@ export function PipelineSyncControls() {
       <Alert
         type="info"
         showIcon
-        message="本地模式"
-        description="上传 rosbag 后由后台 SDK 轮询自动跑管线；开启下方开关可将 OSS 产物同步回 HMI 浏览目录（云端 dispatch 同理）。"
+        message={cloud ? '在线模式' : '本地模式'}
+        description={
+          cloud
+            ? '管线进度来自 MaxCompute / dispatch 与 DataWorks Dag；下方开关可将 OSS 产物同步到本机 HMI（可选，不影响在线浏览）。'
+            : '上传 rosbag 后由后台 SDK 轮询自动跑管线；开启下方开关可将 OSS 产物同步回 HMI 浏览目录（云端 dispatch 同理）。'
+        }
       />
       <Space wrap align="center">
         <Switch

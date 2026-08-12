@@ -16,6 +16,39 @@
 
 P0 探针：`stages=extract,asr`，`batch_rows=1`，`model_backend=mc`。失败可同节点改 `model_backend=api`。
 
+### UDF 与 `apply_chunk` 并发（教学示例）
+
+带中文注释的粘贴示例：
+
+`piplinesdk/examples/05_dpe_apply_chunk_concurrency.py`
+
+覆盖：**发现 bag**（Driver 列 OSS → DPE `apply_chunk` 算 SHA256 → `clip_id`）以及 pipeline `apply_chunk` 并发参数。
+
+| 概念 | 含义 |
+|------|------|
+| Driver | PyODPS3 节点进程：组参数、**列举 bag**、建 DataFrame、`new_session`、提交任务、`fetch` 结果 |
+| DPE Worker | 远端真正执行 UDF 的进程：挂载 OSS、**hash bag**、跑 `run_stages` |
+| UDF | 节点脚本里定义、被 MaxFrame 发到 Worker 的函数；**禁止** `@dataclass` / 自定义 `class`，只用 `dict`/`list`/内置类型 |
+| 发现（discover） | `list_bag_keys_from_oss` + `build_hash_chunk_udf`；`discover_mode=auto\|keys\|demo` |
+| `apply`（`axis=1`） | **一行调用一次** UDF，入门简单 |
+| `mf.apply_chunk` | **一次吃多行**；发现用 `hash_batch_rows`，流水线用 `batch_rows` |
+| `dpe_parallel` + `mf.rebalance` | 把输入拆成约 N 个分区，便于多 Worker 并行；实际分区 ≤ 行数 |
+
+最小对照（生产 Driver 同构：先 hash 再 pipeline）：
+
+```python
+# ① 发现：列键 → DPE hash → clip_id
+bag_keys = list_bag_keys_from_oss(...)  # Driver
+discovered = discover_bags_via_hash(bag_keys=bag_keys, hash_batch_rows=32, ...)
+
+# ② 流水线
+input_df = md.DataFrame(pd.DataFrame(build_job_rows_from_discovered(discovered, ...)))
+input_df = input_df.mf.rebalance(num_partitions=min(dpe_parallel, n_rows))
+result_df = input_df.mf.apply_chunk(udf, batch_rows=batch_rows, ...)
+```
+
+辅助实现也可对照：`pipeline/dataworks/sdk_pipeline_driver_node.py`、`sdk_dpe_common.py`、`dpe_udf_minimal_example.py`。
+
 ---
 
 ## 1. 节点职责（历史多节点拆分，已冻结）
@@ -150,7 +183,7 @@ preview/audio.wav
 | `DASHSCOPE_API_KEY` | 是 | ASR + Embedding +（部分）Omni |
 | `DASHSCOPE_WORKSPACE_ID` | Omni 是 | MaaS 业务空间 |
 | `DASHSCOPE_REGION` | 否 | 默认 `cn-beijing` |
-| `MODEL_BACKEND` | 否 | **`api`**（默认）或 **`mc`**（未实现） |
+| `MODEL_BACKEND` | 否 | **`api`**（默认）或 **`mc`**（MaxFrame AI，需 `pip install '.[mc]'`，**maxframe≥2.8.0**） |
 | `OMNI_MODEL` | 否 | 默认 `qwen3.5-omni-plus` |
 | `ASR_MODEL` | 否 | 默认 `qwen3-asr-flash` |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | 否 | 默认 `qwen3-vl-embedding` / `1024` |
@@ -160,26 +193,42 @@ preview/audio.wav
 
 ---
 
-## 5. API vs MC（路线图）
+## 5. API vs MC
 
-| 能力 | `MODEL_BACKEND=api`（现在） | `MODEL_BACKEND=mc`（规划） |
-|------|----------------------------|----------------------------|
-| ASR | DashScope SDK | MaxFrame AI / 模型集（若上架） |
-| Omni 打标 | MaaS OpenAI 兼容 | **待 bigdata_modelset 上架 Omni** |
-| VL Embedding | DashScope `MultiModalEmbedding` | MC 侧 embedding UDF |
-| 解析 / MP4 | 始终本地 ffmpeg + rosbags | 不变 |
+| 能力 | `MODEL_BACKEND=api` | `MODEL_BACKEND=mc`（已实现，本机 18/18） |
+|------|---------------------|------------------------------------------|
+| ASR | DashScope SDK | MaxFrame **`content_part.audio`**（2.8+）或 legacy `input_audio` |
+| Omni 打标 | MaaS OpenAI 兼容（video 帧序列 + audio + text） | MaxFrame **`cp.video` + `cp.audio` + `cp.text`（含 ASR）** |
+| VL Embedding | DashScope `MultiModalEmbedding` | MaxFrame `cp.image` + `cp.text`（`enable_fusion`） |
+| 解析 / MP4 | 本地 ffmpeg + rosbags | 不变（DPE extract） |
 
-SDK 已预留：
+SDK 入口：
 
 - `ClientConfig.model_backend` / 环境变量 **`MODEL_BACKEND`**
-- `OmsMultimodalClient` 在 `mc` 下对 Omni 显式 `ConfigurationError`（避免误用）
+- MC 客户端：`oms_multimodal.mc` — `McAsrClient` / `McOmniLabelClient` / `McFusionEmbeddingClient`
+- ContentPart 构造：`oms_multimodal/mc/content_parts.py`
 
-后续改造点（源码 **`piplinesdk/oms_multimodal/`**）：
+### 5.1 MC 环境变量（补充）
 
-1. `omni_client.py` — `McOmniLabelClient` 或分支调用 MaxFrame
-2. `embedding_client.py` / `asr_client.py` — 同上
-3. `pipeline.py` — 按 `model_backend` 注入 client 工厂
-4. DataWorks — 节点参数 `model_backend=api` 直到 MC 验收通过
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `MC_OMNI_NATIVE_MEDIA` | `true` | Omni：`cp.video` + `cp.audio` + `cp.text`（含 ASR transcript） |
+| `MC_OMNI_FALLBACK_MODEL` | 空 | 显式 VL 兜底（如 `qwen3.6-plus`），优先于 catalog Omni |
+| `MC_IMAGE_MODE` | `auto` | `base64` / `oss_url` / `auto`（有 OSS AK/SK 时 auto→oss_url） |
+| `MC_MODELSET_PROJECT` | `bigdata_public_modelset` | modelset 项目 |
+
+### 5.2 验数字段（`labels.jsonl` / `asr.jsonl`）
+
+| 字段 | 期望（原生 media 开启） |
+|------|-------------------------|
+| `asr.jsonl` → `mc_mode` | `content_part_audio` |
+| `labels.jsonl` → `mc_mode` | `omni_native`（有 clip MP4 + WAV） |
+| `labels.jsonl` → `mc_has_video` / `mc_has_audio_part` | `true` |
+| `labels.jsonl` → `mc_has_asr_in_text` | `true`（`cp.text` 含 `[ASR transcript]`） |
+
+本机脚本：`pipeline/local_sdk_mc_test/run_mc_oss_verify.py`（Python **3.11** + `pip install -e "piplinesdk/.[mc]"`）。
+
+关闭原生 media A/B：`MC_OMNI_NATIVE_MEDIA=false`（回退 image 抽帧；文本仍含 ASR）。
 
 ---
 

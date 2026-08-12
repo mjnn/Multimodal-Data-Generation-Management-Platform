@@ -102,7 +102,7 @@ def main() -> None:
         dpe_memory=dpe_memory,
         oss_mount_url=oss_mount_url,
         mount_path=mount_path,
-        storage_options_dict=storage_options(role_arn, account),
+        storage_options_dict=storage_options(role_arn, account, oss_bucket=oss_bucket),
     )
     result = run_dpe_batch_apply(
         o,  # type: ignore[name-defined]

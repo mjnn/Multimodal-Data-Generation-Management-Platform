@@ -17,10 +17,21 @@ import { api } from '../api'
 import type { ClipOverview } from '../api/types'
 import { PipelineStatus } from '../components/PipelineStatus'
 import { OverviewClipMetricsGrid, OverviewClipPieChart } from '../components/OverviewClipPieChart'
+import {
+  OverviewClipSearchPanel,
+  type OverviewQueryHit,
+} from '../components/OverviewClipSearchPanel'
 import { ContentCard, FilterBar, PageHeader, PageStack } from '../components/ui'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
 import { useListQueryState } from '../hooks/useListQueryState'
-import { clearOverviewSnapshot, getOverviewSnapshot, setOverviewSnapshot } from '../utils/overviewCache'
+import {
+  clearOverviewSnapshot,
+  getOverviewSnapshot,
+  getOverviewSnapshotStale,
+  overviewCacheAgeLabel,
+  OVERVIEW_CACHE_TTL_MS,
+  setOverviewSnapshot,
+} from '../utils/overviewCache'
 import { clipDisplayName } from '../utils/clipDisplay'
 import { isDemoClip } from '../utils/demoClip'
 import {
@@ -46,6 +57,10 @@ export function OverviewPage() {
   const [clips, setClips] = useState<ClipOverview[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [cacheSavedAt, setCacheSavedAt] = useState<number | null>(null)
+  const [queryActive, setQueryActive] = useState(false)
+  const [queryClipIds, setQueryClipIds] = useState<string[] | null>(null)
+  const [queryHits, setQueryHits] = useState<OverviewQueryHit[]>([])
   const navigate = useNavigate()
   const { status, page, pageSize, setStatus, setPage, setPageSize } = useListQueryState({
     statusKey: 'pipeline',
@@ -59,6 +74,13 @@ export function OverviewPage() {
   useEffect(() => {
     setLoadError(null)
     let cancelled = false
+    let expireTimer: number | undefined
+
+    const applyMerged = (merged: ClipOverview[]) => {
+      setClips(merged)
+      setOverviewSnapshot(cacheKey, merged)
+      setCacheSavedAt(Date.now())
+    }
 
     const fetchFresh = async () => {
       try {
@@ -70,8 +92,7 @@ export function OverviewPage() {
         ])
         if (cancelled) return
         const merged = rows.map((c) => mergeClipStats(c, statsMapRaw))
-        setClips(merged)
-        setOverviewSnapshot(cacheKey, merged)
+        applyMerged(merged)
       } catch (e: unknown) {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : '加载 Clip 列表失败'
@@ -82,19 +103,48 @@ export function OverviewPage() {
       }
     }
 
-    const cached = getOverviewSnapshot(cacheKey)
-    if (cached) {
-      setClips(cached.clips)
-      setLoading(false)
-    } else {
-      setLoading(true)
+    const scheduleExpireRefresh = (savedAt: number) => {
+      const remain = OVERVIEW_CACHE_TTL_MS - (Date.now() - savedAt)
+      if (remain <= 0) {
+        void fetchFresh()
+        return
+      }
+      expireTimer = window.setTimeout(() => {
+        if (cancelled) return
+        setLoading(true)
+        void fetchFresh()
+      }, remain)
     }
-    void fetchFresh()
+
+    const fresh = getOverviewSnapshot(cacheKey)
+    if (fresh) {
+      setClips(fresh.clips)
+      setCacheSavedAt(fresh.savedAt)
+      setLoading(false)
+      scheduleExpireRefresh(fresh.savedAt)
+    } else {
+      const stale = getOverviewSnapshotStale(cacheKey)
+      if (stale) {
+        setClips(stale.clips)
+        setCacheSavedAt(stale.savedAt)
+        setLoading(true)
+      } else {
+        setLoading(true)
+      }
+      void fetchFresh()
+    }
 
     return () => {
       cancelled = true
+      if (expireTimer != null) window.clearTimeout(expireTimer)
     }
   }, [cacheKey, dataSource])
+
+  useEffect(() => {
+    setQueryActive(false)
+    setQueryClipIds(null)
+    setQueryHits([])
+  }, [cacheKey])
 
   const needsPipelinePoll = useMemo(
     () =>
@@ -106,23 +156,23 @@ export function OverviewPage() {
   useEffect(() => {
     if (!needsPipelinePoll) return
     const timer = window.setInterval(() => {
-      clearOverviewSnapshot()
       void (async () => {
         try {
           const [rows, statsMapRaw] = await Promise.all([
-            api.getClips({ light: true, refresh: true }),
-            api.getBatchClipStats({ refresh: true }).catch(
+            api.getClips({ light: true, refresh: false }),
+            api.getBatchClipStats({ refresh: false }).catch(
               () => ({} as Record<string, Partial<ClipOverview>>),
             ),
           ])
           const merged = rows.map((c) => mergeClipStats(c, statsMapRaw))
           setClips(merged)
           setOverviewSnapshot(cacheKey, merged)
+          setCacheSavedAt(Date.now())
         } catch {
           /* keep last snapshot on poll errors */
         }
       })()
-    }, 5000)
+    }, 15_000)
     return () => window.clearInterval(timer)
   }, [needsPipelinePoll, cacheKey])
 
@@ -141,6 +191,8 @@ export function OverviewPage() {
         const merged = rows.map((c) => mergeClipStats(c, statsMapRaw))
         setClips(merged)
         setOverviewSnapshot(cacheKey, merged)
+        setCacheSavedAt(Date.now())
+        message.success('总览已刷新并缓存 6 小时')
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : '加载 Clip 列表失败'
         setLoadError(msg)
@@ -151,6 +203,12 @@ export function OverviewPage() {
     })()
   }
 
+  const scoreByClip = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const h of queryHits) m.set(h.clip_id, h.score)
+    return m
+  }, [queryHits])
+
   const bucketCounts = useMemo(() => summarizeOverviewClipBuckets(clips), [clips])
   const totalErrors = clips.filter((c) => c.pipeline_status === 'failed').length
   const completed = clips.filter((c) => c.pipeline_status === 'completed').length
@@ -160,20 +218,28 @@ export function OverviewPage() {
   ).length
 
   const filteredClips = useMemo(() => {
-    if (pipelineFilter === 'all') return clips
-    if (pipelineFilter === 'completed') return clips.filter((c) => c.pipeline_status === 'completed')
-    if (pipelineFilter === 'failed') return clips.filter((c) => c.pipeline_status === 'failed')
-    if (pipelineFilter === 'running') return clips.filter((c) => c.pipeline_status === 'running')
+    let rows = clips
+    if (queryActive && queryClipIds) {
+      const allow = new Set(queryClipIds)
+      rows = rows.filter((c) => allow.has(c.clip_id))
+      rows = [...rows].sort(
+        (a, b) => (scoreByClip.get(b.clip_id) ?? 0) - (scoreByClip.get(a.clip_id) ?? 0),
+      )
+    }
+    if (pipelineFilter === 'all') return rows
+    if (pipelineFilter === 'completed') return rows.filter((c) => c.pipeline_status === 'completed')
+    if (pipelineFilter === 'failed') return rows.filter((c) => c.pipeline_status === 'failed')
+    if (pipelineFilter === 'running') return rows.filter((c) => c.pipeline_status === 'running')
     if (pipelineFilter === 'in_review') {
-      return clips.filter((c) => classifyOverviewClip(c) === 'in_review')
+      return rows.filter((c) => classifyOverviewClip(c) === 'in_review')
     }
     if (pipelineFilter === 'dataset_ready') {
-      return clips.filter((c) => classifyOverviewClip(c) === 'dataset_ready')
+      return rows.filter((c) => classifyOverviewClip(c) === 'dataset_ready')
     }
-    return clips.filter(
+    return rows.filter(
       (c) => c.pipeline_status !== 'completed' && c.pipeline_status !== 'failed' && c.pipeline_status !== 'running',
     )
-  }, [clips, pipelineFilter])
+  }, [clips, pipelineFilter, queryActive, queryClipIds, scoreByClip])
 
   const openClip = (clipId: string) => {
     if (!browseClips) return
@@ -201,6 +267,19 @@ export function OverviewPage() {
       width: 280,
       render: (_, r) => renderClipName(r),
     },
+    ...(queryActive
+      ? [
+          {
+            title: '相关度',
+            key: 'query_score',
+            width: 88,
+            render: (_: unknown, r: ClipOverview) => {
+              const s = scoreByClip.get(r.clip_id)
+              return s == null ? '—' : s.toFixed(2)
+            },
+          } as ColumnsType<ClipOverview>[number],
+        ]
+      : []),
     {
       title: '管线状态',
       dataIndex: 'pipeline_status',
@@ -333,13 +412,20 @@ export function OverviewPage() {
         description={
           isAnonymousOnly(user?.roles)
             ? `当前为匿名账号，仅可查看总览列表与统计。当前数据源：${modeLabel}。`
-            : `当前数据源：${modeLabel}。以 Clip 为单位查看管线状态与校核进度。`
+            : `当前数据源：${modeLabel}。以 Clip 为单位查看管线状态与校核进度。列表默认缓存 6 小时，过期自动重拉；也可手动刷新。`
         }
         icon={<DatabaseOutlined />}
         extra={
-          <Button icon={<ReloadOutlined />} loading={loading} onClick={handleRefreshOverview}>
-            刷新
-          </Button>
+          <Space>
+            {cacheSavedAt ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {overviewCacheAgeLabel(cacheSavedAt)}
+              </Typography.Text>
+            ) : null}
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={handleRefreshOverview}>
+              刷新
+            </Button>
+          </Space>
         }
       />
 
@@ -347,15 +433,24 @@ export function OverviewPage() {
         <Alert type="error" showIcon message="加载失败" description={loadError} style={{ marginBottom: 16 }} />
       ) : null}
 
-      <ContentCard title="Clip 阶段分布">
+      <ContentCard>
         <div className="overview-summary">
           <OverviewClipPieChart counts={bucketCounts} total={clips.length} />
           <OverviewClipMetricsGrid counts={bucketCounts} total={clips.length} />
         </div>
       </ContentCard>
 
+      <OverviewClipSearchPanel
+        onApplied={(result) => {
+          setQueryActive(result.active)
+          setQueryClipIds(result.clipIds)
+          setQueryHits(result.hits)
+          setPage(1)
+        }}
+      />
+
       <ContentCard
-        title="全部 Clip"
+        title={queryActive ? '检索结果 Clip' : '全部 Clip'}
         extra={browseClips ? '点击行进入 Clip 预览' : undefined}
         noPadding
         toolbar={
@@ -395,8 +490,9 @@ export function OverviewPage() {
           scroll={{ x: 1100 }}
           tableLayout="fixed"
           locale={{
-            emptyText:
-              dataSource === 'local'
+            emptyText: queryActive
+              ? '检索无匹配 Clip'
+              : dataSource === 'local'
                 ? '暂无 Clip；可运行 init_local_runtime.py、seed_demo 或 import_real_data_clips'
                 : '暂无 Clip；请确认 OSS/MC 凭证与云端数据',
           }}

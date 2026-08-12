@@ -235,6 +235,37 @@ def _build_clip_card(clip_id: str, run_id: str, view: dict[str, Any]) -> dict[st
         card["clip_review_updated_at"] = review.get("updated_at")
 
     try:
+        from hmi.media.preview_manifest import load_preview_manifest, manifest_for_api
+
+        doc = load_preview_manifest(clip_id, run_id)
+        if doc:
+            # Same source as ClipTimeline / explorer-bootstrap (bbox_url + has_bbox_preview).
+            api_preview = manifest_for_api(clip_id, run_id, doc)
+            card["has_bbox_preview"] = bool(api_preview.get("has_bbox_preview"))
+        else:
+            card["has_bbox_preview"] = False
+    except Exception:
+        card["has_bbox_preview"] = False
+
+    try:
+
+        from hmi.review.bbox_qa_db import get_bbox_qa
+
+        qa = get_bbox_qa(clip_id, run_id)
+        if qa:
+            card["bbox_qa"] = {
+                "status": qa.get("status"),
+                "note": qa.get("note"),
+                "reviewer_id": qa.get("reviewer_id"),
+                "reviewed_at": qa.get("reviewed_at"),
+                "updated_at": qa.get("updated_at"),
+            }
+
+    except Exception:
+
+        pass
+
+    try:
 
         from hmi.router import clips_svc
 

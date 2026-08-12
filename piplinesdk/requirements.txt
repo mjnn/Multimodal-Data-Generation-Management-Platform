@@ -7,3 +7,6 @@ Pillow>=10.0.0
 opencv-python-headless>=4.8.0
 python-dotenv>=1.0.0
 imageio-ffmpeg>=0.5.1
+# Optional YOLO (BBOX_DETECTOR=yolo). Prefer: pip install "oms-multimodal-sdk[bbox]"
+# or HMI: pip install -r hmi/requirements-dev.txt (includes [bbox]).
+# ultralytics>=8.0.0

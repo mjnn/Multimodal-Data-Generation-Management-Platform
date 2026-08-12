@@ -11,6 +11,12 @@ piplinesdk/build/
 piplinesdk/dist/
 piplinesdk/*.egg-info/
 
+# OpenCV age/gender DNN weights (downloaded on first use; ~45MB each)
+piplinesdk/oms_multimodal/bbox/data/*.caffemodel
+piplinesdk/oms_multimodal/bbox/data/*.caffemodel.part
+piplinesdk/oms_multimodal/bbox/data/*_googlenet.onnx
+piplinesdk/oms_multimodal/bbox/data/*_googlenet.onnx.part
+
 # Pipeline runtime DB
 pipeline/data/*.db
 

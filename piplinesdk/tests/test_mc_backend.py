@@ -11,8 +11,21 @@ from oms_multimodal import OmsMultimodalClient
 from oms_multimodal.asr_client import AsrConfig
 from oms_multimodal.config import ClientConfig
 from oms_multimodal.exceptions import ConfigurationError
+from oms_multimodal.mc.content_parts import (
+    file_base64,
+    mc_native_media_enabled,
+    pick_preview_video_path,
+    populate_media_columns,
+    resolve_omni_mc_mode,
+    speech_context_without_asr,
+)
 from oms_multimodal.mc.config import McBackendConfig
-from oms_multimodal.mc.runtime import is_omni_model_name, resolve_odps_entry
+from oms_multimodal.mc.runtime import (
+    is_omni_model_name,
+    normalize_catalog_endpoint,
+    resolve_mc_catalog_endpoint,
+    resolve_odps_entry,
+)
 from oms_multimodal.model_factory import create_asr_client, create_embedding_client, create_omni_client
 
 
@@ -164,6 +177,68 @@ class TestOmsMultimodalClientMcBackend(unittest.TestCase):
         runtime.destroy.assert_called_once_with()
 
 
+class TestMcContentParts(unittest.TestCase):
+    def test_mc_native_media_enabled_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MC_OMNI_NATIVE_MEDIA", None)
+            self.assertTrue(mc_native_media_enabled())
+
+    def test_mc_native_media_disabled(self) -> None:
+        with patch.dict(os.environ, {"MC_OMNI_NATIVE_MEDIA": "false"}, clear=False):
+            self.assertFalse(mc_native_media_enabled())
+
+    def test_populate_media_columns_base64(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(b"RIFF")
+            wav_path = tmp.name
+        try:
+            cfg = McBackendConfig(image_mode="base64")
+            row: dict[str, str] = {}
+            populate_media_columns(row, config=cfg, local_path=wav_path, column_prefix="audio")
+            self.assertIn("audio_b64", row)
+            self.assertEqual(row["audio_b64"], file_base64(wav_path))
+        finally:
+            Path(wav_path).unlink(missing_ok=True)
+
+    def test_speech_context_without_asr_skips_asr(self) -> None:
+        clip = Mock()
+        clip.fusion_text.return_value = "event-a"
+        clip.mel_feature_text = "mel-panel"
+        clip.asr_text = "should-not-appear"
+        text = speech_context_without_asr(clip)
+        self.assertIn("event-a", text)
+        self.assertIn("mel-panel", text)
+        self.assertNotIn("should-not-appear", text)
+
+    def test_resolve_omni_mc_mode_native_video(self) -> None:
+        clip = Mock()
+        clip.clip_video_path = "/tmp/preview.mp4"
+        clip.clip_video_paths = {}
+        clip.audio = None
+        with patch("oms_multimodal.mc.content_parts.Path.is_file", return_value=True):
+            mode = resolve_omni_mc_mode(
+                omni_model="qwen3.5-omni-plus",
+                effective_model="qwen3.5-omni-plus",
+                clip=clip,
+                use_native_media=True,
+            )
+        self.assertEqual(mode, "omni_native")
+
+    def test_resolve_omni_mc_mode_vl_fallback(self) -> None:
+        clip = Mock()
+        clip.clip_video_path = None
+        clip.clip_video_paths = {}
+        clip.audio = None
+        clip.frames = []
+        mode = resolve_omni_mc_mode(
+            omni_model="qwen3.5-omni-plus",
+            effective_model="qwen3.6-plus",
+            clip=clip,
+            use_native_media=True,
+        )
+        self.assertEqual(mode, "vl_fallback")
+
+
 class TestMcRuntimeHelpers(unittest.TestCase):
     def test_is_omni_model_name(self) -> None:
         self.assertTrue(is_omni_model_name("qwen3.5-omni-plus"))
@@ -172,6 +247,22 @@ class TestMcRuntimeHelpers(unittest.TestCase):
     def test_resolve_odps_entry_explicit(self) -> None:
         sentinel = object()
         self.assertIs(resolve_odps_entry(sentinel), sentinel)
+
+    def test_normalize_catalog_endpoint_internal(self) -> None:
+        url = normalize_catalog_endpoint("https://catalogapi.cn-shanghai.maxcompute.aliyun.com")
+        self.assertIn("aliyun-inc.com", url)
+        self.assertNotIn(".aliyun.com", url.replace(".aliyun-inc.com", ""))
+
+    def test_resolve_mc_catalog_endpoint_default_internal(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            url = resolve_mc_catalog_endpoint(cloud_region="cn_shanghai")
+        self.assertEqual(url, "https://catalogapi.cn-shanghai.maxcompute.aliyun-inc.com")
+
+    def test_resolve_mc_catalog_endpoint_explicit(self) -> None:
+        url = resolve_mc_catalog_endpoint(
+            explicit="http://catalogapi.cn-beijing.maxcompute.aliyun.com"
+        )
+        self.assertEqual(url, "http://catalogapi.cn-beijing.maxcompute.aliyun-inc.com")
 
 
 if __name__ == "__main__":

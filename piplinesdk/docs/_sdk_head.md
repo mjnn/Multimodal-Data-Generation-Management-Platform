@@ -123,6 +123,8 @@ py -3.11 -m pip install -e .
 py -3.11 -m pip install -e ".[mc]"
 ```
 
+要求 **maxframe ≥ 2.8.0**（`content_part` 支持 `audio` / `video`）。
+
 说明：
 
 - 建议使用 **Python 3.11 或 3.12**。Python 3.14 上 MaxCompute 相关依赖经常装不上。
@@ -316,7 +318,15 @@ py -3.11 examples\02_extract_only.py
 | `ACOUSTIC_PANEL_WIDTH` | 否 | `768` | 频谱图宽度（像素） |
 | `ACOUSTIC_PANEL_HEIGHT` | 否 | `256` | 频谱图高度（像素） |
 
-使用 `MODEL_BACKEND=mc` 时，还需要 MaxCompute 相关变量（如 `ODPS_ACCESS_ID`、`ODPS_ACCESS_KEY`、`ODPS_PROJECT`、`ODPS_ENDPOINT` 等），详见 [DATAWORKS_SDK.md](DATAWORKS_SDK.md)。
+使用 `MODEL_BACKEND=mc` 时，还需要 MaxCompute 相关变量（如 `ODPS_ACCESS_ID`、`ODPS_ACCESS_KEY`、`ODPS_PROJECT`、`ODPS_ENDPOINT` 等），以及：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `MC_OMNI_NATIVE_MEDIA` | `true` | Omni：`cp.video` + `cp.audio` + `cp.text`（含 ASR transcript） |
+| `MC_IMAGE_MODE` | `auto` | 媒体输入：`base64` / `oss_url` / `auto` |
+| `MC_OMNI_FALLBACK_MODEL` | 空 | VL 兜底模型（可选） |
+
+安装：`py -3.11 -m pip install -e ".[mc]"`。详见 [DATAWORKS_SDK.md](DATAWORKS_SDK.md)。
 
 ### 4.2 在代码里显式传参（可覆盖环境变量）
 

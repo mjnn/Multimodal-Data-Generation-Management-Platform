@@ -54,6 +54,26 @@ def enrich_value_schema(schema: dict[str, Any] | None, *, enum_map: dict[str, st
         return schema
     out = dict(schema)
     mapping = dict(enum_map or load_enum_zh_map())
+
+    # Nested enum_tree (or enum with children nodes)
+    if out.get("type") == "enum_tree" or (
+        out.get("type") == "enum"
+        and isinstance(out.get("values"), list)
+        and any(isinstance(v, dict) and "children" in v for v in out["values"])
+    ):
+        out["type"] = "enum_tree"
+        nodes, ids = _normalize_tree_values(out.get("values"))
+        out["values"] = nodes
+        labels = dict(out.get("labels") or {})
+        for v in ids:
+            if v not in labels:
+                labels[v] = zh_for_enum_value(v, enum_map=mapping)
+        out["labels"] = labels
+        if out.get("type") == "bool":
+            out.setdefault("true_label", "是")
+            out.setdefault("false_label", "否")
+        return out
+
     enum_values = _schema_enum_values(out)
     if enum_values is not None:
         labels = dict(out.get("labels") or {})
@@ -65,6 +85,32 @@ def enrich_value_schema(schema: dict[str, Any] | None, *, enum_map: dict[str, st
         out.setdefault("true_label", "是")
         out.setdefault("false_label", "否")
     return out
+
+
+def _normalize_tree_values(values: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    if not isinstance(values, list):
+        return [], []
+    nodes: list[dict[str, Any]] = []
+    ids: list[str] = []
+    for item in values:
+        if isinstance(item, str):
+            nodes.append({"id": item})
+            ids.append(item)
+            continue
+        if not isinstance(item, dict) or item.get("id") is None:
+            continue
+        node: dict[str, Any] = {"id": str(item["id"])}
+        ids.append(node["id"])
+        children = item.get("children")
+        if children:
+            child_nodes, child_ids = _normalize_tree_values(children)
+            node["children"] = child_nodes
+            ids.extend(child_ids)
+        for k, v in item.items():
+            if k not in {"id", "children"}:
+                node[k] = v
+        nodes.append(node)
+    return nodes, ids
 
 
 def enrich_taxonomy_document(taxonomy: dict[str, Any]) -> dict[str, Any]:
@@ -90,7 +136,12 @@ def _allowed_zh_values(schema: dict[str, Any]) -> list[str]:
     return allowed
 
 
-def normalize_label_value(raw: Any, schema: dict[str, Any] | None) -> Any:
+def normalize_label_value(
+    raw: Any,
+    schema: dict[str, Any] | None,
+    *,
+    tree_output_mode: str = "path",
+) -> Any:
     if raw is None or schema is None:
         return raw
     stype = schema.get("type")
@@ -104,6 +155,18 @@ def normalize_label_value(raw: Any, schema: dict[str, Any] | None) -> Any:
         if text in ("false", "0", "no", "否"):
             return schema.get("false_label") or "否"
         return raw
+
+    if stype == "enum_tree" or (
+        stype == "enum"
+        and isinstance(schema.get("values"), list)
+        and any(isinstance(v, dict) and "children" in v for v in schema["values"])
+    ):
+        try:
+            from oms_multimodal.taxonomy_tree import normalize_tree_value
+        except ImportError:
+            # shared used outside package path — inline minimal passthrough
+            return raw
+        return normalize_tree_value(schema, raw, output_mode=tree_output_mode)
 
     if stype == "enum":
         key = str(raw).strip()
@@ -129,7 +192,12 @@ def normalize_label_value(raw: Any, schema: dict[str, Any] | None) -> Any:
     return raw
 
 
-def normalize_parsed_labels(taxonomy: dict[str, Any], labels: dict[str, Any]) -> dict[str, Any]:
+def normalize_parsed_labels(
+    taxonomy: dict[str, Any],
+    labels: dict[str, Any],
+    *,
+    tree_output_mode: str = "path",
+) -> dict[str, Any]:
     by_id = {str(it["id"]): it for it in taxonomy.get("labels") or [] if it.get("id")}
     out: dict[str, Any] = {}
     for label_id, entry in labels.items():
@@ -139,10 +207,20 @@ def normalize_parsed_labels(taxonomy: dict[str, Any], labels: dict[str, Any]) ->
             schema = enrich_value_schema(item["value_schema"])
         if isinstance(entry, dict) and "value" in entry:
             new_entry = dict(entry)
-            new_entry["value"] = normalize_label_value(entry.get("value"), schema)
+            normalized = normalize_label_value(
+                entry.get("value"),
+                schema,
+                tree_output_mode=tree_output_mode,
+            )
+            if normalized is None and schema and schema.get("type") == "enum_tree":
+                continue
+            new_entry["value"] = normalized
             out[label_id] = new_entry
         else:
-            out[label_id] = normalize_label_value(entry, schema)
+            normalized = normalize_label_value(entry, schema, tree_output_mode=tree_output_mode)
+            if normalized is None and schema and schema.get("type") == "enum_tree":
+                continue
+            out[label_id] = normalized
     return out
 
 
@@ -152,6 +230,9 @@ def display_label_value(raw: Any, schema: dict[str, Any] | None) -> str:
     normalized = normalize_label_value(raw, enrich_value_schema(schema) if schema else None)
     if isinstance(normalized, list):
         return "、".join(str(x) for x in normalized if x is not None and str(x) != "")
+    if isinstance(normalized, dict) and "path" in normalized:
+        path = normalized.get("path") or []
+        return " → ".join(str(x) for x in path)
     if isinstance(normalized, bool):
         return "是" if normalized else "否"
     return str(normalized)

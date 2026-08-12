@@ -58,6 +58,9 @@ def ensure_review_schema() -> None:
     from hmi.review.field_review_db import ensure_field_review_schema
 
     ensure_field_review_schema()
+    from hmi.review.bbox_qa_db import ensure_bbox_qa_schema
+
+    ensure_bbox_qa_schema()
     from hmi.review.assignment_db import ensure_assignment_schema
 
     ensure_assignment_schema()

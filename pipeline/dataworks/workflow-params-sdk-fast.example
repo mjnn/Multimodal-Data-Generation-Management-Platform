@@ -1,0 +1,19 @@
+# DataWorks · 极速探针（Driver-only）— 推荐先用这个
+# 节点代码：pipeline/dataworks/sdk_driver_fast_probe_node.py（整文件，无需 bundle）
+# 预期：30s–2min
+#
+# 自定义脚本（可选，缩短启动）：
+#   pip install -q alibabacloud_oss_v2
+# 不要装 maxframe — 本节点不用 DPE。
+#
+# 通过：FAST_PROBE_RESULT={"ok": true, "bag_exists": true, "bag_size": ...}
+
+oss_bucket=rosbag-labels-pipeline-bucket2
+oss_ram_role_arn=acs:ram::1413495213520409:role/maxframe-rosbag-oss
+dpe_image=rosbag_sdk_dpe
+cloud_region=cn_shanghai
+bag_oss_key=rosbags/2026-06-05_13-27-07/output.bag
+
+# --- 验 DPE 镜像内 SDK（仍慢，5–15min+）---
+# 本机：py -3.11 pipeline/scripts/probe_dpe_image_sdk.py --image rosbag_sdk_dpe
+# 或 DW：sdk_dpe_smoke_node.py + workflow-params-sdk-smoke.example

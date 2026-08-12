@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
 import struct
 from dataclasses import asdict, dataclass, field
@@ -131,6 +132,13 @@ class Clip:
     clip_video_path: str | None = None
     clip_video_paths: dict[str, str] | None = None
     clip_video_config: dict[str, Any] | None = None
+    # Bounding-box annotated frames / videos (optional; produced by annotate_bbox + encode_preview)
+    bbox_enabled: bool = False
+    bbox_frame_paths: dict[str, str] | None = None  # original image_path -> annotated path
+    clip_video_bbox_path: str | None = None
+    clip_video_bbox_paths: dict[str, str] | None = None
+    # Concise BBox class/element summary for Omni prompt (set by label stage when bboxes.jsonl present)
+    bbox_context_text: str | None = None
     events: list[TextPayload] = field(default_factory=list)
     source_topics: list[str] = field(default_factory=list)
 
@@ -181,6 +189,10 @@ class Clip:
             "clip_video_path": self.clip_video_path,
             "clip_video_paths": self.clip_video_paths,
             "clip_video_config": self.clip_video_config,
+            "bbox_enabled": self.bbox_enabled,
+            "bbox_frame_paths": self.bbox_frame_paths,
+            "clip_video_bbox_path": self.clip_video_bbox_path,
+            "clip_video_bbox_paths": self.clip_video_bbox_paths,
             "event_topics": sorted({e.topic for e in self.events}),
             "event_text": self.fusion_text(),
         }
@@ -482,7 +494,11 @@ class RosbagExtractor:
                     events=clip_events,
                     source_topics=source_topics,
                 )
-                if video_config.enabled and video_frames and clip_audio:
+                # Default: encode via encode_preview capability. Compat:
+                # EXTRACT_INLINE_ENCODE=true restores old extract-time MP4 encoding.
+                inline_raw = os.getenv("EXTRACT_INLINE_ENCODE", "false").strip().lower()
+                inline_encode = inline_raw in {"1", "true", "yes", "on"}
+                if inline_encode and video_config.enabled and video_frames and clip_audio:
                     clip_dir = self.work_dir / "clips" / clip_id
                     try:
                         render_clip_preview_video(

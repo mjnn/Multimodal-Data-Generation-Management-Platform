@@ -1,6 +1,9 @@
 import type { DataNode } from 'antd/es/tree'
 import type { TaxonomyNodeDetail, TaxonomyNodeInput } from '../api/types'
-import { taxonomySchemaDetailNodes } from './taxonomySchemaView'
+import {
+  taxonomyEnumOuterNodes,
+  taxonomySchemaDetailNodes,
+} from './taxonomySchemaView'
 
 export type TaxonomyLevelMeta = {
   level_code: string
@@ -109,14 +112,15 @@ export function toEditorTreeData(
           key: node.label_id,
           title: `${node.name} (${node.label_id})`,
         }
-        if (canEdit) {
-          return { ...base, isLeaf: true }
+        // Edit mode: show enum_tree nesting under the leaf (expand in-place).
+        // Read-only: full schema detail (dtype / nested enums / definition).
+        const children = canEdit
+          ? taxonomyEnumOuterNodes(node)
+          : taxonomySchemaDetailNodes(node)
+        if (children.length) {
+          return { ...base, isLeaf: false, children }
         }
-        return {
-          ...base,
-          isLeaf: false,
-          children: taxonomySchemaDetailNodes(node),
-        }
+        return { ...base, isLeaf: true }
       }),
   }))
 }
@@ -135,6 +139,11 @@ export function nodesToPayload(nodes: TaxonomyNodeDetail[]): TaxonomyNodeInput[]
       sort_order: n.sort_order,
       is_active: n.is_active,
     }))
+}
+
+/** Levels that exist in the editor shell but have no active label nodes (cannot be persisted). */
+export function formatEmptyLevelLabels(emptyLevels: TaxonomyLevelMeta[]): string[] {
+  return emptyLevels.map((l) => `${l.level_name || l.level_code}（${l.level_code}）`)
 }
 
 export function parseLevelKey(key: string): string | null {

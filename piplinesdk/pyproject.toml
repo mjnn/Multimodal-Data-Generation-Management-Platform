@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oms-multimodal-sdk"
-version = "0.3.2"
+version = "0.3.3"
 description = "ROS1 rosbag multimodal OMS labeling and fusion embedding SDK for Alibaba Cloud Qwen models"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,10 +34,18 @@ dependencies = [
 ]
 [project.optional-dependencies]
 dev = ["build", "twine"]
-# MaxCompute / MaxFrame AI Function 后端（本机联调与 DPE 镜像安装用）
+# 本机联调 MaxCompute AI（会装 maxframe/pyodps；勿打进生产 DPE 镜像）
 mc = [
-    "maxframe>=2.0.0",
+    "maxframe>=2.8.0",
     "pyodps>=0.11.0",
+    "oss2>=2.18.0",
+]
+# Optional YOLO detector for annotate_bbox (BBOX_DETECTOR=yolo)
+bbox = [
+    "ultralytics>=8.0.0",
+]
+# DPE 镜像用：平台已提供 maxframe/pyodps，只补 OSS SDK
+dpe = [
     "oss2>=2.18.0",
 ]
 
@@ -52,4 +60,9 @@ where = ["."]
 include = ["oms_multimodal*"]
 
 [tool.setuptools.package-data]
-oms_multimodal = ["py.typed", "bundled/*"]
+oms_multimodal = [
+    "py.typed",
+    "bundled/*",
+    "bundled/**/*",
+    "bbox/data/*",
+]

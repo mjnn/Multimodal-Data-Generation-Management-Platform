@@ -31,10 +31,38 @@ def _first_non_empty(*values: str | None) -> str:
 
 
 def load_cloud_env(env_path: Path | None = None) -> None:
-    if env_path is None:
-        load_dotenv()
-        return
-    load_dotenv(env_path)
+    """Load dotenv; tolerate non-UTF-8 Windows .env files."""
+    path = Path(env_path) if env_path is not None else None
+    if path is None:
+        # python-dotenv default search; if it fails on encoding, try known repo roots
+        try:
+            load_dotenv()
+            return
+        except UnicodeDecodeError:
+            candidates = [
+                Path.cwd() / ".env",
+                Path(__file__).resolve().parents[1] / ".env",
+            ]
+            for cand in candidates:
+                if cand.is_file():
+                    path = cand
+                    break
+            if path is None:
+                raise
+    raw = path.read_bytes()
+    text: str | None = None
+    for enc in ("utf-8-sig", "utf-8", "gbk", "cp936"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise UnicodeDecodeError("utf-8", raw, 0, 1, f"cannot decode {path}")
+    # Write a temp utf-8 view only in-memory via StringIO
+    from io import StringIO
+
+    load_dotenv(stream=StringIO(text), override=False)
 
 
 def resolve_cloud_settings(config: dict[str, Any]) -> dict[str, str]:

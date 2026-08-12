@@ -1,0 +1,31 @@
+# Non-secret defaults for HMI → DataWorks RunManualDagNodes (sdk hybrid driver).
+# Overridden at trigger time: bag_oss_keys, max_bags, ds.
+# Secrets (oss_vl_*, ram role) should live in DataWorks node/workflow params or .env
+# via DATAWORKS_EXTRA_PARAMS (space-separated key=value).
+
+stages: extract,preview,asr,label,embed,mc_write,dispatch
+ai_submitter: driver
+cleanup_work: "false"
+model_backend: mc
+batch_rows: "1"
+dpe_parallel: "4"
+force_rerun: "true"
+mc_modelset_project: bigdata_public_modelset
+inference_quota_name: ai_InferenceQuota
+asr_parallel_partitions: "4"
+label_parallel_partitions: "4"
+embed_parallel_partitions: "4"
+asr_model: qwen3-asr-flash
+omni_model: qwen3.5-omni-plus
+embedding_model: qwen3-vl-embedding
+embedding_dimension: "1024"
+dpe_image: rosbag_sdk_dpe
+dpe_cpu: "4"
+dpe_memory_gb: "16"
+sdk_table_prefix: aig_sdk__
+session_max_alive_sec: "14400"
+session_max_idle_sec: "14400"
+odps_function_timeout_sec: "3600"
+cloud_region: cn_shanghai
+mount_path: /mnt/oss
+ai_media_mode: auto

@@ -17,13 +17,13 @@
 4. [认证与配置](#4-认证与配置)
 5. [核心概念（先看懂这些词）](#5-核心概念先看懂这些词)
 6. [推荐用法：按步骤运行流水线](#6-推荐用法按步骤运行流水线)
-7. [客户端 API（OmsMultimodalClient）](#7-omsmultimodalclient-api)
+7. [客户端 API（OmsMultimodalClient）](#7-客户端-apiomsmultimodalclient)
 8. [配置类参考](#8-配置类参考)
 9. [低级 API](#9-低级-api)
-10. [命令行工具](#10-cli-参考)
-11. [输出文件格式](#11-输出数据结构)
+10. [命令行工具](#10-命令行工具)
+11. [输出文件格式](#11-输出文件格式)
 12. [错误处理](#12-错误处理)
-13. [更多代码示例](#13-完整示例)
+13. [更多代码示例](#13-更多代码示例)
 14. [架构与限制](#14-架构与限制)
 15. [术语表](#15-术语表)
 
@@ -122,6 +122,8 @@ py -3.11 -m pip install -e .
 ```powershell
 py -3.11 -m pip install -e ".[mc]"
 ```
+
+要求 **maxframe ≥ 2.8.0**（`content_part` 支持 `audio` / `video`）。
 
 说明：
 
@@ -316,7 +318,15 @@ py -3.11 examples\02_extract_only.py
 | `ACOUSTIC_PANEL_WIDTH` | 否 | `768` | 频谱图宽度（像素） |
 | `ACOUSTIC_PANEL_HEIGHT` | 否 | `256` | 频谱图高度（像素） |
 
-使用 `MODEL_BACKEND=mc` 时，还需要 MaxCompute 相关变量（如 `ODPS_ACCESS_ID`、`ODPS_ACCESS_KEY`、`ODPS_PROJECT`、`ODPS_ENDPOINT` 等），详见 [DATAWORKS_SDK.md](DATAWORKS_SDK.md)。
+使用 `MODEL_BACKEND=mc` 时，还需要 MaxCompute 相关变量（如 `ODPS_ACCESS_ID`、`ODPS_ACCESS_KEY`、`ODPS_PROJECT`、`ODPS_ENDPOINT` 等），以及：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `MC_OMNI_NATIVE_MEDIA` | `true` | Omni：`cp.video` + `cp.audio` + `cp.text`（含 ASR transcript） |
+| `MC_IMAGE_MODE` | `auto` | 媒体输入：`base64` / `oss_url` / `auto` |
+| `MC_OMNI_FALLBACK_MODEL` | 空 | VL 兜底模型（可选） |
+
+安装：`py -3.11 -m pip install -e ".[mc]"`。详见 [DATAWORKS_SDK.md](DATAWORKS_SDK.md)。
 
 ### 4.2 在代码里显式传参（可覆盖环境变量）
 

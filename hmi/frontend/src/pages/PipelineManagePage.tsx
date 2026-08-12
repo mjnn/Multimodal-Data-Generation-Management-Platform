@@ -1,5 +1,5 @@
 import { ApartmentOutlined, EyeOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
-import { Button, Popconfirm, Space, Table, Tag, Typography, message } from 'antd'
+import { Button, Popconfirm, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -47,11 +47,19 @@ function executionCanCancel(status: string): boolean {
   return status === 'pending' || status === 'running'
 }
 
+type PipelinePageTab = 'settings' | 'upload' | 'queue'
+
+function parsePipelineTab(raw: string | null): PipelinePageTab {
+  if (raw === 'settings' || raw === 'upload' || raw === 'queue') return raw
+  return 'queue'
+}
+
 export function PipelineManagePage() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const focusRunId = searchParams.get('run_id')
   const focusClipId = searchParams.get('clip_id')
+  const activeTab = parsePipelineTab(searchParams.get('tab'))
   const { dataSource, dataRevision, bumpDataRevision } = useDataSourceMode()
   const [executions, setExecutions] = useState<PipelineExecution[]>([])
   const [total, setTotal] = useState(0)
@@ -64,25 +72,32 @@ export function PipelineManagePage() {
   const [expandedClipByRun, setExpandedClipByRun] = useState<Record<string, string[]>>({})
   const focusResolvedRef = useRef(false)
   const focusPageResolvedRef = useRef(false)
+  const loadInFlightRef = useRef(false)
 
-  const loadExecutions = useCallback(async () => {
-    if (dataSource !== 'local') {
-      setExecutions([])
-      setTotal(0)
-      setLoading(false)
-      return
+  const loadExecutions = useCallback(async (opts?: { quiet?: boolean; refresh?: boolean }) => {
+    const quiet = Boolean(opts?.quiet)
+    const refresh = Boolean(opts?.refresh)
+    if (quiet && loadInFlightRef.current) return
+    const waitStarted = Date.now()
+    while (loadInFlightRef.current) {
+      if (Date.now() - waitStarted > 60_000) return
+      await new Promise((r) => window.setTimeout(r, 200))
     }
-    setLoading(true)
+    loadInFlightRef.current = true
+    if (!quiet) setLoading(true)
     try {
-      const res = await api.listPipelineExecutions({ page, page_size: pageSize })
+      const res = await api.listPipelineExecutions({ page, page_size: pageSize, refresh })
       setExecutions(res.items)
       setTotal(res.total)
     } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : '加载执行队列失败')
+      if (!quiet) {
+        message.error(e instanceof Error ? e.message : '加载执行队列失败')
+      }
     } finally {
-      setLoading(false)
+      loadInFlightRef.current = false
+      if (!quiet) setLoading(false)
     }
-  }, [dataSource, page, pageSize])
+  }, [page, pageSize])
 
   const handleRetryPipeline = useCallback(
     async (clipId: string, runId: string) => {
@@ -123,8 +138,13 @@ export function PipelineManagePage() {
   }, [dataSource, dataRevision, loadExecutions])
 
   useEffect(() => {
-    if (!focusRunId || dataSource !== 'local' || focusPageResolvedRef.current) return
+    if (!focusRunId || focusPageResolvedRef.current) return
     focusPageResolvedRef.current = true
+    if (activeTab !== 'queue') {
+      const next = new URLSearchParams(searchParams)
+      next.delete('tab')
+      setSearchParams(next, { replace: true })
+    }
     void (async () => {
       try {
         const probe = await api.listPipelineExecutions({ page: 1, page_size: 100 })
@@ -136,7 +156,7 @@ export function PipelineManagePage() {
         /* ignore — fall back to current page */
       }
     })()
-  }, [dataSource, focusRunId, page, pageSize])
+  }, [activeTab, dataSource, focusRunId, page, pageSize, searchParams, setSearchParams])
 
   useEffect(() => {
     if (!focusRunId || loading || focusResolvedRef.current) return
@@ -165,8 +185,24 @@ export function PipelineManagePage() {
 
   useEffect(() => {
     if (!needsPoll) return
-    const t = window.setInterval(() => void loadExecutions(), 5000)
-    return () => window.clearInterval(t)
+    let cancelled = false
+    let timer: number | undefined
+    const POLL_MS = 30_000
+
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        void (async () => {
+          await loadExecutions({ quiet: true })
+          if (!cancelled) schedule()
+        })()
+      }, POLL_MS)
+    }
+
+    schedule()
+    return () => {
+      cancelled = true
+      if (timer != null) window.clearTimeout(timer)
+    }
   }, [needsPoll, loadExecutions])
 
   const onTableChange = (pagination: TablePaginationConfig) => {
@@ -234,6 +270,7 @@ export function PipelineManagePage() {
               type="link"
               size="small"
               icon={<EyeOutlined />}
+              disabled={r.clip_id.startsWith('pending:')}
               onClick={() => navigate(`/clips/${encodeURIComponent(r.clip_id)}`)}
             >
               预览
@@ -278,6 +315,11 @@ export function PipelineManagePage() {
             <Typography.Text code style={{ fontSize: 10 }} ellipsis={{ tooltip: row.run_id }}>
               {row.run_id.slice(0, 8)}…
             </Typography.Text>
+            {row.dag_id ? (
+              <Typography.Text type="secondary" style={{ fontSize: 10 }}>
+                Dag {row.dag_id}
+              </Typography.Text>
+            ) : null}
           </Space>
         ),
       },
@@ -329,6 +371,13 @@ export function PipelineManagePage() {
     [cancellingRunId, dataSource, handleCancelExecution],
   )
 
+  const setActiveTab = (tab: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (tab === 'queue') next.delete('tab')
+    else next.set('tab', tab)
+    setSearchParams(next, { replace: true })
+  }
+
   return (
     <PageStack>
       <PageHeader
@@ -336,101 +385,138 @@ export function PipelineManagePage() {
         description="上传 rosbag、控制 OSS 产物同步，并按执行批次查看 SDK 进度（最新在前）。"
         icon={<ApartmentOutlined />}
         extra={
-          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadExecutions()}>
-            刷新
-          </Button>
+          activeTab === 'queue' ? (
+            <Button
+              icon={<ReloadOutlined />}
+              loading={loading}
+              onClick={() => void loadExecutions({ refresh: true })}
+            >
+              刷新
+            </Button>
+          ) : null
         }
       />
 
-      <ContentCard title="执行参数">
-        <PipelineRunSettingsCard />
-      </ContentCard>
-
-      <ContentCard title="上传与同步">
-        <Space direction="vertical" size={20} style={{ width: '100%' }}>
-          <RosbagUploadCard onUploaded={() => bumpDataRevision()} />
-          <PipelineSyncControls />
-        </Space>
-      </ContentCard>
-
-      <ContentCard title="管线执行队列" noPadding>
-        <Table<PipelineExecution>
-          className="pipeline-execution-queue"
-          rowKey="run_id"
-          loading={loading}
-          columns={executionColumns}
-          dataSource={executions}
-          tableLayout="fixed"
-          scroll={{ x: 720 }}
-          onRow={(record) =>
-            record.run_id === focusRunId ? { id: `pipeline-run-${record.run_id}` } : {}
-          }
-          pagination={{
-            current: page,
-            pageSize,
-            total,
-            showSizeChanger: true,
-            pageSizeOptions: ['10', '20', '50'],
-            showTotal: (t) => `共 ${t} 次执行`,
-          }}
-          onChange={onTableChange}
-          expandable={{
-            expandedRowKeys,
-            indentSize: 0,
-            onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
-            expandedRowRender: (ex) => (
-              <div className="pipeline-clip-table-wrap">
-                <Table<PipelineExecutionClip & { run_id: string }>
-                  className="pipeline-clip-table"
-                  rowKey="clip_id"
-                  size="small"
-                  pagination={false}
-                  columns={clipColumns}
-                  dataSource={ex.clips.map((c) => ({ ...c, run_id: ex.run_id }))}
-                  rowClassName={(r) =>
-                    r.clip_id === focusClipId && ex.run_id === focusRunId ? 'pipeline-clip-focus' : ''
-                  }
-                  expandable={{
-                    expandedRowKeys: expandedClipByRun[ex.run_id] ?? [],
-                    indentSize: 0,
-                    columnWidth: 32,
-                    onExpandedRowsChange: (keys) =>
-                      setExpandedClipByRun((prev) => ({ ...prev, [ex.run_id]: keys as string[] })),
-                    expandedRowRender: (r) =>
-                      r.steps?.length ? (
-                        <div className="pipeline-clip-steps">
-                          <UploadPipelineProgress steps={r.steps} compact />
-                        </div>
-                      ) : (
-                        <Typography.Text type="secondary">暂无步骤数据</Typography.Text>
-                      ),
-                    rowExpandable: (r) => (r.steps?.length ?? 0) > 0,
-                  }}
-                />
-              </div>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        destroyInactiveTabPane={false}
+        items={[
+          {
+            key: 'settings',
+            label: '执行参数',
+            children: (
+              <ContentCard>
+                <PipelineRunSettingsCard />
+              </ContentCard>
             ),
-          }}
-          locale={{
-            emptyText:
-              dataSource === 'local'
-                ? '暂无执行记录；请暂存 rosbag 并「确认执行管线」'
-                : '执行队列仅在本地数据源下展示',
-          }}
-        />
-      </ContentCard>
-
-      <ContentCard title="图例">
-        <Space wrap>
-          <Tag>
-            {dataSource === 'local'
-              ? '一次执行可包含多个 bag（同一 run_id）；各 clip SDK 步骤可并发'
-              : 'SDK 上云：打标与向量 → OSS 上传 → MC 写入 → 调度'}
-          </Tag>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            展开执行批次查看各 clip；再展开 clip 查看步骤详情
-          </Typography.Text>
-        </Space>
-      </ContentCard>
+          },
+          {
+            key: 'upload',
+            label: '上传与同步',
+            children: (
+              <ContentCard>
+                <Space direction="vertical" size={20} style={{ width: '100%' }}>
+                  <RosbagUploadCard onUploaded={() => bumpDataRevision()} />
+                  <PipelineSyncControls />
+                </Space>
+              </ContentCard>
+            ),
+          },
+          {
+            key: 'queue',
+            label: '执行队列',
+            children: (
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <ContentCard noPadding>
+                  <Table<PipelineExecution>
+                    className="pipeline-execution-queue"
+                    rowKey="run_id"
+                    loading={loading}
+                    columns={executionColumns}
+                    dataSource={executions}
+                    tableLayout="fixed"
+                    scroll={{ x: 720 }}
+                    onRow={(record) =>
+                      record.run_id === focusRunId ? { id: `pipeline-run-${record.run_id}` } : {}
+                    }
+                    pagination={{
+                      current: page,
+                      pageSize,
+                      total,
+                      showSizeChanger: true,
+                      pageSizeOptions: ['10', '20', '50'],
+                      showTotal: (t) => `共 ${t} 次执行`,
+                    }}
+                    onChange={onTableChange}
+                    expandable={{
+                      expandedRowKeys,
+                      indentSize: 0,
+                      onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
+                      expandedRowRender: (ex) => (
+                        <div className="pipeline-clip-table-wrap">
+                          <Table<PipelineExecutionClip & { run_id: string }>
+                            className="pipeline-clip-table"
+                            rowKey="clip_id"
+                            size="small"
+                            pagination={false}
+                            columns={clipColumns}
+                            dataSource={ex.clips.map((c) => ({ ...c, run_id: ex.run_id }))}
+                            rowClassName={(r) =>
+                              r.clip_id === focusClipId && ex.run_id === focusRunId
+                                ? 'pipeline-clip-focus'
+                                : ''
+                            }
+                            expandable={{
+                              expandedRowKeys: expandedClipByRun[ex.run_id] ?? [],
+                              indentSize: 0,
+                              columnWidth: 32,
+                              onExpandedRowsChange: (keys) =>
+                                setExpandedClipByRun((prev) => ({
+                                  ...prev,
+                                  [ex.run_id]: keys as string[],
+                                })),
+                              expandedRowRender: (r) =>
+                                r.steps?.length ? (
+                                  <div className="pipeline-clip-steps">
+                                    <UploadPipelineProgress steps={r.steps} compact />
+                                  </div>
+                                ) : (
+                                  <Typography.Text type="secondary">暂无步骤数据</Typography.Text>
+                                ),
+                              rowExpandable: (r) => (r.steps?.length ?? 0) > 0,
+                            }}
+                          />
+                        </div>
+                      ),
+                    }}
+                    locale={{
+                      emptyText:
+                        dataSource === 'local'
+                          ? '暂无执行记录；请暂存 rosbag 并「确认执行管线」'
+                          : '暂无云端执行记录；请暂存 rosbag 并「上传并触发云端管线」',
+                    }}
+                  />
+                </ContentCard>
+                <ContentCard title="图例">
+                  <Space wrap>
+                    <Tag>
+                      {dataSource === 'local'
+                        ? '一次执行可包含多个 bag（同一 run_id）；各 clip SDK 步骤可并发'
+                        : '云端：上传 OSS → DataWorks → hybrid Driver；队列轮询 MC/dispatch + Dag'}
+                    </Tag>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {dataSource === 'local'
+                        ? '展开执行批次查看各 clip；再展开 clip 查看步骤详情'
+                        : 'clip 落 MC 前为 pending；完成后可预览。展开批次/clip 查看步骤'}
+                    </Typography.Text>
+                  </Space>
+                </ContentCard>
+              </Space>
+            ),
+          },
+        ]}
+      />
     </PageStack>
   )
 }

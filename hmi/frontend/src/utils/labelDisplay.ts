@@ -1,4 +1,9 @@
 import type { AiLabelHint, TaxonomyNodeDetail } from '../api/types'
+import {
+  coerceEnumTreeNodes,
+  flattenEnumTreeIds,
+  isEnumTreeSchema,
+} from './enumTree'
 
 function schemaLabels(schema: unknown): Record<string, string> {
   if (!schema || typeof schema !== 'object') return {}
@@ -116,7 +121,16 @@ export function enumDisplayOptions(node: TaxonomyNodeDetail | undefined): { valu
   if (!node?.value_schema || typeof node.value_schema !== 'object') return []
   const schema = node.value_schema as { type?: string; values?: unknown[]; labels?: Record<string, string> }
   const labels = schema.labels ?? {}
-  const values = Array.isArray(schema.values) ? schema.values.map(String) : []
+  if (isEnumTreeSchema(schema) || (node.dtype || '').toLowerCase() === 'enum_tree') {
+    const nodes = coerceEnumTreeNodes(schema.values)
+    return flattenEnumTreeIds(nodes).map((id) => {
+      const zh = labels[id] ?? id
+      return { value: zh, label: zh }
+    })
+  }
+  const values = Array.isArray(schema.values)
+    ? schema.values.filter((v) => typeof v === 'string' || typeof v === 'number').map(String)
+    : []
   if (!values.length) return []
   return values.map((v) => {
     const zh = labels[v] ?? v

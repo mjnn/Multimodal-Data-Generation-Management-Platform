@@ -12,10 +12,7 @@ function activeNodes(nodes: TaxonomyNodeDetail[]): TaxonomyNodeDetail[] {
 
 function rawEnumKeys(node: TaxonomyNodeDetail): string[] {
   if (node.dtype === 'bool') return ['true', 'false']
-  const schema = node.value_schema
-  if (schema && typeof schema === 'object' && Array.isArray((schema as { values?: unknown[] }).values)) {
-    return (schema as { values: unknown[] }).values.map(String)
-  }
+  // Flat enum + enum_tree leaf ids (coerce/flatten inside schemaEnumValues).
   return schemaEnumValues(node)
 }
 
@@ -28,7 +25,8 @@ function enumDisplay(node: TaxonomyNodeDetail, key: string): string {
 
 function isEnumLike(node: TaxonomyNodeDetail | undefined): boolean {
   if (!node) return false
-  if (node.dtype === 'bool' || node.dtype === 'enum') return true
+  const dtype = (node.dtype || '').toLowerCase()
+  if (dtype === 'bool' || dtype === 'enum' || dtype === 'enum_tree') return true
   return rawEnumKeys(node).length > 0
 }
 

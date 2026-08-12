@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     -r /app/piplinesdk/requirements.txt \
     -r /tmp/hmi-requirements.txt \
     && pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --no-deps -e /app/piplinesdk
+    -e "/app/piplinesdk[bbox]"
 
 COPY shared /app/shared
 # Bust only app COPY layers when tag changes (avoids re-running apt/pip).

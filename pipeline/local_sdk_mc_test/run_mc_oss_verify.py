@@ -193,24 +193,42 @@ def upload_and_ingest(run_out: Path, *, skip_verify: bool) -> None:
     uri = upload_run_dir_to_oss(run_out, clip_id=clip_id, run_id=run_id, bucket=bucket)
     print(f"OSS_UPLOAD={uri}")
 
-    # ingest 脚本默认读 HMI local artifacts；这里直接调 ingest_sdk_run(run_dir=本地产物)
+    # ingest：优先用本目录已加载的 ODPS_*；根 .env 可能非 UTF-8，避免 load_cloud_env 炸
     from odps import ODPS
-    from cloud_config import load_cloud_env, require_odps_settings, resolve_cloud_settings
-    from repo_paths import CONFIG_PATH
     import yaml
+    from repo_paths import CONFIG_PATH
     from sdk_mc_ingest import ingest_sdk_run
 
-    load_cloud_env()
-    # 也合并本目录 .env（ODPS 可能只在 local_sdk_mc_test/.env）
     load_local_env(override=False)
-    with CONFIG_PATH.open(encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    settings = require_odps_settings(resolve_cloud_settings(config))
-    # 本目录 .env 可覆盖 config
+    try:
+        from cloud_config import load_cloud_env, require_odps_settings, resolve_cloud_settings
+
+        try:
+            load_cloud_env()
+        except UnicodeDecodeError:
+            print("WARN: root .env not UTF-8; using local_sdk_mc_test/.env ODPS_* only")
+        with CONFIG_PATH.open(encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        settings = require_odps_settings(resolve_cloud_settings(config))
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN: cloud_config fallback ({type(exc).__name__}: {exc})")
+        settings = {
+            "odps_access_id": os.environ.get("ODPS_ACCESS_ID", ""),
+            "odps_access_key": os.environ.get("ODPS_ACCESS_KEY", ""),
+            "odps_project": os.environ.get("ODPS_PROJECT", "rogbag_label_pipline"),
+            "odps_endpoint": os.environ.get(
+                "ODPS_ENDPOINT",
+                "https://service.cn-shanghai.maxcompute.aliyun.com/api",
+            ),
+            "sdk_table_prefix": "aig_sdk__",
+        }
+
     access_id = os.environ.get("ODPS_ACCESS_ID") or settings["odps_access_id"]
     access_key = os.environ.get("ODPS_ACCESS_KEY") or settings["odps_access_key"]
     project = os.environ.get("ODPS_PROJECT") or settings["odps_project"]
     endpoint = os.environ.get("ODPS_ENDPOINT") or settings["odps_endpoint"]
+    if not access_id or not access_key:
+        raise SystemExit("ODPS_ACCESS_ID/KEY missing for MC ingest")
     odps = ODPS(access_id, access_key, project=project, endpoint=endpoint)
     prefix = settings.get("sdk_table_prefix") or settings.get("table_prefix") or "aig_sdk__"
     ingest_sdk_run(
@@ -223,8 +241,39 @@ def upload_and_ingest(run_out: Path, *, skip_verify: bool) -> None:
     )
     print(f"MC_INGEST ok prefix={prefix} ds={ds}")
 
+    # Driver 阶段 dispatch：本机补写 latest.json，闭合 verify 契约
+    try:
+        import oss2
+
+        endpoint = os.environ.get("OSS_ENDPOINT") or get_arg("oss_endpoint") or ""
+        auth = oss2.Auth(access_id, access_key)
+        bkt = oss2.Bucket(auth, endpoint, bucket)
+        run_prefix = f"clips/{clip_id}/runs/{run_id}/"
+        dispatch = {
+            "action": "run",
+            "layout_version": "sdk_v1",
+            "pipeline_version": "sdk_v1",
+            "clip_id": clip_id,
+            "run_id": run_id,
+            "ds": ds,
+            "bag_oss_key": get_arg("bag_oss_key", "rosbags/output/output.bag") or "",
+            "run_oss_prefix": run_prefix,
+            "dispatched_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        }
+        key = "pipeline/dispatch/latest.json"
+        bkt.put_object(key, json.dumps(dispatch, ensure_ascii=False, indent=2).encode("utf-8"))
+        print(f"DISPATCH published {key}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN: dispatch publish failed: {type(exc).__name__}: {exc}")
+
     if skip_verify:
         return
+    # verify 同样可能读根 .env；先把本目录凭证导出到环境
+    os.environ.setdefault("ODPS_ACCESS_ID", access_id)
+    os.environ.setdefault("ODPS_ACCESS_KEY", access_key)
+    os.environ.setdefault("ODPS_PROJECT", project)
+    os.environ.setdefault("ODPS_ENDPOINT", endpoint)
+    os.environ.setdefault("OSS_BUCKET", bucket)
     cmd = [
         sys.executable,
         str(PIPELINE / "scripts" / "verify_sdk_v1_run.py"),
@@ -245,6 +294,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--with-extract", action="store_true")
     parser.add_argument("--skip-cloud", action="store_true", help="only SDK stages")
+    parser.add_argument(
+        "--cloud-only",
+        action="store_true",
+        help="skip SDK; upload+ingest+verify existing RUN_OUT_DIR",
+    )
     parser.add_argument("--skip-verify", action="store_true")
     args = parser.parse_args()
 
@@ -253,10 +307,15 @@ def main() -> None:
     # 默认写到独立目录，避免踩旧 demo
     os.environ.setdefault("RUN_OUT_DIR", str(HERE / "output" / "run_mc_oss_verify_20260805"))
 
-    run_out = run_sdk(with_extract=args.with_extract)
-    if args.skip_cloud:
-        print("skip-cloud: done (SDK only)")
-        return
+    if args.cloud_only:
+        run_out = Path(require_arg("run_out_dir"))
+        if not (run_out / "run.json").is_file():
+            raise SystemExit(f"missing run.json under {run_out}")
+    else:
+        run_out = run_sdk(with_extract=args.with_extract)
+        if args.skip_cloud:
+            print("skip-cloud: done (SDK only)")
+            return
     upload_and_ingest(run_out, skip_verify=args.skip_verify)
     print("ALL_DONE")
 

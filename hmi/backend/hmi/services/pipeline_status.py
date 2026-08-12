@@ -16,13 +16,35 @@ from hmi.clip_context import (
 from hmi.config import (
     PIPELINE_STEP_ORDER,
     SDK_PIPELINE_STEP_ORDER,
-    STEP_LABELS,
+    get_settings,
     pipeline_step_label,
     sdk_pipeline_step_order,
+    table_name,
 )
 from hmi.data_source import is_local_mode
 from hmi.db import normalize_pipeline_status, query, sql_quote
 from hmi.oss_signer import _bucket
+
+_DISCOVER_STEPS = frozenset({"job0_discover", "sdk_discover"})
+_LEGACY_WORK_STEPS = frozenset(PIPELINE_STEP_ORDER) - _DISCOVER_STEPS
+
+
+def _step_order_for_ids(
+    step_ids: set[str],
+    *,
+    local: bool = False,
+    include_discover: bool = True,
+) -> tuple[str, ...]:
+    """Prefer SDK v1; only fall back to clip-omni v2 dual-model when those step_ids exist."""
+    if step_ids & set(SDK_PIPELINE_STEP_ORDER):
+        order = sdk_pipeline_step_order(local=local)
+    elif step_ids & _LEGACY_WORK_STEPS:
+        order = PIPELINE_STEP_ORDER
+    else:
+        order = sdk_pipeline_step_order(local=local)
+    if not include_discover:
+        order = tuple(sid for sid in order if sid not in _DISCOVER_STEPS)
+    return order
 
 _bag_pipeline_cache: TTLCache = TTLCache(maxsize=32, ttl=60)
 _bag_key_clip_cache: TTLCache = TTLCache(maxsize=64, ttl=120)
@@ -71,12 +93,18 @@ def _resolve_from_manifest(oss_key: str) -> dict[str, str] | None:
     return {"clip_id": clip_id, "run_id": run_id}
 
 
-def _pending_steps(*, include_job0: bool = True) -> list[dict[str, str]]:
-    order = PIPELINE_STEP_ORDER if include_job0 else tuple(
-        s for s in PIPELINE_STEP_ORDER if s != "job0_discover"
+def _pending_steps(*, include_job0: bool = True, local: bool = False) -> list[dict[str, str]]:
+    order = _step_order_for_ids(
+        set(),
+        local=local,
+        include_discover=include_job0,
     )
     return [
-        {"step_id": sid, "label": STEP_LABELS.get(sid, sid), "status": "pending"}
+        {
+            "step_id": sid,
+            "label": pipeline_step_label(sid, local=local),
+            "status": "pending",
+        }
         for sid in order
     ]
 
@@ -153,36 +181,37 @@ def query_pipeline_steps(run_id: str, ds: str) -> list[dict[str, Any]]:
     step_map = {
         str(r["step_id"]): normalize_pipeline_status(str(r["status"])) for r in step_rows
     }
+    order = _step_order_for_ids(set(step_map.keys()), local=False, include_discover=True)
     return [
         {
             "step_id": sid,
-            "label": STEP_LABELS.get(sid, sid),
+            "label": pipeline_step_label(sid, local=False),
             "status": step_map.get(sid, "pending"),
         }
-        for sid in PIPELINE_STEP_ORDER
+        for sid in order
     ]
 
 
 def _apply_job0_infer(steps: list[dict[str, Any]], *, clip_discovered: bool) -> list[dict[str, Any]]:
-    """Job0 does not write pipeline_step; infer from dim_clip or downstream success."""
+    """Discover step may be missing in pipeline_step; infer from dim_clip or downstream success."""
     if not clip_discovered:
         return steps
-    job0_pending = True
+    discover_pending = True
     for s in steps:
-        if s["step_id"] == "job0_discover":
-            job0_pending = s["status"] == "pending"
+        if s["step_id"] in _DISCOVER_STEPS:
+            discover_pending = s["status"] == "pending"
             break
-    if not job0_pending:
+    if not discover_pending:
         return steps
     later_ok = any(
         s["status"] == "success"
         for s in steps
-        if s["step_id"] not in {"job0_discover"}
+        if s["step_id"] not in _DISCOVER_STEPS
     )
     if later_ok or clip_discovered:
         out = []
         for s in steps:
-            if s["step_id"] == "job0_discover":
+            if s["step_id"] in _DISCOVER_STEPS:
                 out.append({**s, "status": "success"})
             else:
                 out.append(s)
@@ -193,7 +222,7 @@ def _apply_job0_infer(steps: list[dict[str, Any]], *, clip_discovered: bool) -> 
 def compute_overall_status(
     steps: list[dict[str, Any]], *, run_status: str = "pending"
 ) -> str:
-    work = [s for s in steps if s["step_id"] != "job0_discover"]
+    work = [s for s in steps if s["step_id"] not in _DISCOVER_STEPS]
     if any(s["status"] == "failed" for s in work):
         return "failed"
     if work and all(s["status"] == "success" for s in work):
@@ -220,7 +249,7 @@ def _get_bag_pipeline_local(bag_oss_key: str) -> dict[str, Any]:
         "ds": None,
         "run_status": None,
         "pipeline_status": "not_discovered",
-        "pipeline_steps": _pending_steps(include_job0=False),
+        "pipeline_steps": _pending_steps(include_job0=False, local=True),
         "message": "尚未登记 dim_clip",
     }
     row = store.query_one(
@@ -273,10 +302,8 @@ def _get_bag_pipeline_local(bag_oss_key: str) -> dict[str, Any]:
     step_map = {
         str(r["step_id"]): normalize_pipeline_status(str(r["status"])) for r in step_rows
     }
-    order = (
-        sdk_pipeline_step_order(local=True)
-        if step_map.keys() & set(SDK_PIPELINE_STEP_ORDER)
-        else PIPELINE_STEP_ORDER
+    order = _step_order_for_ids(
+        set(step_map.keys()), local=True, include_discover=False
     )
     steps = [
         {
@@ -285,7 +312,6 @@ def _get_bag_pipeline_local(bag_oss_key: str) -> dict[str, Any]:
             "status": step_map.get(sid, "pending"),
         }
         for sid in order
-        if sid not in ("job0_discover",)
     ]
     pipeline_status = compute_overall_status(steps, run_status=run_status)
     if run_status == "completed" and pipeline_status == "running":
@@ -330,7 +356,7 @@ def get_bag_pipeline(oss_key: str, *, refresh: bool = False) -> dict[str, Any]:
         "run_status": None,
         "pipeline_status": "not_discovered",
         "pipeline_steps": _pending_steps(),
-        "message": "Job0 discover 尚未写入 dim_clip，请运行 discover 工作流",
+        "message": "尚未在 dim_clip 登记；上传后将触发 SDK 管线（DataWorks）",
     }
 
     manifest_hit = _resolve_from_manifest(oss_key)

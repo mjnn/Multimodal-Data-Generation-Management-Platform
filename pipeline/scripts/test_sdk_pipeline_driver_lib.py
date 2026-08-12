@@ -23,9 +23,27 @@ from sdk_pipeline_driver_lib import (  # noqa: E402
 
 class TestDriverLib(unittest.TestCase):
     def test_split_stages(self) -> None:
-        d, u = split_stages("discover,extract,asr,mc_write")
+        d, u, ai = split_stages("discover,extract,asr,mc_write")
+        self.assertEqual(d, frozenset({"discover", "mc_write"}))
+        self.assertEqual(u, frozenset({"extract"}))
+        self.assertEqual(ai, frozenset({"asr"}))
+
+    def test_split_stages_udf_ai(self) -> None:
+        d, u, ai = split_stages(
+            "discover,extract,asr,mc_write", ai_submitter="udf"
+        )
         self.assertEqual(d, frozenset({"discover", "mc_write"}))
         self.assertEqual(u, frozenset({"extract", "asr"}))
+        self.assertEqual(ai, frozenset())
+
+    def test_split_stages_full_hybrid_chain(self) -> None:
+        d, u, ai = split_stages(
+            "extract,preview,asr,label,embed,mc_write,dispatch",
+            ai_submitter="driver",
+        )
+        self.assertEqual(d, frozenset({"mc_write", "dispatch"}))
+        self.assertEqual(u, frozenset({"extract", "preview"}))
+        self.assertEqual(ai, frozenset({"asr", "label", "embed"}))
 
     def test_build_job_rows(self) -> None:
         rows = build_job_rows(
@@ -47,7 +65,15 @@ class TestDriverLib(unittest.TestCase):
 
     def test_dtypes_keys(self) -> None:
         d = chunk_output_dtypes()
-        for k in ("clip_id", "ds", "ok", "error", "stages_done", "labels_relpath"):
+        for k in (
+            "clip_id",
+            "ds",
+            "ok",
+            "error",
+            "stages_done",
+            "labels_relpath",
+            "audio_keys_json",
+        ):
             self.assertIn(k, d)
 
     def test_summary(self) -> None:

@@ -9,7 +9,8 @@ from typing import Any
 
 from .types import RunContext
 
-_CAM_RE = re.compile(r"^clip_preview_(camera\d+)$", re.IGNORECASE)
+_CAM_PLAIN_RE = re.compile(r"^clip_preview_(camera\d+)$", re.IGNORECASE)
+_CAM_BBOX_RE = re.compile(r"^clip_preview_bbox_(camera\d+)$", re.IGNORECASE)
 
 
 def _copy_clip_media(clip_dir: Path, dest_dir: Path) -> None:
@@ -39,15 +40,54 @@ def _iter_clip_dirs(work: Path) -> list[Path]:
     return clip_dirs
 
 
-def _cameras_from_preview_dir(preview_dir: Path) -> dict[str, dict[str, Any]]:
+def _split_cameras_from_preview_dir(
+    preview_dir: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Return (plain cameras, bbox cameras) keyed by camera0..N."""
     cameras: dict[str, dict[str, Any]] = {}
+    cameras_bbox: dict[str, dict[str, Any]] = {}
     for mp4 in sorted(preview_dir.glob("clip_preview_*.mp4")):
-        match = _CAM_RE.match(mp4.stem)
-        cam = match.group(1).lower() if match else mp4.stem.lower()
-        cameras[cam] = {
-            "relpath": f"preview/{mp4.name}",
-            "frame_count": 0,
-        }
+        stem = mp4.stem
+        bbox_match = _CAM_BBOX_RE.match(stem)
+        if bbox_match:
+            cam = bbox_match.group(1).lower()
+            cameras_bbox[cam] = {
+                "relpath": f"preview/{mp4.name}",
+                "frame_count": 0,
+                "variant": "bbox",
+            }
+            continue
+        plain_match = _CAM_PLAIN_RE.match(stem)
+        if plain_match:
+            cam = plain_match.group(1).lower()
+            cameras[cam] = {
+                "relpath": f"preview/{mp4.name}",
+                "frame_count": 0,
+                "variant": "plain",
+            }
+            continue
+        # Legacy single-file names
+        if stem.lower() == "clip_preview_bbox":
+            cameras_bbox["camera0"] = {
+                "relpath": f"preview/{mp4.name}",
+                "frame_count": 0,
+                "variant": "bbox",
+            }
+        elif stem.lower() == "clip_preview":
+            cameras.setdefault(
+                "camera0",
+                {
+                    "relpath": f"preview/{mp4.name}",
+                    "frame_count": 0,
+                    "variant": "plain",
+                },
+            )
+    return cameras, cameras_bbox
+
+
+def _cameras_from_preview_dir(preview_dir: Path) -> dict[str, dict[str, Any]]:
+    """Plain cameras only (backward compatible)."""
+    cameras, _ = _split_cameras_from_preview_dir(preview_dir)
     return cameras
 
 
@@ -55,12 +95,19 @@ def write_preview_manifest(
     preview_dir: Path,
     *,
     cameras: dict[str, dict[str, Any]] | None = None,
+    cameras_bbox: dict[str, dict[str, Any]] | None = None,
     clip_count: int = 0,
     extra: dict[str, Any] | None = None,
 ) -> Path:
     """Write preview/manifest.json for HMI sdk_v1 timeline mode."""
     preview_dir.mkdir(parents=True, exist_ok=True)
-    cams = cameras if cameras is not None else _cameras_from_preview_dir(preview_dir)
+    if cameras is None or cameras_bbox is None:
+        plain, bbox = _split_cameras_from_preview_dir(preview_dir)
+        cams = cameras if cameras is not None else plain
+        cams_bbox = cameras_bbox if cameras_bbox is not None else bbox
+    else:
+        cams = cameras
+        cams_bbox = cameras_bbox
     doc: dict[str, Any] = {
         "mode": "mp4",
         "fps": 1.0,
@@ -69,8 +116,10 @@ def write_preview_manifest(
         "end_time_ns": 0,
         "grid_relpath": "",
         "cameras": cams,
+        "cameras_bbox": cams_bbox,
         "source": "oms_multimodal.materialize_preview",
         "camera_count": len(cams),
+        "bbox_camera_count": len(cams_bbox),
         "clip_count": clip_count,
     }
     if (preview_dir / "audio.wav").is_file():
@@ -95,12 +144,12 @@ def materialize_preview(ctx: RunContext) -> Path:
     preview_dir.mkdir(parents=True, exist_ok=True)
     work = ctx.work_dir
     if not work.is_dir():
-        write_preview_manifest(preview_dir, cameras={}, clip_count=0)
+        write_preview_manifest(preview_dir, cameras={}, cameras_bbox={}, clip_count=0)
         return preview_dir
 
     clip_dirs = _iter_clip_dirs(work)
     if not clip_dirs:
-        write_preview_manifest(preview_dir, cameras={}, clip_count=0)
+        write_preview_manifest(preview_dir, cameras={}, cameras_bbox={}, clip_count=0)
         return preview_dir
 
     if len(clip_dirs) == 1:
@@ -110,6 +159,9 @@ def materialize_preview(ctx: RunContext) -> Path:
             _copy_clip_media(clip_dir, preview_dir / clip_dir.name)
         # Promote primary clip to flat preview paths for HMI / run.json contract.
         _copy_clip_media(clip_dirs[0], preview_dir)
+
+    # bboxes.jsonl is already written to ctx.bboxes_path (= run_dir/bboxes.jsonl)
+    # by annotate_bboxes; do not shutil.copy2 onto itself (WinError 32 on Windows).
 
     write_preview_manifest(preview_dir, clip_count=len(clip_dirs))
     return preview_dir

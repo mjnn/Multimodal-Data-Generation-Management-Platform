@@ -10,6 +10,7 @@ from typing import Any
 from dotenv import dotenv_values
 
 from hmi.data_source import LOCAL_ROOT
+from hmi.test_mode import is_test_mode
 from repo_paths import ENV_PATH, REPO_ROOT
 
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -39,6 +40,23 @@ _EXTRA_CATALOG_KEYS = (
     "HMI_OSS_SYNC_POLL_INTERVAL_SEC",
     "HMI_OSS_SYNC_AUTO_LOCAL",
     "HMI_OSS_SYNC_TIMEOUT_SEC",
+    "DATAWORKS_PROJECT_NAME",
+    "DATAWORKS_FLOW_NAME",
+    "DATAWORKS_TRIGGER_MODE",
+    "DATAWORKS_NODE_ID",
+    "DATAWORKS_PROJECT_ENV",
+    "DATAWORKS_REGION_ID",
+    "DATAWORKS_DEFAULT_PARAMS",
+    "DATAWORKS_EXTRA_PARAMS",
+    "DATAWORKS_THROTTLE_COOLDOWN_SEC",
+    "DATAWORKS_START_IN_THROTTLE",
+    "HMI_CLOUD_BAG_POLL_ENABLED",
+    "HMI_CLOUD_BAG_POLL_FORCE_OFF",
+    "HMI_CLOUD_BAG_POLL_INTERVAL_SEC",
+    "HMI_CLOUD_BAG_POLL_MIN_AGE_SEC",
+    "HMI_CLOUD_BAG_POLL_MAX_AGE_SEC",
+    "HMI_CLOUD_BAG_POLL_MAX_BAGS",
+    "HMI_CLOUD_BAG_POLL_PREFIXES",
     "CORS_ORIGINS",
     "DASHSCOPE_API_KEY",
     "DASHSCOPE_WORKSPACE_ID",
@@ -50,6 +68,7 @@ _EXTRA_CATALOG_KEYS = (
     "HMI_PIPELINE_EMBEDDING_MODELS",
     "HMI_SYSTEM_ENV_FILE",
     "HMI_DEPLOY_ENV_FILE",
+    "HMI_TEST_MODE",
 )
 
 
@@ -187,7 +206,8 @@ def get_system_env_snapshot(*, reveal_secrets: bool = True) -> dict[str, Any]:
         "writable": writable,
         "catalog_keys": catalog_keys(),
         "variables": variables,
-        "restart_required_hint": "保存后已写入文件并刷新当前进程环境；Docker/compose 注入项可能仍需重启容器。",
+        "test_mode": is_test_mode(),
+        "restart_required_hint": "保存后已写入文件并刷新当前进程环境；Docker/compose 注入项可能仍需重启容器。侧栏「本地/云端」与「重置测试数据」随 HMI_TEST_MODE 立即生效（保存后会刷新页面）。",
     }
 
 
@@ -271,5 +291,17 @@ def save_system_env(updates: dict[str, str | None]) -> dict[str, Any]:
     from hmi.config import get_settings
 
     get_settings.cache_clear()
+
+    from hmi.test_mode import enforce_data_source_for_test_mode
+
+    mode = enforce_data_source_for_test_mode()
+    from hmi.services import local_sdk_worker
+
+    # HMI_TEST_MODE / data-source flips must (re)start or stop the local SDK poller
+    # without requiring a full process restart.
+    if mode == "local":
+        local_sdk_worker.start_poller()
+    else:
+        local_sdk_worker.stop_poller()
 
     return get_system_env_snapshot(reveal_secrets=True)

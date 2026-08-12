@@ -1,5 +1,6 @@
 # HMI + 管线 + SDK（editable）
+# [bbox] = ultralytics for BBOX_DETECTOR=yolo (local/HMI labeling)
 -r ../pipeline/requirements.txt
 -r backend/requirements.txt
 -r ../pipeline/requirements-cloud.txt
--e ../piplinesdk
+-e "../piplinesdk[bbox]"

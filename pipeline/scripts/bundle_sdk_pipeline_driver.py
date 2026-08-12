@@ -15,9 +15,13 @@ FUTURE = "from __future__ import annotations"
 HELPERS: tuple[tuple[str, Path], ...] = (
     ("upload_run.py", DATAWORKS / "upload_run.py"),
     ("pipeline_dispatch.py", DATAWORKS / "pipeline_dispatch.py"),
+    ("oss_v2_dw.py", DATAWORKS / "oss_v2_dw.py"),
     ("sdk_dpe_common.py", DATAWORKS / "sdk_dpe_common.py"),
     ("sdk_mc_ingest.py", DATAWORKS / "sdk_mc_ingest.py"),
     ("sdk_pipeline_driver_lib.py", DATAWORKS / "sdk_pipeline_driver_lib.py"),
+    ("sdk_driver_bare_asr.py", DATAWORKS / "sdk_driver_bare_asr.py"),
+    ("sdk_driver_bare_label.py", DATAWORKS / "sdk_driver_bare_label.py"),
+    ("sdk_driver_bare_embed.py", DATAWORKS / "sdk_driver_bare_embed.py"),
 )
 
 NODE = DATAWORKS / "sdk_pipeline_driver_node.py"
@@ -25,18 +29,38 @@ NODE = DATAWORKS / "sdk_pipeline_driver_node.py"
 IMPORT_STRIPPERS = (
     re.compile(r"^from upload_run import .+$", re.MULTILINE),
     re.compile(r"^from pipeline_dispatch import \([\s\S]*?\)\s*", re.MULTILINE),
-    re.compile(r"^from pipeline_dispatch import .+$", re.MULTILINE),
+    re.compile(r"^[ \t]*from pipeline_dispatch import .+$", re.MULTILINE),
+    re.compile(r"^[ \t]*from oss_v2_dw import .+$", re.MULTILINE),
     re.compile(r"^from sdk_dpe_common import \([\s\S]*?\)\s*", re.MULTILINE),
     re.compile(r"^from sdk_dpe_common import .+$", re.MULTILINE),
+    re.compile(r"^from sdk_mc_ingest import \([\s\S]*?\)\s*", re.MULTILINE),
     re.compile(r"^from sdk_mc_ingest import .+$", re.MULTILINE),
     re.compile(r"^from sdk_pipeline_driver_lib import \([\s\S]*?\)\s*", re.MULTILINE),
     re.compile(r"^from sdk_pipeline_driver_lib import .+$", re.MULTILINE),
+    re.compile(r"^from sdk_driver_bare_asr import \([\s\S]*?\)\s*", re.MULTILINE),
+    re.compile(r"^[ \t]*from sdk_driver_bare_asr import .+$", re.MULTILINE),
+    re.compile(r"^from sdk_driver_bare_label import \([\s\S]*?\)\s*", re.MULTILINE),
+    re.compile(r"^[ \t]*from sdk_driver_bare_label import .+$", re.MULTILINE),
+    re.compile(r"^from sdk_driver_bare_embed import \([\s\S]*?\)\s*", re.MULTILINE),
+    re.compile(r"^[ \t]*from sdk_driver_bare_embed import .+$", re.MULTILINE),
 )
 
 
 def _strip_future(source: str) -> str:
     lines = [ln for ln in source.splitlines() if ln.strip() != FUTURE]
     return "\n".join(lines).strip("\n")
+
+
+def _assert_single_future_at_top(text: str) -> None:
+    """PyODPS compiles the paste file as one module; only line 1 may import __future__."""
+    lines = text.splitlines()
+    future_lines = [i for i, ln in enumerate(lines, start=1) if ln.strip() == FUTURE]
+    if not future_lines:
+        raise SystemExit(f"Bundled file missing {FUTURE!r}")
+    if future_lines[0] != 1 or len(future_lines) != 1:
+        raise SystemExit(
+            f"{FUTURE!r} must appear exactly once at line 1; found at lines {future_lines}"
+        )
 
 
 def _strip_imports(source: str) -> str:
@@ -77,7 +101,10 @@ def bundle() -> Path:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / "sdk_pipeline_driver_node.py"
-    out.write_text("\n".join(blocks), encoding="utf-8")
+    bundled = "\n".join(blocks)
+    _assert_single_future_at_top(bundled)
+    out.write_text(bundled, encoding="utf-8")
+    compile(bundled, str(out), "exec")
     return out
 
 

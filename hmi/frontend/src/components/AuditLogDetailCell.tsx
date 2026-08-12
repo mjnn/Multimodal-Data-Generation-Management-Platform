@@ -183,6 +183,23 @@ function buildSummary(row: AuditLogEntry, detail: Record<string, unknown>): Reac
         </>
       )
     }
+    case 'clip.bbox_qa': {
+      const status = detailStr(detail, 'status')
+      const statusLabel =
+        status === 'bbox_ok'
+          ? '框可用'
+          : status === 'bbox_bad'
+            ? '框有问题'
+            : status === 'bbox_skip'
+              ? '跳过'
+              : status
+      return (
+        <>
+          <strong>{actor}</strong> 于 {time} 标记 BBox 质量
+          {statusLabel ? `（${statusLabel}）` : ''}
+        </>
+      )
+    }
     case 'aug_recipe.create':
     case 'aug_recipe.publish': {
       const code = detailStr(detail, 'recipe_code')

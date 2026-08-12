@@ -137,7 +137,17 @@ export interface ClipPreviewManifest {
   start_time_ns: number
   end_time_ns: number
   grid_url: string
-  cameras: { camera: string; url: string; frame_count: number }[]
+  cameras: {
+    camera: string
+    url: string
+    frame_count: number
+    /** Baked bbox MP4 when encode_bbox ran (local SDK). */
+    bbox_url?: string
+  }[]
+  /** True when at least one camera has bbox_url (cloud may omit / false). */
+  has_bbox_preview?: boolean
+  /** True when plain (no-box) camera MP4s exist; false if only encode_bbox ran. */
+  has_plain_preview?: boolean
 }
 
 export interface TimelineMeta {
@@ -513,6 +523,20 @@ export interface ReviewV2StagedReview {
   staged_at: string
 }
 
+export type BboxQaStatus = 'bbox_ok' | 'bbox_bad' | 'bbox_skip'
+
+export interface BboxQaRecord {
+  id?: string
+  clip_id?: string
+  run_id?: string
+  status: BboxQaStatus
+  note?: string | null
+  reviewer_id?: string | null
+  reviewed_at?: string
+  updated_at?: string
+  created_at?: string
+}
+
 export interface ReviewV2ClipCard {
   clip_id: string
   run_id: string
@@ -524,6 +548,10 @@ export interface ReviewV2ClipCard {
   multi_ai_gate?: MultiAiGateMeta | null
   review_status?: ReviewStatus | null
   clip_review_updated_at?: string | null
+  /** True when preview manifest has cameras_bbox (detection preview available). */
+  has_bbox_preview?: boolean
+  /** Clip/run-level BBox quality mark; never merges into taxonomy labels_json. */
+  bbox_qa?: BboxQaRecord | null
   thumbnail?: {
     camera?: string
     frame_idx?: number
@@ -678,6 +706,46 @@ export interface PipelineRunSettings {
   omni_label_prompt?: Record<string, string>
   /** Resolved display name (version_code + status); not persisted on save. */
   taxonomy_version_label?: string
+  /** Local SDK bbox annotate + encode (maps to BBOX_* / ENCODE_*). */
+  bbox_enabled?: boolean
+  bbox_detector?: string
+  bbox_element?: string
+  encode_plain?: boolean
+  encode_bbox?: boolean
+  bbox_yolo_model?: string
+  bbox_yolo_conf?: number
+  /** Comma-separated YOLO class names/ids (empty = all). Maps to BBOX_YOLO_CLASSES. */
+  bbox_yolo_classes?: string
+  /** Inject BBox class names into Omni label prompt (BBOX_IN_LABEL_PROMPT). Default true. */
+  bbox_in_label_prompt?: boolean
+  /** OpenCV face gender/age DNN (BBOX_FACE_ATTRS). Default true; ignored by yolo. */
+  bbox_face_attrs?: boolean
+  /** Preview MP4 max size / quality (CLIP_VIDEO_*). */
+  clip_video_max_width?: number
+  clip_video_max_height?: number
+  clip_video_crf?: number
+}
+
+export interface BBoxDetectorOption {
+  id: string
+  aliases: string
+  desc: string
+  /** "1" / "0" from SDK list_detectors for optional backends */
+  available?: string
+}
+
+export interface BBoxYoloClassOption {
+  id: number
+  name: string
+}
+
+export interface BBoxYoloClassPreset {
+  id: string
+  label: string
+  /** add = merge into selection; replace = set selection to these classes */
+  mode?: 'add' | 'replace'
+  names: string[]
+  hint?: string
 }
 
 export interface PipelineSettingsResponse {
@@ -693,7 +761,52 @@ export interface PipelineSettingsResponse {
     }[]
     omni_label_prompt_defaults?: Record<string, string>
     omni_label_prompt_fields?: OmniLabelPromptFieldMeta[]
+    bbox_detectors?: BBoxDetectorOption[]
+    bbox_yolo_classes?: BBoxYoloClassOption[]
+    bbox_yolo_presets?: BBoxYoloClassPreset[]
+    /** False when ultralytics / oms-multimodal-sdk[bbox] is missing */
+    bbox_yolo_available?: boolean
   }
+}
+
+export interface ClipBboxDetection {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  element: string
+  display_label: string
+  score?: number | null
+  class_id?: number | null
+  gender?: string | null
+  age_range?: string | null
+  age_approx?: number | null
+  gender_score?: number | null
+  age_score?: number | null
+  camera?: string
+  topic?: string
+  timestamp_ns?: number
+  delta_ns?: number
+  box_index?: number
+}
+
+export interface ClipBboxesResponse {
+  clip_id: string
+  run_id: string
+  timestamp_ns?: number | null
+  window_ms: number
+  has_bboxes: boolean
+  frame_count: number
+  frames_at_cursor: Array<{
+    camera: string
+    topic: string
+    timestamp_ns: number
+    delta_ns?: number
+    boxes: ClipBboxDetection[]
+    box_count: number
+  }>
+  detections: ClipBboxDetection[]
+  message?: string
 }
 
 export type DatasetStatus = 'building' | 'ready' | 'failed' | 'archived'
@@ -746,7 +859,7 @@ export interface DatasetFilterJson {
   include_pending_review?: boolean
   clip_ids?: string[] | null
   taxonomy_version_id?: string | null
-  label_filters?: Record<string, string | boolean> | null
+  label_filters?: Record<string, string | boolean | string[] | { min?: number | null; max?: number | null }> | null
   label_distribution?: LabelDistributionConfig | null
   sample_size?: number | null
   export_preset?: DatasetExportPreset | null
@@ -932,6 +1045,8 @@ export interface PipelineExecution {
   pipeline_status: string
   clip_count: number
   clips: PipelineExecutionClip[]
+  /** DataWorks DagId when triggered from cloud mode */
+  dag_id?: string
 }
 
 export interface PipelineExecutionListResponse {

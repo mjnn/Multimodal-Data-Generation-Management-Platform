@@ -30,6 +30,8 @@ import type {
   ReviewAssignmentItem,
   ReviewAssignmentReviewer,
   ReviewWorkbenchSession,
+  BboxQaRecord,
+  BboxQaStatus,
   DatasetPreviewResponse,
   DatasetSnapshot,
   DatasetListResponse,
@@ -76,6 +78,7 @@ export type HealthResponse = {
   ok: boolean
   project?: string
   data_source?: DataSourceMode
+  test_mode?: boolean
   local_db?: boolean
   local_runtime_root?: string
   last_sync_clip?: string | null
@@ -100,10 +103,10 @@ export const api = {
       body: JSON.stringify({ password }),
     }),
 
-  getDataSource: (): Promise<{ data_source: DataSourceMode }> =>
+  getDataSource: (): Promise<{ data_source: DataSourceMode; test_mode: boolean }> =>
     fetchJson('/config/data-source'),
 
-  setDataSource: (mode: DataSourceMode): Promise<{ data_source: DataSourceMode }> =>
+  setDataSource: (mode: DataSourceMode): Promise<{ data_source: DataSourceMode; test_mode: boolean }> =>
     fetchJson('/config/data-source', {
       method: 'POST',
       body: JSON.stringify({ data_source: mode }),
@@ -123,7 +126,18 @@ export const api = {
     ok: boolean
     message?: string
     baseline_taxonomy?: { version_code: string; node_count: number }
-  }> => fetchJson('/hmi/reset-artifacts', { method: 'POST' }),
+  }> =>
+    // Cloud OSS+MC wipe can take many minutes; disable axios 90s default
+    fetchJson('/hmi/reset-artifacts', { method: 'POST', timeout: 0 }),
+
+  getResetArtifactsStatus: (): Promise<{
+    running: boolean
+    percent: number
+    stage: string
+    message: string
+    error: string | null
+    ok: boolean | null
+  }> => fetchJson('/hmi/reset-artifacts/status'),
 
   getBatchClipStats: (opts?: { refresh?: boolean }): Promise<
     Record<
@@ -215,12 +229,54 @@ export const api = {
         }),
     ),
 
+  getClipBboxes: (
+    clipId: string,
+    runId: string,
+    opts?: { timestamp_ns?: number; window_ms?: number },
+  ): Promise<import('./types').ClipBboxesResponse> => {
+    const params = new URLSearchParams({ run_id: runId })
+    if (opts?.timestamp_ns != null) params.set('timestamp_ns', String(opts.timestamp_ns))
+    if (opts?.window_ms != null) params.set('window_ms', String(opts.window_ms))
+    return fetchJson(`/clips/${encodeURIComponent(clipId)}/bboxes?${params}`)
+  },
+
   getLabelTaxonomy: (): Promise<LabelTaxonomyNode[]> => fetchJson('/label-taxonomy'),
 
   findSimilar: (compositeId: string, topK = 8): Promise<SimilarItem[]> =>
     fetchJson(`/similar?` + new URLSearchParams({ id: compositeId, top_k: String(topK) })),
 
   getLabelSuggestions: (): Promise<string[]> => fetchJson('/label-suggestions'),
+
+  queryOverviewClips: (opts: {
+    labelFilters?: Record<string, unknown>
+    semanticQuery?: string
+    topK?: number
+    minScore?: number
+  }): Promise<{
+    total: number
+    items: Array<{
+      clip_id: string
+      run_id: string
+      score: number
+      match_mode: string
+      scene_description?: string
+      label_preview?: string
+      text_score?: number | null
+      embedding_score?: number | null
+    }>
+    semantic_mode: string
+    embedding_used: boolean
+    message?: string | null
+  }> =>
+    fetchJson('/clips/query', {
+      method: 'POST',
+      body: JSON.stringify({
+        label_filters: opts.labelFilters ?? null,
+        semantic_query: opts.semanticQuery ?? '',
+        top_k: opts.topK ?? 200,
+        min_score: opts.minScore ?? 0.25,
+      }),
+    }),
 
   getAudioSegments: (clipId: string): Promise<AudioSegment[]> =>
     fetchJson(`/clips/${encodeURIComponent(clipId)}/audio-segments`),
@@ -608,6 +664,25 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  getBboxQa: (clipId: string, runId: string): Promise<{ bbox_qa: BboxQaRecord | null }> =>
+    fetchJson(
+      `/review/v2/bbox-qa?${new URLSearchParams({
+        clip_id: clipId,
+        run_id: runId,
+      })}`,
+    ),
+
+  putBboxQa: (body: {
+    clip_id: string
+    run_id: string
+    status: BboxQaStatus
+    note?: string | null
+  }): Promise<{ bbox_qa: BboxQaRecord }> =>
+    fetchJson('/review/v2/bbox-qa', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
   listReviewAssignmentReviewers: (): Promise<ReviewAssignmentReviewer[]> =>
     fetchJson('/review/assignments/reviewers'),
 
@@ -775,10 +850,12 @@ export const api = {
   listPipelineExecutions: (opts?: {
     page?: number
     page_size?: number
+    refresh?: boolean
   }): Promise<PipelineExecutionListResponse> => {
     const params = new URLSearchParams()
     if (opts?.page != null) params.set('page', String(opts.page))
     if (opts?.page_size != null) params.set('page_size', String(opts.page_size))
+    if (opts?.refresh) params.set('refresh', '1')
     const q = params.toString()
     return fetchJson(`/pipeline/executions${q ? `?${q}` : ''}`)
   },
@@ -786,6 +863,8 @@ export const api = {
   createPipelineExecution: async (
     files: File[],
     opts?: {
+      /** Cloud: false = OSS upload only (no DataWorks OpenAPI). Default true. */
+      trigger?: boolean
       onUploadProgress?: (ev: { loaded: number; total: number; percent: number }) => void
     },
   ): Promise<{
@@ -793,14 +872,20 @@ export const api = {
     label: string
     started_at: string
     ds: string
+    dag_id?: string | null
+    trigger?: boolean
+    await_schedule?: boolean
     clips: { clip_id: string; oss_key: string }[]
   }> => {
     const form = new FormData()
     for (const file of files) {
       form.append('files', file)
     }
-    const res = await http.post('/pipeline/executions', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    // Use query for trigger — more reliable than multipart Form bool with axios FormData.
+    const qs = opts?.trigger === false ? '?trigger=false' : ''
+    const res = await http.post(`/pipeline/executions${qs}`, form, {
+      // Let the browser set multipart boundary; do not force Content-Type.
+      headers: { 'Content-Type': undefined },
       timeout: 0,
       onUploadProgress: (event) => {
         if (!opts?.onUploadProgress) return

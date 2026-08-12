@@ -256,8 +256,9 @@ PRD 实体说明见 **[`prd-rosbag-labels.md`](prd-rosbag-labels.md) §5**。
 | 项 | 内容 |
 |----|------|
 | 包名 | `oms-multimodal-sdk`（目录 `piplinesdk/`） |
-| 安装 | `cd hmi && pip install -r requirements-dev.txt`（editable SDK） |
+| 安装 | `cd hmi && pip install -r requirements-dev.txt`（editable SDK **含 `[bbox]`/ultralytics**，供本地 YOLO） |
 | 环境 | 仓库根 `.env`：`DASHSCOPE_API_KEY`、`DASHSCOPE_WORKSPACE_ID` 等 |
+| BBox | `noop`/`stub`/`opencv` 无需额外包；`yolo` 需 `oms-multimodal-sdk[bbox]`（HMI 开发依赖已包含） |
 | 文档 | [`piplinesdk/README.md`](../piplinesdk/README.md) · [`piplinesdk/docs/SDK.md`](../piplinesdk/docs/SDK.md) · [`piplinesdk/docs/DATAWORKS_SDK.md`](../piplinesdk/docs/DATAWORKS_SDK.md) |
 | 本地 MC 联调 | [`pipeline/local_sdk_mc_test/`](../pipeline/local_sdk_mc_test/)（`.env` = 工作流参数，同级节点业务代码） |
 

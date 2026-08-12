@@ -61,10 +61,20 @@ def is_poll_enabled() -> bool:
 def get_worker_status() -> dict[str, Any]:
     out = dict(_status)
     out["enabled"] = is_poll_enabled()
+    out["thread_alive"] = bool(_thread and _thread.is_alive())
     out["running_job"] = _active_jobs > 0
     out["active_jobs"] = _active_jobs
     out["max_parallel"] = _max_parallel()
     return out
+
+
+def ensure_poller_running() -> dict[str, Any]:
+    """Start poller when local+enabled but thread missing (e.g. mode switch without restart)."""
+    if is_poll_enabled():
+        start_poller()
+    else:
+        stop_poller()
+    return get_worker_status()
 
 
 def _max_parallel() -> int:
@@ -126,15 +136,23 @@ def _client_config_overrides() -> dict[str, Any]:
 
 def _run_sdk_and_ingest(
     *,
-    bag_path: Path,
+    bag_path: Path | None,
+    source_manifest_path: Path | None,
     clip_id: str,
     run_id: str,
     ds: str,
     clip_dir_name: str,
     bag_oss_key: str,
 ) -> None:
+    from oms_multimodal.capabilities import RunContext, RunRequest, plan_and_run
     from oms_multimodal.client import OmsMultimodalClient
-    from oms_multimodal.config import OutputConfig
+    from oms_multimodal.config import ClientConfig
+
+    from hmi.local.pipeline_settings import (
+        apply_bbox_settings_to_environ,
+        assert_bbox_settings_runnable,
+        get_pipeline_settings,
+    )
 
     work_run = _work_run_dir(clip_dir_name, clip_id)
     if work_run.is_dir():
@@ -151,27 +169,100 @@ def _run_sdk_and_ingest(
     pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="running")
     cache_clear()
 
-    output = OutputConfig(
-        embeddings_out=work_run / "fusion_embeddings.jsonl",
-        labels_out=work_run / "labels.jsonl",
-        videos_out=work_run / "clip_videos.jsonl",
+    settings = get_pipeline_settings()
+    try:
+        assert_bbox_settings_runnable(settings)
+    except RuntimeError as exc:
+        pr.set_step(
+            run_id=run_id,
+            clip_id=clip_id,
+            ds=ds,
+            step_id="sdk_infer",
+            status="failed",
+            error_message=str(exc),
+        )
+        pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="failed")
+        cache_clear()
+        raise
+    applied_env = apply_bbox_settings_to_environ(settings)
+    # Clear sticky face-attr load failure from earlier jobs (e.g. weights
+    # downloaded after OpenCV5 Caffe miss) so this run can enrich gender/age.
+    try:
+        from oms_multimodal.bbox import reset_face_attr_estimator
+
+        reset_face_attr_estimator()
+    except Exception:  # noqa: BLE001
+        pass
+    logger.info(
+        "local SDK bbox/encode env clip=%s run=%s %s",
+        clip_id,
+        run_id,
+        applied_env,
     )
-    from oms_multimodal.config import ClientConfig
+
+    # Copy source_manifest into run_dir so CapabilityPlanner can inspect modalities
+    if source_manifest_path is not None and source_manifest_path.is_file():
+        import json
+        import shutil
+
+        dest_man = work_run / "source_manifest.json"
+        shutil.copy2(source_manifest_path, dest_man)
+        # Rewrite relative media paths to absolute under the sources package dir
+        try:
+            payload = json.loads(dest_man.read_text(encoding="utf-8"))
+            base = source_manifest_path.parent
+            for key in ("video", "audio", "text", "video_path", "audio_path", "text_path"):
+                rel = payload.get(key)
+                if isinstance(rel, str) and rel.strip() and not Path(rel).is_file():
+                    abs_p = base / rel
+                    if abs_p.is_file():
+                        payload[key] = str(abs_p.resolve())
+            dest_man.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("normalize source_manifest paths failed: %s", exc)
 
     client_cfg = ClientConfig.from_env(taxonomy_path=_taxonomy_path())
     # Local / ECS pipeline worker always uses DashScope API; ignore MODEL_BACKEND=mc.
     client_cfg.model_backend = "api"
     for key, val in _client_config_overrides().items():
         setattr(client_cfg, key, val)
-    client = OmsMultimodalClient(config=client_cfg, work_dir=work_run / "work")
+    work_dir = work_run / "work"
+    client = OmsMultimodalClient(config=client_cfg, work_dir=work_dir)
+    ctx = RunContext(
+        run_dir=work_run,
+        work_dir=work_dir,
+        clip_id=clip_id,
+        run_id=run_id,
+        media_mode="local",
+    )
+    clip_cfg = _clip_config_from_settings()
+    req = RunRequest(
+        bag_path=bag_path,
+        run_dir=work_run,
+        source_manifest_path=(work_run / "source_manifest.json")
+        if (work_run / "source_manifest.json").is_file()
+        else None,
+        encode_plain=bool(settings.get("encode_plain", True)),
+        encode_bbox=bool(settings.get("encode_bbox", False)),
+        bbox_enabled=bool(settings.get("bbox_enabled", False)),
+        bbox_in_label_prompt=bool(settings.get("bbox_in_label_prompt", True)),
+    )
     try:
-        result = client.process_bag(
+        result = plan_and_run(
+            ctx,
             bag_path,
-            clip_config=_clip_config_from_settings(),
-            output=output,
+            client,
+            request=req,
+            clip_config=clip_cfg,
         )
         if result.errors:
             raise RuntimeError(str(result.errors[0]))
+        logger.info(
+            "local SDK plan clip=%s run=%s stages=%s",
+            clip_id,
+            run_id,
+            result.stages_done,
+        )
         if pr.is_run_cancelled(run_id=run_id, clip_id=clip_id, ds=ds):
             cache_clear()
             return
@@ -285,21 +376,26 @@ def _process_one(row: dict[str, Any], *, bag_oss_key: str) -> None:
         cache_clear()
         return
     clip_dir_name = str(row.get("clip_dir_name") or clip_id[:16])
-    bag_path = resolve_local_bag_path(bag_oss_key)
-    if bag_path is None:
+
+    from hmi.local.source_upload import resolve_local_source_manifest
+
+    source_manifest = resolve_local_source_manifest(bag_oss_key)
+    bag_path = resolve_local_bag_path(bag_oss_key) if source_manifest is None else None
+    if bag_path is None and source_manifest is None:
         pr.set_step(
             run_id=run_id,
             clip_id=clip_id,
             ds=ds,
             step_id="sdk_discover",
             status="failed",
-            error_message="bag missing",
+            error_message="bag/source missing",
         )
         pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="failed")
         cache_clear()
         return
     _run_sdk_and_ingest(
         bag_path=bag_path,
+        source_manifest_path=source_manifest,
         clip_id=clip_id,
         run_id=run_id,
         ds=ds,
@@ -352,11 +448,9 @@ def _tick() -> None:
         if not pr.try_claim_sdk_infer(run_id=run_id, clip_id=clip_id, ds=ds):
             continue
         bag_key = str(row.get("bag_oss_key") or "")
-        if max_parallel == 1:
-            _process_one_wrapper(row, bag_oss_key=bag_key)
-            return
         with _lock:
             if _active_jobs >= max_parallel:
+                # Claim already flipped sdk_infer→running; roll back so another tick can retry.
                 pr.set_step(
                     run_id=run_id,
                     clip_id=clip_id,
@@ -367,6 +461,9 @@ def _tick() -> None:
                 pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="pending")
                 continue
             _active_jobs += 1
+        if max_parallel == 1:
+            _process_one_wrapper(row, bag_oss_key=bag_key)
+            return
         threading.Thread(
             target=_process_one_wrapper,
             args=(row,),
@@ -396,7 +493,12 @@ def start_poller() -> None:
     _stop.clear()
     _thread = threading.Thread(target=_loop, name="local-sdk-poller", daemon=True)
     _thread.start()
+    logger.info(
+        "local SDK poller started interval_sec=%s",
+        _status.get("interval_sec") or _env_int("HMI_LOCAL_SDK_POLL_INTERVAL_SEC", 20),
+    )
 
 
 def stop_poller() -> None:
     _stop.set()
+    _status["enabled"] = False

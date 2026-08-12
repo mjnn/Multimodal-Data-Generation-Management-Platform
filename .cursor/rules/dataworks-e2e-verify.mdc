@@ -76,7 +76,7 @@ WHERE run_id='<run_id>' AND ds='${bizdate}' ORDER BY step_id;
 |-----|------|------|
 | Job2 sample | `sample_policy` 空 | 默认 `uniform` 抽样 |
 | Job2 ASR | `asr_model` 空 | 切分 wav + 分段元数据，`asr_text` 空 |
-| Job2 ASR | `asr_model` 已配 | MaxFrame `input_audio`；**勿**用 `qwen3.6-flash`（文本模型）；待 modelset 有 `qwen3-asr-flash` |
+| Job2 ASR | `asr_model` 已配 | MaxFrame **`content_part.audio`**（2.8+）或 legacy `input_audio`；**勿**用 `qwen3.6-flash`（文本模型）；modelset 用 `qwen3-asr-flash` |
 | Job3 | `label_model` 空 | OMS 形 `labels_json`，`values: {}` |
 | Job3 | `label_model=qwen3.6-plus` | MaxFrame AI Function；见 `job3-maxframe-vl.mdc` |
 | Job4 | embed models 空 | `dim` 维零向量，`model_version=none` |

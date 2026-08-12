@@ -139,7 +139,7 @@ def _account_security_token(account: Any) -> str:
 
 
 def ai_image_storage_options(account: Any) -> dict[str, str]:
-    """Long-term AK/SK or STS triple for MaxFrame VL IMAGE_URL reads."""
+    """Long-term AK/SK or STS triple for MaxFrame VL OSS URL reads."""
     access_id = str(account.access_id)
     opts: dict[str, str] = {
         "access_key_id": access_id,
@@ -157,7 +157,7 @@ def resolve_vl_storage_options(
     *,
     role_arn: str | None = None,
 ) -> dict[str, str]:
-    """Resolve OSS AK/SK for ``cp.image(IMAGE_URL)``.
+    """Resolve OSS AK/SK for ``cp.image(URL)``.
 
     MaxFrame VL **only** accepts ``access_key_id`` + ``access_key_secret`` here.
     ``role_arn`` is for DPE ``@with_fs_mount`` only and must not be passed to
@@ -180,7 +180,7 @@ def resolve_vl_storage_options(
             return resolved
 
     raise ValueError(
-        "VL IMAGE_URL requires long-term OSS access_key_id/access_key_secret "
+        "VL OSS URL mode requires long-term OSS access_key_id/access_key_secret "
         "(workflow: oss_vl_access_key_id + oss_vl_access_key_secret). "
         "oss_ram_role_arn is for DPE mount only, not MaxFrame cp.image."
     )
@@ -219,7 +219,7 @@ def build_vl_oss_storage_options(
     oss_access_key_id: str | None = None,
     oss_access_key_secret: str | None = None,
 ) -> dict[str, str] | None:
-    """Build ``storage_options`` for ``cp.image(IMAGE_URL)`` (AK/SK only)."""
+    """Build ``storage_options`` for ``cp.image(URL)`` (AK/SK only)."""
     del role_arn  # mount-only
     ak = (oss_access_key_id or "").strip()
     sk = (oss_access_key_secret or "").strip()
@@ -356,6 +356,7 @@ def prepare_mf_ai_runtime(
 
 
 def is_public_modelset_model(model_name: str) -> bool:
+    # ASR（如 qwen3-asr-flash）已在 public modelset；须 read_odps_model。
     if is_asr_capable_model(model_name):
         return True
     lower = model_name.lower()
@@ -492,7 +493,7 @@ def ai_embed_oss_image_urls(
     request_timeout: int | None = None,
     ai_memory: str | None = None,
 ) -> list[list[float]]:
-    """Embed OSS images via VL embedding model + IMAGE_URL."""
+    """Embed OSS images via VL embedding model + ``ImageContentType.URL``."""
     if not image_urls:
         return []
     if not model_name:
@@ -520,7 +521,7 @@ def ai_embed_oss_image_urls(
         image_input = [
             cp.image(
                 data=df.image_url,
-                type=ImageContentType.IMAGE_URL,
+                type=ImageContentType.URL,
                 storage_options=vl_storage_options,
             ),
         ]
@@ -642,7 +643,7 @@ def ai_transcribe_segments(
     request_timeout: int | None = None,
     ai_memory: str | None = None,
 ) -> list[dict[str, Any]]:
-    """ASR via Qwen-ASR + input_audio (OSS wav URL). Not text LLM + URL in prompt."""
+    """ASR via Qwen-ASR（MaxFrame 2.8+ 优先 ``content_part.audio``，否则 ``input_audio``）。"""
     if not model_name:
         return [
             {
@@ -688,21 +689,35 @@ def ai_transcribe_segments(
     if lang:
         asr_options["language"] = lang.split("-")[0].lower()
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_audio",
-                    "input_audio": {"data": "{audio_url}"},
-                }
-            ],
-        }
-    ]
     params: dict[str, Any] = {"asr_options": asr_options}
     oss_opts: dict[str, str] | None = None
     if storage_options:
         oss_opts = resolve_vl_storage_options(storage_options, odps_entry)
+
+    if hasattr(llm, "content_part"):
+        from maxframe.learn.contrib.llm import AudioContentType
+
+        cp = llm.content_part
+        audio_part: dict[str, Any] = {
+            "data": getattr(df, "audio_url"),
+            "type": AudioContentType.URL,
+            "mime_type": "audio/wav",
+        }
+        if oss_opts:
+            audio_part["storage_options"] = oss_opts
+        messages = [{"role": "user", "content": [cp.audio(**audio_part)]}]
+    else:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "{audio_url}"},
+                    }
+                ],
+            }
+        ]
 
     def _run_asr_generate(**extra: Any) -> md.DataFrame:
         gen_kwargs: dict[str, Any] = {"simple_output": True, "params": params, **extra}
@@ -854,7 +869,7 @@ def ai_label_sync_groups_with_model(
                 content_parts.append(
                     cp.image(
                         data=getattr(df, f"image_url_{idx}"),
-                        type=ImageContentType.IMAGE_URL,
+                        type=ImageContentType.URL,
                         storage_options=vl_storage_options,
                     )
                 )
@@ -1008,7 +1023,7 @@ def ai_label_frames_with_model(
             df = _rebalance_df(md.DataFrame(pd.DataFrame(rows)), partitions)
             image_part = cp.image(
                 data=df.image_url,
-                type=ImageContentType.IMAGE_URL,
+                type=ImageContentType.URL,
                 storage_options=vl_storage_options,
             )
 
@@ -1112,7 +1127,18 @@ try:
 except ImportError:  # pragma: no cover
     oss_v2 = None  # type: ignore[assignment]
 
+from upload_run import new_pipeline_run_id
+
 REQUIRED_PIPELINE_STEPS: tuple[str, ...] = (
+    "job1_parse",
+    "job1_align",
+    "job2_labeling",
+    "job2_embedding",
+    "job3_labeling_by_other_model",
+    "job4_label_merge_and_compare",
+)
+
+LEGACY_PIPELINE_STEPS: tuple[str, ...] = (
     "job1_parse",
     "job2_sample",
     "job2_asr",
@@ -1121,6 +1147,9 @@ REQUIRED_PIPELINE_STEPS: tuple[str, ...] = (
 )
 
 DEFAULT_DISPATCH_OSS_KEY = "pipeline/dispatch/latest.json"
+DEFAULT_DISCOVER_OSS_KEY = "pipeline/discover/latest.json"
+DEFAULT_UPLOADS_PREFIX = "rosbags/uploads/"
+TAXONOMY_LATEST_OSS_KEY = "config/taxonomy/latest.json"
 
 DISPATCH_OUTPUT_KEYS: tuple[str, ...] = (
     "action",
@@ -1320,6 +1349,9 @@ def pick_dispatch_target(
     get_arg: Callable[[str, str | None], str | None] | None = None,
 ) -> dict[str, Any]:
     """Return dispatch payload with action=run|idle."""
+    pipeline_version = "clip_omni_v2"
+    if get_arg is not None:
+        pipeline_version = str(get_arg("pipeline_version", pipeline_version) or pipeline_version)
     for clip in list_dim_clips(client, table_prefix):
         clip_id = clip["clip_id"]
         active_run_id = clip.get("active_run_id")
@@ -1346,6 +1378,7 @@ def pick_dispatch_target(
             "bag_oss_key": clip.get("bag_oss_key") or "",
             "content_hash": clip.get("content_hash") or "",
             "active_run_id_before": active_run_id,
+            "pipeline_version": pipeline_version,
             "dispatched_at": utc_now_iso(),
         }
     return {
@@ -1355,7 +1388,488 @@ def pick_dispatch_target(
         "run_id": "",
         "clip_dir_name": "",
         "bag_oss_key": "",
+        "pipeline_version": pipeline_version,
         "dispatched_at": utc_now_iso(),
+    }
+
+
+def _dispatch_item_from_clip(
+    clip: dict[str, Any],
+    *,
+    run_id: str,
+    reason: str,
+    prefix_template: str,
+    runs_subdir_template: str,
+) -> dict[str, str]:
+    clip_id = str(clip.get("clip_id") or "").strip()
+    run_id = str(run_id or "").strip()
+    if not clip_id or not run_id:
+        raise ValueError(f"invalid dispatch item: clip_id={clip_id!r} run_id={run_id!r}")
+    bag_oss_key = str(
+        clip.get("bag_oss_key") or clip.get("object_key") or ""
+    ).strip()
+    clip_prefix = prefix_template.format(clip_id=clip_id).strip("/")
+    runs_subdir = runs_subdir_template.format(run_id=run_id).strip("/")
+    run_relpath = f"{clip_prefix}/{runs_subdir}"
+    return {
+        "clip_id": clip_id,
+        "run_id": run_id,
+        "clip_dir_name": str(clip.get("clip_dir_name") or "").strip(),
+        "bag_oss_key": bag_oss_key,
+        "content_hash": str(clip.get("content_hash") or "").strip(),
+        "run_relpath": run_relpath,
+        "reason": reason,
+    }
+
+
+def _upload_run_state_key(upload_run_id: str) -> str:
+    return f"pipeline/upload_runs/{upload_run_id}.json"
+
+
+def read_upload_run_state_from_oss(
+    *,
+    upload_run_id: str,
+    bucket_name: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> dict[str, Any] | None:
+    return read_dispatch_from_oss(
+        bucket_name=bucket_name,
+        object_key=_upload_run_state_key(upload_run_id),
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def write_upload_run_state_to_oss(
+    *,
+    payload: dict[str, Any],
+    bucket_name: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> None:
+    upload_run_id = str(payload.get("upload_run_id") or "").strip()
+    if not upload_run_id:
+        raise ValueError("upload_run state missing upload_run_id")
+    write_dispatch_to_oss(
+        bucket_name=bucket_name,
+        object_key=_upload_run_state_key(upload_run_id),
+        endpoint=endpoint,
+        account=account,
+        payload=payload,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def pick_dispatch_upload_run(
+    client: Any,
+    table_prefix: str,
+    *,
+    required_steps: tuple[str, ...] = REQUIRED_PIPELINE_STEPS,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+    discover_payload: dict[str, Any] | None = None,
+    oss_account: Any | None = None,
+    oss_bucket: str | None = None,
+    oss_endpoint: str | None = None,
+    prefix_template: str = "clips/{clip_id}/",
+    runs_subdir_template: str = "runs/{run_id}/",
+) -> dict[str, Any]:
+    """Pick exactly ONE upload_run (one user upload); all clips share one pipeline run_id."""
+    pipeline_version = "sdk_v1"
+    if get_arg is not None:
+        pipeline_version = str(get_arg("pipeline_version", pipeline_version) or pipeline_version)
+
+    upload_runs = (discover_payload or {}).get("upload_runs") or []
+    candidates: list[dict[str, Any]] = []
+    for raw in upload_runs:
+        if not isinstance(raw, dict):
+            continue
+        if not raw.get("complete", True):
+            continue
+        bags = raw.get("bags") or raw.get("items") or []
+        new_count = int(raw.get("new_count") or len(bags) or 0)
+        if new_count <= 0 or not bags:
+            continue
+        upload_run_id = str(raw.get("upload_run_id") or "").strip()
+        if not upload_run_id:
+            continue
+        status = ""
+        if oss_account and oss_bucket and oss_endpoint:
+            state = read_upload_run_state_from_oss(
+                upload_run_id=upload_run_id,
+                bucket_name=oss_bucket,
+                endpoint=oss_endpoint,
+                account=oss_account,
+                region=(get_arg("cloud_region", "cn_shanghai") if get_arg else "cn_shanghai"),
+                get_arg=get_arg,
+            )
+            if state:
+                status = str(state.get("status") or "").strip().lower()
+        if status in {"dispatched", "processing", "completed"}:
+            continue
+        candidates.append(raw)
+
+    candidates.sort(key=lambda item: str(item.get("upload_run_id") or ""))
+    if not candidates:
+        return {
+            "action": "idle",
+            "reason": "no_pending_upload_run",
+            "mode": "upload_run",
+            "upload_run_id": "",
+            "pipeline_run_id": "",
+            "items": [],
+            "clip_id": "",
+            "run_id": "",
+            "pipeline_version": pipeline_version,
+            "dispatched_at": utc_now_iso(),
+        }
+
+    chosen = candidates[0]
+    upload_run_id = str(chosen["upload_run_id"])
+    pipeline_run_id = new_pipeline_run_id()
+    items: list[dict[str, str]] = []
+    for bag in chosen.get("bags") or []:
+        if not isinstance(bag, dict):
+            continue
+        clip_id = str(bag.get("clip_id") or "").strip()
+        if not clip_id:
+            continue
+        items.append(
+            _dispatch_item_from_clip(
+                {
+                    "clip_id": clip_id,
+                    "clip_dir_name": str(bag.get("clip_dir_name") or ""),
+                    "content_hash": str(bag.get("content_hash") or ""),
+                    "bag_oss_key": str(bag.get("object_key") or bag.get("bag_oss_key") or ""),
+                },
+                run_id=pipeline_run_id,
+                reason="upload_run",
+                prefix_template=prefix_template,
+                runs_subdir_template=runs_subdir_template,
+            )
+        )
+        items[-1]["upload_run_id"] = upload_run_id
+
+    if not items:
+        return {
+            "action": "idle",
+            "reason": "upload_run_empty",
+            "mode": "upload_run",
+            "upload_run_id": upload_run_id,
+            "pipeline_run_id": "",
+            "items": [],
+            "clip_id": "",
+            "run_id": "",
+            "pipeline_version": pipeline_version,
+            "dispatched_at": utc_now_iso(),
+        }
+
+    first = items[0]
+    return {
+        "action": "run",
+        "reason": "upload_run",
+        "mode": "upload_run",
+        "upload_run_id": upload_run_id,
+        "pipeline_run_id": pipeline_run_id,
+        "batch_size": len(items),
+        "batch_source": "upload_run",
+        "items": items,
+        "clip_id": first["clip_id"],
+        "run_id": pipeline_run_id,
+        "clip_dir_name": first.get("clip_dir_name") or "",
+        "bag_oss_key": first.get("bag_oss_key") or "",
+        "pipeline_version": pipeline_version,
+        "dispatched_at": utc_now_iso(),
+        "upload_run_state": {
+            "upload_run_id": upload_run_id,
+            "pipeline_run_id": pipeline_run_id,
+            "status": "dispatched",
+            "clip_count": len(items),
+            "clips": items,
+            "dispatched_at": utc_now_iso(),
+        },
+    }
+
+
+def pick_dispatch_batch(
+    client: Any,
+    table_prefix: str,
+    *,
+    required_steps: tuple[str, ...] = REQUIRED_PIPELINE_STEPS,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+    discover_payload: dict[str, Any] | None = None,
+    max_batch: int = 32,
+    prefix_template: str = "clips/{clip_id}/",
+    runs_subdir_template: str = "runs/{run_id}/",
+) -> dict[str, Any]:
+    """Pick up to ``max_batch`` clips; write ``items[]`` for multi-row DPE downstream."""
+    pipeline_version = "clip_omni_v2"
+    batch_source = "discover_new" if discover_payload else "dim_pending"
+    if get_arg is not None:
+        pipeline_version = str(get_arg("pipeline_version", pipeline_version) or pipeline_version)
+        batch_source = str(get_arg("batch_source", batch_source) or batch_source).strip().lower()
+
+    if batch_source in {"upload_run", "upload"}:
+        return pick_dispatch_upload_run(
+            client,
+            table_prefix,
+            required_steps=required_steps,
+            get_arg=get_arg,
+            discover_payload=discover_payload,
+            prefix_template=prefix_template,
+            runs_subdir_template=runs_subdir_template,
+        )
+
+    limit = max(1, min(int(max_batch or 32), 128))
+    source_clips: list[dict[str, Any]] = []
+
+    if batch_source in {"discover_new", "discover_all", "discover"} and discover_payload:
+        raw_items = discover_payload.get("items") or []
+        if batch_source == "discover_all":
+            raw_items = discover_payload.get("pending") or raw_items
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            source_clips.append(
+                {
+                    "clip_id": str(raw.get("clip_id") or ""),
+                    "clip_dir_name": str(raw.get("clip_dir_name") or ""),
+                    "content_hash": str(raw.get("content_hash") or ""),
+                    "bag_oss_key": str(raw.get("object_key") or raw.get("bag_oss_key") or ""),
+                }
+            )
+            if len(source_clips) >= limit:
+                break
+
+    if not source_clips:
+        batch_source = "dim_pending"
+        for clip in list_dim_clips(client, table_prefix):
+            clip_id = str(clip.get("clip_id") or "").strip()
+            if not clip_id:
+                continue
+            active_run_id = clip.get("active_run_id")
+            if active_run_id and is_pipeline_run_complete(
+                client,
+                table_prefix,
+                str(active_run_id),
+                required_steps=required_steps,
+                get_arg=get_arg,
+            ):
+                continue
+            source_clips.append(clip)
+            if len(source_clips) >= limit:
+                break
+
+    items: list[dict[str, str]] = []
+    for clip in source_clips:
+        clip_id = str(clip.get("clip_id") or "").strip()
+        if not clip_id:
+            continue
+        active_run_id = clip.get("active_run_id")
+        if active_run_id and batch_source == "dim_pending":
+            run_id = str(active_run_id)
+            reason = "resume_incomplete"
+        else:
+            run_id = str(uuid.uuid4())
+            reason = "new_run"
+        items.append(
+            _dispatch_item_from_clip(
+                clip,
+                run_id=run_id,
+                reason=reason,
+                prefix_template=prefix_template,
+                runs_subdir_template=runs_subdir_template,
+            )
+        )
+
+    if not items:
+        return {
+            "action": "idle",
+            "reason": "no_pending_clip",
+            "mode": "batch",
+            "batch_id": "",
+            "items": [],
+            "clip_id": "",
+            "run_id": "",
+            "pipeline_version": pipeline_version,
+            "dispatched_at": utc_now_iso(),
+        }
+
+    first = items[0]
+    return {
+        "action": "run",
+        "reason": f"batch_{batch_source}",
+        "mode": "batch",
+        "batch_id": str(uuid.uuid4()),
+        "batch_size": len(items),
+        "batch_source": batch_source,
+        "items": items,
+        "clip_id": first["clip_id"],
+        "run_id": first["run_id"],
+        "clip_dir_name": first.get("clip_dir_name") or "",
+        "bag_oss_key": first.get("bag_oss_key") or "",
+        "pipeline_version": pipeline_version,
+        "dispatched_at": utc_now_iso(),
+    }
+
+
+def write_discover_manifest_to_oss(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    payload: dict[str, Any],
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> None:
+    write_dispatch_to_oss(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        payload=payload,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def read_discover_manifest_from_oss(
+    *,
+    bucket_name: str,
+    object_key: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> dict[str, Any] | None:
+    raw = read_dispatch_from_oss(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+    return raw
+
+
+def _normalize_batch_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items = payload.get("items")
+    if isinstance(items, list) and items:
+        normalized: list[dict[str, Any]] = []
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            clip_id = str(raw.get("clip_id") or "").strip()
+            run_id = str(raw.get("run_id") or "").strip()
+            if not clip_id or not run_id:
+                continue
+            normalized.append(dict(raw))
+        if normalized:
+            return normalized
+    clip_id = str(payload.get("clip_id") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    if clip_id and run_id:
+        return [
+            {
+                "clip_id": clip_id,
+                "run_id": run_id,
+                "clip_dir_name": str(payload.get("clip_dir_name") or ""),
+                "bag_oss_key": str(payload.get("bag_oss_key") or ""),
+                "run_relpath": str(payload.get("run_relpath") or ""),
+            }
+        ]
+    return []
+
+
+def resolve_pipeline_batch_context(
+    get_arg: Callable[[str, str | None], str | None],
+    *,
+    odps_client: Any | None = None,
+    oss_account: Any | None = None,
+    oss_endpoint: str | None = None,
+    oss_bucket: str | None = None,
+) -> dict[str, Any]:
+    """Like resolve_pipeline_context but exposes ``items[]`` for multi-row DPE."""
+    ctx = resolve_pipeline_context(
+        get_arg,
+        odps_client=odps_client,
+        oss_account=oss_account,
+        oss_endpoint=oss_endpoint,
+        oss_bucket=oss_bucket,
+    )
+    if not ctx.get("should_run"):
+        return {**ctx, "items": [], "batch_size": 0, "mode": "single"}
+
+    payload: dict[str, Any] | None = None
+    dispatch_key = (
+        resolve_node_param("dispatch_oss_key", get_arg, DEFAULT_DISPATCH_OSS_KEY)
+        or DEFAULT_DISPATCH_OSS_KEY
+    ).strip()
+    bucket = (oss_bucket or resolve_node_param("oss_bucket", get_arg, "") or "").strip()
+    if oss_account and bucket:
+        region = resolve_node_param("cloud_region", get_arg, "cn_shanghai") or "cn_shanghai"
+        endpoint = (oss_endpoint or resolve_node_param("oss_endpoint", get_arg, "") or "").strip()
+        if not endpoint:
+            endpoint = resolve_oss_http_endpoint(region, get_arg=get_arg)
+        payload = read_dispatch_from_oss(
+            bucket_name=bucket,
+            object_key=dispatch_key,
+            endpoint=endpoint,
+            account=oss_account,
+            region=region,
+            get_arg=get_arg,
+        )
+
+    prefix_template = resolve_node_param("oss_prefix_template", get_arg, "clips/{clip_id}/") or "clips/{clip_id}/"
+    runs_subdir_template = (
+        resolve_node_param("oss_runs_subdir", get_arg, "runs/{run_id}/") or "runs/{run_id}/"
+    )
+
+    items = _normalize_batch_items(payload or ctx)
+    enriched: list[dict[str, Any]] = []
+    upload_run_id = str((payload or {}).get("upload_run_id") or ctx.get("upload_run_id") or "")
+    pipeline_run_id = str((payload or {}).get("pipeline_run_id") or ctx.get("run_id") or "")
+    for raw in items:
+        item = dict(raw)
+        if upload_run_id:
+            item["upload_run_id"] = upload_run_id
+        if pipeline_run_id and not str(item.get("run_id") or "").strip():
+            item["run_id"] = pipeline_run_id
+        if not str(item.get("run_relpath") or "").strip():
+            item = _dispatch_item_from_clip(
+                item,
+                run_id=str(item.get("run_id") or ""),
+                reason=str(item.get("reason") or "batch"),
+                prefix_template=prefix_template,
+                runs_subdir_template=runs_subdir_template,
+            )
+        if not str(item.get("bag_oss_key") or "").strip():
+            item["bag_oss_key"] = str(ctx.get("bag_oss_key") or "")
+        enriched.append(item)
+
+    mode = "batch" if len(enriched) > 1 else "single"
+    if str((payload or {}).get("mode") or "") == "upload_run":
+        mode = "upload_run"
+    first = enriched[0]
+    return {
+        **ctx,
+        "mode": mode,
+        "batch_size": len(enriched),
+        "items": enriched,
+        "upload_run_id": upload_run_id,
+        "pipeline_run_id": pipeline_run_id or str(first.get("run_id") or ctx.get("run_id") or ""),
+        "clip_id": str(first.get("clip_id") or ctx.get("clip_id") or ""),
+        "run_id": str(first.get("run_id") or ctx.get("run_id") or ""),
+        "bag_oss_key": str(first.get("bag_oss_key") or ctx.get("bag_oss_key") or ""),
     }
 
 
@@ -1698,6 +2212,58 @@ def write_dispatch_to_mc(
     client.execute_sql(sql).wait_for_success()
 
 
+def merge_taxonomy_into_dispatch(
+    payload: dict[str, Any],
+    taxonomy: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(payload)
+    for key in ("taxonomy_version_id", "taxonomy_version_code", "taxonomy_oss_key"):
+        value = taxonomy.get(key)
+        if value:
+            merged[key] = str(value)
+    return merged
+
+
+def load_taxonomy_latest_from_oss(
+    *,
+    bucket_name: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+    object_key: str = TAXONOMY_LATEST_OSS_KEY,
+) -> dict[str, Any] | None:
+    return read_oss_json_object(
+        bucket_name=bucket_name,
+        object_key=object_key,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+
+
+def attach_taxonomy_to_dispatch_payload(
+    payload: dict[str, Any],
+    *,
+    bucket_name: str,
+    endpoint: str,
+    account: Any,
+    region: str | None = None,
+    get_arg: Callable[[str, str | None], str | None] | None = None,
+) -> dict[str, Any]:
+    taxonomy = load_taxonomy_latest_from_oss(
+        bucket_name=bucket_name,
+        endpoint=endpoint,
+        account=account,
+        region=region,
+        get_arg=get_arg,
+    )
+    if not taxonomy:
+        return payload
+    return merge_taxonomy_into_dispatch(payload, taxonomy)
+
+
 def dispatch_payload_from_json(raw: str) -> dict[str, Any] | None:
     text = (raw or "").strip()
     if not text or is_unresolved_dw_placeholder(text):
@@ -1740,7 +2306,7 @@ def _run_context(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
     run_id = str(payload.get("run_id") or "").strip()
     if not clip_id or not run_id:
         raise ValueError(f"Invalid dispatch payload (missing clip_id/run_id): {payload!r}")
-    return {
+    ctx: dict[str, Any] = {
         "should_run": True,
         "action": "run",
         "clip_id": clip_id,
@@ -1750,6 +2316,11 @@ def _run_context(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
         "reason": str(payload.get("reason") or ""),
         "source": source,
     }
+    for key in ("taxonomy_version_id", "taxonomy_version_code", "taxonomy_oss_key", "pipeline_version"):
+        value = payload.get(key)
+        if value:
+            ctx[key] = str(value)
+    return ctx
 
 
 def _load_dispatch_from_oss(

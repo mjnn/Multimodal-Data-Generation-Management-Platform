@@ -9,7 +9,7 @@ import type { TaxonomyNodeDetail, TaxonomyProposal, TaxonomyVersion } from '../a
 import { TaxonomyTreeEditor } from './TaxonomyTreeEditor'
 import { formatProposalStatus, formatProposalType } from '../utils/uiLabels'
 import { formatTaxonomyVersionLabel } from '../utils/taxonomyDisplay'
-import { nodesToPayload, type TaxonomyLevelMeta } from '../utils/taxonomyTree'
+import { nodesToPayload, formatEmptyLevelLabels, type TaxonomyLevelMeta } from '../utils/taxonomyTree'
 import { apiErrorMessage } from '../utils/apiError'
 
 const STATUS_COLOR: Record<string, string> = {
@@ -168,6 +168,13 @@ export function TaxonomyProposalsPanel({
       message.warning('提案标签树不能为空，请至少保留一个节点')
       return
     }
+    if (emptyLevels.length > 0) {
+      const labels = formatEmptyLevelLabels(emptyLevels).join('、')
+      message.warning(
+        `以下层级尚无标签节点，预览与提交后不会保留：${labels}。请先在层级下添加标签，或删除空层级后再提交。`,
+      )
+      return
+    }
     setCreating(true)
     try {
       const versionCode =
@@ -186,6 +193,7 @@ export function TaxonomyProposalsPanel({
       setCreateOpen(false)
       form.resetFields()
       setNodes([])
+      setEmptyLevels([])
       setStatus('open')
       void load()
       onProposalChanged?.()
@@ -309,6 +317,7 @@ export function TaxonomyProposalsPanel({
           setCreateOpen(false)
           form.resetFields()
           setNodes([])
+          setEmptyLevels([])
         }}
         onOk={() => void submitCreate()}
         confirmLoading={creating}
@@ -355,6 +364,12 @@ export function TaxonomyProposalsPanel({
         <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
           提案标签树（可增删、拖动排序）
         </Typography.Text>
+        {emptyLevels.length > 0 ? (
+          <Typography.Paragraph type="danger" style={{ marginBottom: 8, fontSize: 12 }}>
+            存在空层级（无标签节点）：{formatEmptyLevelLabels(emptyLevels).join('、')}
+            。请添加标签或删除该层级后再提交，否则预览不会显示这些层级。
+          </Typography.Paragraph>
+        ) : null}
         {treeLoading ? (
           <Typography.Text type="secondary">加载 base 标签树…</Typography.Text>
         ) : baseVersionId ? (
