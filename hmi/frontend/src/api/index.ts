@@ -523,7 +523,7 @@ export const api = {
 
   getReviewQueue: (opts?: {
     status?: ReviewStatus
-    labelFilters?: Record<string, string | boolean>
+    labelFilters?: Record<string, string | boolean | string[] | { min?: number | null; max?: number | null }>
     limit?: number
     offset?: number
   }): Promise<ReviewQueueResponse> =>
@@ -539,7 +539,7 @@ export const api = {
     ),
 
   getReviewCandidates: (opts: {
-    labelFilters: Record<string, string | boolean>
+    labelFilters: Record<string, string | boolean | string[] | { min?: number | null; max?: number | null }>
     reviewScope?: ReviewTaskScope
     disputesOnly?: boolean
     limit?: number

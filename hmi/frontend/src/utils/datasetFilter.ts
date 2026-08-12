@@ -1,4 +1,5 @@
 import type { DatasetFilterJson, LabelDistributionConfig } from '../api/types'
+import type { LabelFilters } from '../components/DatasetLabelFilterForm'
 
 export function buildFilterJson(
   labelDistribution: LabelDistributionConfig | null,
@@ -56,7 +57,7 @@ export function buildFilterJson(
 /** Merge parent snapshot filter with derive wizard overrides (balance + clip label filter + export crop). */
 export function buildDeriveFilterJson(
   parent: DatasetFilterJson,
-  labelFilters: Record<string, string | boolean>,
+  labelFilters: LabelFilters,
   balance: {
     balance_by_label?: string | null
     min_per_class?: number | null
@@ -67,8 +68,12 @@ export function buildDeriveFilterJson(
   exportLabelIds?: string[] | null,
 ): DatasetFilterJson {
   const cleaned = Object.fromEntries(
-    Object.entries(labelFilters).filter(([, v]) => v !== '' && v != null),
-  ) as Record<string, string | boolean>
+    Object.entries(labelFilters).filter(([, v]) => {
+      if (v === '' || v == null) return false
+      if (Array.isArray(v) && v.length === 0) return false
+      return true
+    }),
+  ) as LabelFilters
   const merged: DatasetFilterJson = {
     ...parent,
     balance_by_label: balance.balance_by_label?.trim() || null,
