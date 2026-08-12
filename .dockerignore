@@ -1,0 +1,17 @@
+# Keep docker build context lean (ECS root is ~40GB).
+.git
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/*.egg-info
+piplinesdk/**/*.whl
+piplinesdk/oms_multimodal/bbox/data/*.caffemodel
+hmi/backend/yolov8n.pt
+hmi/backend/.hmi_uvicorn.*
+hmi/frontend/node_modules
+hmi/frontend/test-results
+**/yolov8n.pt
+pipeline/dist
+_tmp_mf_wheel
+.superpowers

@@ -10,11 +10,13 @@ RUN apt-get update \
 
 COPY piplinesdk /app/piplinesdk
 COPY hmi/backend/requirements.txt /tmp/hmi-requirements.txt
+# OpenCV face/bbox is in base deps. Do NOT install [bbox]/ultralytics — it pulls
+# CUDA/torch (~8GB+) and will not fit the 40GB ECS root disk.
 RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     -r /app/piplinesdk/requirements.txt \
     -r /tmp/hmi-requirements.txt \
     && pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    -e "/app/piplinesdk[bbox]"
+    -e /app/piplinesdk
 
 COPY shared /app/shared
 # Bust only app COPY layers when tag changes (avoids re-running apt/pip).
