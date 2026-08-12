@@ -31,7 +31,7 @@ def _first_non_empty(*values: str | None) -> str:
 
 
 def load_cloud_env(env_path: Path | None = None) -> None:
-    """Load dotenv; tolerate non-UTF-8 Windows .env files."""
+    """Load dotenv; tolerate missing file and non-UTF-8 Windows .env files."""
     path = Path(env_path) if env_path is not None else None
     if path is None:
         # python-dotenv default search; if it fails on encoding, try known repo roots
@@ -49,6 +49,8 @@ def load_cloud_env(env_path: Path | None = None) -> None:
                     break
             if path is None:
                 raise
+    if not path.is_file():
+        return
     raw = path.read_bytes()
     text: str | None = None
     for enc in ("utf-8-sig", "utf-8", "gbk", "cp936"):
