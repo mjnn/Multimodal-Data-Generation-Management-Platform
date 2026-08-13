@@ -130,14 +130,26 @@ def _frame_durations_sec(
     return durations
 
 
-def _letterbox_image(src: Path, dst: Path, *, max_width: int, max_height: int) -> None:
+def _long_edge_fit_image(src: Path, dst: Path, *, max_width: int, max_height: int) -> None:
+    """Scale by long-edge (source long → target long), then center; pad short side, crop only if still oversized."""
     with Image.open(src) as im:
         im = im.convert("RGB")
         w, h = im.size
-        scale = min(max_width / w, max_height / h, 1.0)
-        new_w = max(1, int(w * scale))
-        new_h = max(1, int(h * scale))
+        if w <= 0 or h <= 0:
+            raise ValueError(f"invalid image size for {src}: {w}x{h}")
+        src_long = max(w, h)
+        tgt_long = max(max_width, max_height)
+        scale = tgt_long / float(src_long)
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
         resized = im.resize((new_w, new_h), Image.Resampling.BILINEAR)
+        if new_w > max_width or new_h > max_height:
+            left = max(0, (new_w - max_width) // 2)
+            top = max(0, (new_h - max_height) // 2)
+            resized = resized.crop(
+                (left, top, left + min(new_w, max_width), top + min(new_h, max_height))
+            )
+            new_w, new_h = resized.size
         canvas = Image.new("RGB", (max_width, max_height), (0, 0, 0))
         ox = (max_width - new_w) // 2
         oy = (max_height - new_h) // 2
@@ -179,7 +191,7 @@ def _encode_one_camera_mp4(
             if not src.exists():
                 raise FileNotFoundError(f"Frame image not found: {src}")
             dst = tmp_dir / f"frame_{idx:06d}.jpg"
-            _letterbox_image(src, dst, max_width=cfg.max_width, max_height=cfg.max_height)
+            _long_edge_fit_image(src, dst, max_width=cfg.max_width, max_height=cfg.max_height)
             normalized.append(dst)
 
         concat_list = tmp_dir / "frames.txt"
