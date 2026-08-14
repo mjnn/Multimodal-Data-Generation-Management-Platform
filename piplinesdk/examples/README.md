@@ -74,6 +74,12 @@ py -3.11 examples\02_extract_only.py
 # 3）解析 + 语音识别（需要密钥与网络）
 py -3.11 examples\03_run_stages.py extract,asr
 
+# 3b）（可选）本地 stub 画框 + plain 预览（不需要密钥；框由 HMI jsonl 叠加）
+$env:BBOX_DETECTOR = "stub"
+$env:BBOX_ENABLED = "1"
+$env:ENCODE_PLAIN = "1"
+py -3.11 examples\03_run_stages.py extract,bbox,encode,preview
+
 # 4）完整步骤：解析→语音识别→预览→打标→向量→写出 run.json
 py -3.11 examples\03_run_stages.py
 

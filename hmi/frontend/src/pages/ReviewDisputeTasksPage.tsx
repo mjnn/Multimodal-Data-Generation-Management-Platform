@@ -1,9 +1,9 @@
 import { PlayCircleOutlined, InfoCircleOutlined } from '@ant-design/icons'
-import { Alert, Button, Form, InputNumber, Modal, Space, Statistic, Typography, message } from 'antd'
+import { Alert, Button, Form, InputNumber, Modal, Select, Space, Statistic, Typography, message } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import type { ReviewV2Stats } from '../api/types'
+import type { ReviewTarget, ReviewV2Stats } from '../api/types'
 import { ContentCard } from '../components/ui'
 import { apiErrorMessage } from '../utils/apiError'
 import { LOW_CONFIDENCE_THRESHOLD } from '../utils/reviewConfidence'
@@ -14,7 +14,7 @@ export function ReviewConfidenceTasksPage() {
   const [loading, setLoading] = useState(false)
   const [claimOpen, setClaimOpen] = useState(false)
   const [claiming, setClaiming] = useState(false)
-  const [claimForm] = Form.useForm<{ limit: number }>()
+  const [claimForm] = Form.useForm<{ limit: number; review_targets: ReviewTarget[] }>()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -35,7 +35,10 @@ export function ReviewConfidenceTasksPage() {
   const pending = stats?.low_confidence_pending ?? stats?.pending ?? 0
 
   const openClaim = () => {
-    claimForm.setFieldsValue({ limit: Math.min(20, Math.max(1, pending)) })
+    claimForm.setFieldsValue({
+      limit: Math.min(20, Math.max(1, pending)),
+      review_targets: ['labels'],
+    })
     setClaimOpen(true)
   }
 
@@ -43,7 +46,10 @@ export function ReviewConfidenceTasksPage() {
     const values = await claimForm.validateFields()
     setClaiming(true)
     try {
-      const batch = await api.claimLowConfidenceReviewBatch({ limit: values.limit })
+      const batch = await api.claimLowConfidenceReviewBatch({
+        limit: values.limit,
+        review_targets: values.review_targets?.length ? values.review_targets : ['labels'],
+      })
       message.success(`已领取 ${batch.item_total ?? values.limit} 条低置信度任务`)
       setClaimOpen(false)
       navigate(`/review/workbench?batch=${encodeURIComponent(batch.id)}`)
@@ -102,6 +108,22 @@ export function ReviewConfidenceTasksPage() {
             extra={`当前可领取约 ${pending} 条`}
           >
             <InputNumber min={1} max={500} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item
+            name="review_targets"
+            label="校核目标"
+            rules={[{ required: true, message: '请选择校核目标' }]}
+            extra="可多选：标签字段 / 识别框按帧"
+          >
+            <Select
+              mode="multiple"
+              allowClear={false}
+              options={[
+                { value: 'labels', label: '标签' },
+                { value: 'bboxes', label: '识别框' },
+              ]}
+              data-testid="claim-review-targets"
+            />
           </Form.Item>
         </Form>
       </Modal>

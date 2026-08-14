@@ -31,7 +31,7 @@ _DEFAULTS: dict[str, Any] = {
     "bbox_detector": _DEFAULT_PRODUCT_DETECTOR,
     "bbox_element": "element",
     "encode_plain": True,
-    "encode_bbox": False,
+    # bbox MP4 bake removed; key ignored if present in old settings files
     "bbox_yolo_model": "yolov8n.pt",
     "bbox_yolo_conf": 0.25,
     # Comma-separated YOLO class names/ids (empty = all). Maps to BBOX_YOLO_CLASSES.
@@ -183,16 +183,14 @@ def apply_bbox_settings_to_environ(settings: dict[str, Any] | None = None) -> di
     if detector not in _VALID_BBOX_DETECTORS:
         detector = "noop"
     encode_plain = bool(cfg.get("encode_plain", True))
-    encode_bbox = bool(cfg.get("encode_bbox")) or bbox_enabled
     if bbox_enabled and detector == "noop":
-        # Enabled with noop still runs annotate (empty boxes) + optional encode_bbox.
+        # Enabled with noop still runs annotate (empty boxes).
         pass
     applied = {
         "BBOX_ENABLED": "1" if bbox_enabled else "0",
         "BBOX_DETECTOR": detector if bbox_enabled else "noop",
         "BBOX_ELEMENT": str(cfg.get("bbox_element") or "element").strip() or "element",
         "ENCODE_PLAIN": "1" if encode_plain else "0",
-        "ENCODE_BBOX": "1" if encode_bbox else "0",
         "BBOX_YOLO_MODEL": str(cfg.get("bbox_yolo_model") or "yolov8n.pt").strip() or "yolov8n.pt",
         "BBOX_YOLO_CONF": str(float(cfg.get("bbox_yolo_conf") if cfg.get("bbox_yolo_conf") is not None else 0.25)),
         "BBOX_YOLO_CLASSES": str(cfg.get("bbox_yolo_classes") or "").strip(),
@@ -283,7 +281,7 @@ def get_pipeline_settings() -> dict[str, Any]:
                     stored_prompt = raw_prompt
         except (json.JSONDecodeError, OSError):
             pass
-    for bool_key in ("bbox_enabled", "encode_plain", "encode_bbox", "bbox_in_label_prompt", "bbox_face_attrs"):
+    for bool_key in ("bbox_enabled", "encode_plain", "bbox_in_label_prompt", "bbox_face_attrs"):
         out[bool_key] = bool(out.get(bool_key))
     # Migrate legacy noop/stub (and unknown) to opencv for product settings.
     out["bbox_detector"] = _product_bbox_detector(str(out.get("bbox_detector") or ""))
@@ -348,7 +346,7 @@ def save_pipeline_settings(updates: dict[str, Any]) -> dict[str, Any]:
         elif key == "bbox_detector":
             # Persist product detectors only; noop/stub → opencv (SDK smoke still via env).
             current[key] = _product_bbox_detector(str(val or ""))
-        elif key in {"bbox_enabled", "encode_plain", "encode_bbox", "bbox_in_label_prompt", "bbox_face_attrs"}:
+        elif key in {"bbox_enabled", "encode_plain", "bbox_in_label_prompt", "bbox_face_attrs"}:
             current[key] = bool(val)
         elif key in {"clip_video_max_width", "clip_video_max_height", "clip_video_crf"}:
             try:
@@ -362,19 +360,21 @@ def save_pipeline_settings(updates: dict[str, Any]) -> dict[str, Any]:
                 current[key] = compact_fn(merged)
             else:
                 current[key] = {}
-    # Opening bbox detection implies encode_bbox so Explorer can toggle.
+    # Opening bbox detection: keep plain encode + prompt flags; no bbox MP4.
     if current.get("bbox_enabled"):
-        current["encode_bbox"] = True
         # Default: feed detected classes into Omni prompt when BBox is enabled
         if "bbox_in_label_prompt" not in updates:
             current.setdefault("bbox_in_label_prompt", True)
         if "bbox_face_attrs" not in updates:
             current.setdefault("bbox_face_attrs", True)
-        if not current.get("encode_plain") and not current.get("encode_bbox"):
+        if not current.get("encode_plain"):
             current["encode_plain"] = True
+        current.pop("encode_bbox", None)
         # Fail fast in UI save when YOLO is selected without ultralytics.
         if str(current.get("bbox_detector") or "").strip().lower() == "yolo":
             assert_bbox_settings_runnable(current)
+    else:
+        current.pop("encode_bbox", None)
     _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     _SETTINGS_PATH.write_text(
         json.dumps(current, ensure_ascii=False, indent=2),

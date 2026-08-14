@@ -240,6 +240,18 @@ export const api = {
     return fetchJson(`/clips/${encodeURIComponent(clipId)}/bboxes?${params}`)
   },
 
+  putClipBboxes: (
+    clipId: string,
+    runId: string,
+    body: import('./types').ClipBboxesUpsertBody,
+  ): Promise<import('./types').ClipBboxesUpsertResponse> => {
+    const params = new URLSearchParams({ run_id: runId })
+    return fetchJson(`/clips/${encodeURIComponent(clipId)}/bboxes?${params}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  },
+
   getLabelTaxonomy: (): Promise<LabelTaxonomyNode[]> => fetchJson('/label-taxonomy'),
 
   findSimilar: (compositeId: string, topK = 8): Promise<SimilarItem[]> =>
@@ -689,6 +701,7 @@ export const api = {
   previewReviewAssignment: (body: {
     label_ids: string[]
     queue_limit: number
+    review_targets?: import('./types').ReviewTarget[]
   }): Promise<{ count: number; items: ReviewV2Task[] }> =>
     fetchJson('/review/assignments/preview', {
       method: 'POST',
@@ -700,6 +713,7 @@ export const api = {
     label_ids: string[]
     queue_limit: number
     assignee_id?: string | null
+    review_targets?: import('./types').ReviewTarget[]
   }): Promise<ReviewAssignmentBatch> =>
     fetchJson('/review/assignments/batches', {
       method: 'POST',
@@ -742,6 +756,7 @@ export const api = {
 
   claimLowConfidenceReviewBatch: (body: {
     limit: number
+    review_targets?: import('./types').ReviewTarget[]
   }): Promise<ReviewAssignmentBatch> =>
     fetchJson('/review/assignments/claim-low-confidence', {
       method: 'POST',

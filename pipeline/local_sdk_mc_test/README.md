@@ -51,7 +51,7 @@ py -3.11 run_local_sdk_smoke.py --skip-extract --detector stub
 | `LABEL_TREE_OUTPUT` | `leaf` / `path` / `ancestors` |
 | `BBOX_DETECTOR` | `noop` / `stub` / `opencv` / `yolo`（`yolo` 需 `pip install -e "../../piplinesdk[bbox]"`） |
 | `BBOX_ELEMENT` | 通用元素名（默认 `element`） |
-| `ENCODE_PLAIN` / `ENCODE_BBOX` | 是否出原视频 / 带框视频 |
+| `ENCODE_PLAIN` / `ENCODE_BBOX` | 是否出原视频 / 带框视频（**ENCODE_BBOX 已废弃忽略**） |
 
 SDK 提供 **取值树脚手架**（`enum_tree_node` / `make_enum_tree_schema` / `tree_depth` / 深度裁剪）；业务树由平台作者维护。仓库可不维护完整业务树（可选保留 `L1.3.weather` 一条最小示例）。
 

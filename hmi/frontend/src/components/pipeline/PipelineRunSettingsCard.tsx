@@ -199,14 +199,13 @@ export function PipelineRunSettingsCard() {
               children: (
                 <>
                   <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-                    开启后本地 SDK 走 annotate_bbox + encode_preview（plain / bbox MP4），Explorer 可切换带框预览。
+                    开启后本地 SDK 跑 annotate_bbox 写 bboxes.jsonl；预览仅编码 plain MP4，HMI 用 jsonl 只读/可编辑叠加框。
                   </Typography.Text>
                   <Space wrap size={24} style={{ width: '100%' }}>
                     <Form.Item name="bbox_enabled" label="启用 BBox" valuePropName="checked">
                       <Switch
                         onChange={(checked) => {
                           if (checked) {
-                            form.setFieldValue('encode_bbox', true)
                             form.setFieldValue('bbox_in_label_prompt', true)
                             form.setFieldValue('bbox_face_attrs', true)
                             const det = form.getFieldValue('bbox_detector')
@@ -219,14 +218,6 @@ export function PipelineRunSettingsCard() {
                     </Form.Item>
                     <Form.Item name="encode_plain" label="编码 plain MP4" valuePropName="checked">
                       <Switch />
-                    </Form.Item>
-                    <Form.Item
-                      name="encode_bbox"
-                      label="编码 bbox MP4"
-                      valuePropName="checked"
-                      tooltip="开启 BBox 时会自动打开，供 Explorer 切换"
-                    >
-                      <Switch disabled={Boolean(bboxEnabled)} />
                     </Form.Item>
                     <Form.Item
                       name="bbox_in_label_prompt"

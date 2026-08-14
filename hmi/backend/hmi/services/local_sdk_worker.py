@@ -243,7 +243,6 @@ def _run_sdk_and_ingest(
         if (work_run / "source_manifest.json").is_file()
         else None,
         encode_plain=bool(settings.get("encode_plain", True)),
-        encode_bbox=bool(settings.get("encode_bbox", False)),
         bbox_enabled=bool(settings.get("bbox_enabled", False)),
         bbox_in_label_prompt=bool(settings.get("bbox_in_label_prompt", True)),
     )

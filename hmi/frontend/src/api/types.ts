@@ -141,12 +141,12 @@ export interface ClipPreviewManifest {
     camera: string
     url: string
     frame_count: number
-    /** Baked bbox MP4 when encode_bbox ran (local SDK). */
+    /** Legacy baked bbox MP4 if present; HMI overlay uses jsonl instead. */
     bbox_url?: string
   }[]
-  /** True when at least one camera has bbox_url (cloud may omit / false). */
+  /** True when at least one camera has legacy bbox_url (optional). */
   has_bbox_preview?: boolean
-  /** True when plain (no-box) camera MP4s exist; false if only encode_bbox ran. */
+  /** True when plain (no-box) camera MP4s exist. */
   has_plain_preview?: boolean
 }
 
@@ -625,6 +625,8 @@ export interface ReviewV2SubmitResult {
   assignment_item_done?: boolean
 }
 
+export type ReviewTarget = 'labels' | 'bboxes'
+
 export interface ReviewAssignmentBatch {
   id: string
   name: string
@@ -632,6 +634,7 @@ export interface ReviewAssignmentBatch {
   queue_limit: number
   assignee_id: string | null
   batch_kind?: 'low_confidence' | 'assigned' | 'public_pool'
+  review_targets?: ReviewTarget[]
   status: 'open' | 'closed'
   created_by: string | null
   created_at: string
@@ -706,12 +709,11 @@ export interface PipelineRunSettings {
   omni_label_prompt?: Record<string, string>
   /** Resolved display name (version_code + status); not persisted on save. */
   taxonomy_version_label?: string
-  /** Local SDK bbox annotate + encode (maps to BBOX_* / ENCODE_*). */
+  /** Local SDK bbox annotate (maps to BBOX_*); preview encode is plain-only (ENCODE_PLAIN). */
   bbox_enabled?: boolean
   bbox_detector?: string
   bbox_element?: string
   encode_plain?: boolean
-  encode_bbox?: boolean
   bbox_yolo_model?: string
   bbox_yolo_conf?: number
   /** Comma-separated YOLO class names/ids (empty = all). Maps to BBOX_YOLO_CLASSES. */
@@ -802,11 +804,50 @@ export interface ClipBboxesResponse {
     topic: string
     timestamp_ns: number
     delta_ns?: number
+    image_width?: number | null
+    image_height?: number | null
     boxes: ClipBboxDetection[]
     box_count: number
   }>
   detections: ClipBboxDetection[]
   message?: string
+}
+
+export interface ClipBboxesUpsertBody {
+  mode: 'upsert_frame'
+  frame: {
+    camera?: string
+    topic?: string
+    timestamp_ns: number
+    boxes: Array<{
+      x1: number
+      y1: number
+      x2: number
+      y2: number
+      element?: string
+      score?: number | null
+      class_id?: number | null
+      gender?: string | null
+      age_range?: string | null
+      age_approx?: number | null
+      gender_score?: number | null
+      age_score?: number | null
+    }>
+  }
+}
+
+export interface ClipBboxesUpsertResponse {
+  clip_id: string
+  run_id: string
+  has_bboxes: boolean
+  frame_count: number
+  frame: {
+    camera: string
+    topic: string
+    timestamp_ns: number
+    boxes: ClipBboxDetection[]
+    box_count: number
+  }
 }
 
 export type DatasetStatus = 'building' | 'ready' | 'failed' | 'archived'

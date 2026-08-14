@@ -56,7 +56,26 @@ class TestCapabilityPlanner(unittest.TestCase):
             self.assertNotIn("extract", plan.capability_ids)
             self.assertEqual(plan.capability_ids, ["label"])
 
-    def test_encode_bbox_inserts_annotate(self) -> None:
+    def test_bbox_enabled_inserts_annotate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = CapabilityPlanner().plan(
+                RunRequest(
+                    run_dir=tmp,
+                    need_asr=False,
+                    need_label=False,
+                    need_embed=False,
+                    need_preview=False,
+                    encode_plain=True,
+                    bbox_enabled=True,
+                )
+            )
+            self.assertEqual(plan.capability_ids[:2], ["annotate_bbox", "encode_preview"])
+            self.assertEqual(
+                plan.steps[plan.capability_ids.index("encode_preview")].params.get("variants"),
+                ["plain"],
+            )
+
+    def test_encode_bbox_alone_does_not_insert_annotate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plan = CapabilityPlanner().plan(
                 RunRequest(
@@ -67,9 +86,11 @@ class TestCapabilityPlanner(unittest.TestCase):
                     need_preview=False,
                     encode_plain=False,
                     encode_bbox=True,
+                    bbox_enabled=False,
                 )
             )
-            self.assertEqual(plan.capability_ids[:2], ["annotate_bbox", "encode_preview"])
+            self.assertNotIn("annotate_bbox", plan.capability_ids)
+            self.assertNotIn("encode_preview", plan.capability_ids)
 
     def test_default_includes_encode_plain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

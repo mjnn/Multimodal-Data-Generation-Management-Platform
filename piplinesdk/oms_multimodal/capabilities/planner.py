@@ -53,6 +53,7 @@ class RunRequest:
     need_preview: bool | None = None
     bbox_enabled: bool | None = None
     encode_plain: bool | None = None
+    # Deprecated: bbox MP4 bake removed; field ignored if set (use annotate_bbox + HMI overlay).
     encode_bbox: bool | None = None
     # When True (default), label stage injects BBox class summary into Omni prompt if bboxes.jsonl exists
     bbox_in_label_prompt: bool | None = None
@@ -167,25 +168,20 @@ class CapabilityPlanner:
         need_asr = True if req.need_asr is None else req.need_asr
         need_preview = True if req.need_preview is None else req.need_preview
 
-        if req.encode_plain is not None or req.encode_bbox is not None:
-            encode_plain = bool(req.encode_plain) if req.encode_plain is not None else False
-            encode_bbox = bool(req.encode_bbox) if req.encode_bbox is not None else False
-            if req.encode_plain is None:
-                encode_plain = _env_bool("ENCODE_PLAIN", True)
-            if req.encode_bbox is None:
-                encode_bbox = _env_bool("ENCODE_BBOX", False)
+        if req.encode_plain is not None:
+            encode_plain = bool(req.encode_plain)
         else:
-            variants = resolve_encode_variants(None)
-            encode_plain = "plain" in variants
-            encode_bbox = "bbox" in variants
+            encode_plain = "plain" in resolve_encode_variants(None)
+
+        if req.encode_bbox:
+            # Kept for API compat; never drives encode_preview variants.
+            pass
 
         bbox_enabled = (
             req.bbox_enabled
             if req.bbox_enabled is not None
-            else _env_bool("BBOX_ENABLED", encode_bbox)
+            else _env_bool("BBOX_ENABLED", False)
         )
-        if encode_bbox:
-            bbox_enabled = True
 
         steps: list[PlannedCapability] = []
 
@@ -233,8 +229,6 @@ class CapabilityPlanner:
         want_bbox = bbox_enabled and will_have_frames and shape.has_image
         if want_bbox and req.skip_existing and shape.has_bboxes:
             want_bbox = False
-        if encode_bbox and shape.has_image and not shape.has_bboxes:
-            want_bbox = True
         if want_bbox and shape.inspected_bag and not shape.has_image and not shape.has_clips_index and not want_extract:
             want_bbox = False
         if want_bbox and shape.has_source_manifest and not shape.has_image:
@@ -247,19 +241,14 @@ class CapabilityPlanner:
                 )
             )
 
-        # --- encode_preview (skip when caller already supplied encoded video) ---
-        want_encode = (encode_plain or encode_bbox) and shape.has_image and not shape.has_preencoded_video
+        # --- encode_preview (plain only; skip when caller already supplied encoded video) ---
+        want_encode = encode_plain and shape.has_image and not shape.has_preencoded_video
         if want_encode and shape.inspected_bag and not shape.has_image and not shape.has_clips_index and not want_extract:
             want_encode = False
         if want_encode and shape.has_source_manifest and not shape.has_image:
             want_encode = False
         if want_encode:
-            variants = [
-                v
-                for v in ("plain", "bbox")
-                if (v == "plain" and encode_plain) or (v == "bbox" and encode_bbox)
-            ]
-            steps.append(PlannedCapability("encode_preview", {"variants": variants}))
+            steps.append(PlannedCapability("encode_preview", {"variants": ["plain"]}))
 
         # --- asr ---
         if need_asr and shape.has_audio:

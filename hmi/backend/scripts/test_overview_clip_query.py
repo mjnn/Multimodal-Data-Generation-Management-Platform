@@ -73,7 +73,6 @@ class SemanticTextTests(unittest.TestCase):
         hit = score_clip_candidate(
             labels_json=labels,
             scene_summary="后排儿童夜间乘车",
-            vector_json=None,
             label_filters={"day_period": ["night", "dusk"]},
             semantic_query="后排儿童",
             query_vec=None,
@@ -87,7 +86,6 @@ class SemanticTextTests(unittest.TestCase):
         miss = score_clip_candidate(
             labels_json=labels,
             scene_summary="后排儿童夜间乘车",
-            vector_json=None,
             label_filters={"day_period": "day"},
             semantic_query="后排儿童",
             query_vec=None,
@@ -96,33 +94,31 @@ class SemanticTextTests(unittest.TestCase):
         self.assertIsNone(miss)
 
     def test_weak_positive_embedding_does_not_return_all(self) -> None:
-        """Regression: cos_sim > 0 alone must not pass min_score=0.15-style floor."""
+        """Regression: cos_sim > 0 alone must not pass embed floor."""
         labels = {"values": {"scene_desc": {"value": "白天城市道路通勤"}}}
         query_vec = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        # cos ≈ 0.2 / sqrt(1.04) ≈ 0.196 — above 0, below embed floor.
-        weak = np.array([0.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        weak_json = json.dumps(weak.tolist())
+        # Document vec weakly aligned with query — below embed floor.
+        weak_doc = np.array([0.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
         miss = score_clip_candidate(
             labels_json=labels,
             scene_summary="白天城市道路通勤",
-            vector_json=weak_json,
             label_filters=None,
             semantic_query="晚上",
             query_vec=query_vec,
+            document_vec=weak_doc,
             min_semantic_score=DEFAULT_MIN_TEXT_SCORE,
             min_embed_score=DEFAULT_MIN_EMBED_SCORE,
         )
         self.assertIsNone(miss)
 
-        strong = np.array([1.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        strong_json = json.dumps(strong.tolist())
+        strong_doc = np.array([1.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
         hit = score_clip_candidate(
             labels_json=labels,
             scene_summary="白天城市道路通勤",
-            vector_json=strong_json,
             label_filters=None,
             semantic_query="晚上",
             query_vec=query_vec,
+            document_vec=strong_doc,
             min_semantic_score=DEFAULT_MIN_TEXT_SCORE,
             min_embed_score=DEFAULT_MIN_EMBED_SCORE,
         )
@@ -131,12 +127,29 @@ class SemanticTextTests(unittest.TestCase):
         self.assertEqual(hit["match_mode"], "embedding")
         self.assertGreaterEqual(hit["score"], DEFAULT_MIN_EMBED_SCORE)
 
+    def test_clip_fusion_vector_json_is_ignored(self) -> None:
+        """Passing legacy clip fusion vector_json must not create an embedding hit."""
+        labels = {"values": {"scene_desc": {"value": "白天城市道路通勤"}}}
+        query_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        fusion = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        miss = score_clip_candidate(
+            labels_json=labels,
+            scene_summary="白天城市道路通勤",
+            vector_json=json.dumps(fusion.tolist()),
+            label_filters=None,
+            semantic_query="晚上",
+            query_vec=query_vec,
+            document_vec=None,
+            min_semantic_score=DEFAULT_MIN_TEXT_SCORE,
+            min_embed_score=DEFAULT_MIN_EMBED_SCORE,
+        )
+        self.assertIsNone(miss)
+
     def test_relevant_text_query_hits_without_embedding(self) -> None:
         labels = {"values": {"scene_desc": {"value": "夜间后排有儿童"}}}
         hit = score_clip_candidate(
             labels_json=labels,
             scene_summary="夜间后排有儿童",
-            vector_json=None,
             label_filters=None,
             semantic_query="夜间儿童",
             query_vec=None,
@@ -147,7 +160,6 @@ class SemanticTextTests(unittest.TestCase):
         nonsense = score_clip_candidate(
             labels_json=labels,
             scene_summary="夜间后排有儿童",
-            vector_json=None,
             label_filters=None,
             semantic_query="量子泡沫xyz",
             query_vec=None,

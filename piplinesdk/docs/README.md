@@ -1,9 +1,10 @@
 # OMS Multimodal SDK 文档索引
 
-> 版本 **0.3.2** · 软件包名 `oms-multimodal-sdk`
+> 版本 **0.3.3** · 软件包名 `oms-multimodal-sdk`
 
 | 文档 | 路径 | 适合谁 |
 |------|------|--------|
+| **能力与产物（小白版）** | [SDK-CAPABILITIES-AND-ARTIFACTS.md](SDK-CAPABILITIES-AND-ARTIFACTS.md) | 想先搞清「有哪些工序、会产出什么」 |
 | **使用说明（主文档）** | [SDK.md](SDK.md) | 所有新用户 |
 | **可运行示例** | [../examples/](../examples/) | 想先动手跑通的人 |
 | **DataWorks 批量运行** | [DATAWORKS_SDK.md](DATAWORKS_SDK.md) | 已有阿里云大数据环境的进阶用户 |
@@ -27,7 +28,8 @@ print(bundled_taxonomy_path())
 
 ## 建议阅读顺序
 
-1. 打开 [examples/README.md](../examples/README.md)，按顺序跑 `01` → `02` → `03`
-2. 阅读 [SDK.md](SDK.md) 第 1～6 节（概念 + 推荐用法）与文末术语表
-3. 需要查函数签名时，再看 [SDK.md](SDK.md) 第 7 节起的 API 参考
-4. 仅当要把任务提交到阿里云 DataWorks 批量计算时，再读 [DATAWORKS_SDK.md](DATAWORKS_SDK.md)
+1. 先读 [SDK-CAPABILITIES-AND-ARTIFACTS.md](SDK-CAPABILITIES-AND-ARTIFACTS.md)（能力 + 产物一张图）
+2. 打开 [examples/README.md](../examples/README.md)，按顺序跑 `01` → `02` → `03`
+3. 阅读 [SDK.md](SDK.md) 第 1～7 节（概念 + `run_stages` + BBox）与文末术语表
+4. 需要查函数签名时，再看 [SDK.md](SDK.md) 第 8 节起的 API 参考
+5. 仅当要把任务提交到阿里云 DataWorks 批量计算时，再读 [DATAWORKS_SDK.md](DATAWORKS_SDK.md)

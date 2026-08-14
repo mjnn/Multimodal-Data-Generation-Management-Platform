@@ -1,4 +1,4 @@
-"""Capability: encode_preview — optional plain and/or bbox MP4 from clip frames."""
+"""Capability: encode_preview — plain preview MP4 from clip frames."""
 from __future__ import annotations
 
 import logging
@@ -25,17 +25,24 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def resolve_encode_variants(variants: Sequence[str] | None = None) -> list[str]:
+    """Return encode variants. Only ``plain`` is supported (bbox MP4 bake removed)."""
     if variants is not None:
         out = [v.strip().lower() for v in variants if v and str(v).strip()]
-        return [v for v in out if v in {"plain", "bbox"}]
-    plain = _env_bool("ENCODE_PLAIN", True)
-    bbox = _env_bool("ENCODE_BBOX", False)
-    selected: list[str] = []
-    if plain:
-        selected.append("plain")
-    if bbox:
-        selected.append("bbox")
-    return selected or ["plain"]
+        if any(v == "bbox" for v in out):
+            logger.warning(
+                "encode_preview: variant 'bbox' is no longer supported "
+                "(use annotate_bbox + HMI jsonl overlay); ignoring"
+            )
+        selected = [v for v in out if v == "plain"]
+        return selected or ["plain"]
+    # ENCODE_BBOX env is ignored (capability removed)
+    if _env_bool("ENCODE_BBOX", False):
+        logger.warning(
+            "ENCODE_BBOX is deprecated and ignored; bbox preview MP4 is no longer encoded"
+        )
+    if _env_bool("ENCODE_PLAIN", True):
+        return ["plain"]
+    return ["plain"]
 
 
 def encode_preview_videos(
@@ -45,7 +52,7 @@ def encode_preview_videos(
     variants: Sequence[str] | None = None,
     config: ClipVideoConfig | None = None,
 ) -> EncodePreviewResult:
-    """sdk_encode：按 variants 产出 plain 和/或 bbox 预览 MP4，回写 clips_index + clip_videos.jsonl。"""
+    """sdk_encode：产出 plain 预览 MP4，回写 clips_index + clip_videos.jsonl。"""
     cfg = config
     if cfg is None and client is not None:
         cfg = client.clip_video_config
@@ -56,7 +63,6 @@ def encode_preview_videos(
     clips = load_clips_from_index(ctx.clips_index_path)
     errors: list[dict[str, str]] = []
     plain_count = 0
-    bbox_count = 0
     updated = []
 
     for clip in clips:
@@ -83,32 +89,6 @@ def encode_preview_videos(
                 )
                 if path:
                     plain_count += 1
-
-            if "bbox" in wanted:
-                path_map = clip.bbox_frame_paths or {}
-                if not path_map:
-                    logger.warning("encode bbox skipped for %s: no bbox_frame_paths", clip.clip_id)
-                else:
-                    bbox_stem = "clip_preview_bbox"
-                    path = render_clip_preview_video(
-                        clip,
-                        clip_dir / f"{bbox_stem}.mp4",
-                        config=cfg,
-                        frames=source_frames,
-                        path_map=path_map,
-                        filename_stem=bbox_stem,
-                        assign_clip_fields=False,
-                    )
-                    if path:
-                        meta = clip.clip_video_config or {}
-                        topic_paths = {
-                            str(item.get("camera_topic")): str(item.get("path"))
-                            for item in (meta.get("encoded_cameras") or [])
-                            if item.get("camera_topic") and item.get("path")
-                        }
-                        clip.clip_video_bbox_paths = topic_paths or {"default": path}
-                        clip.clip_video_bbox_path = path
-                        bbox_count += 1
         except Exception as exc:  # noqa: BLE001
             logger.warning("encode_preview failed for %s: %s", clip.clip_id, exc)
             errors.append({"clip_id": clip.clip_id, "error": str(exc)})
@@ -119,6 +99,7 @@ def encode_preview_videos(
     video_rows = []
     for clip in updated:
         row = _clip_video_row(clip)
+        # Legacy fields may still exist on older clips; do not populate new bbox MP4s.
         row["clip_video_bbox_path"] = clip.clip_video_bbox_path
         row["clip_video_bbox_paths"] = clip.clip_video_bbox_paths
         video_rows.append(row)
@@ -127,7 +108,7 @@ def encode_preview_videos(
     return EncodePreviewResult(
         videos_out=ctx.videos_path,
         plain_count=plain_count,
-        bbox_count=bbox_count,
+        bbox_count=0,
         variants=list(wanted),
         errors=errors,
     )

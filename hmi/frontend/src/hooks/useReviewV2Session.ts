@@ -102,7 +102,11 @@ export function useReviewV2Session(batchId?: string | null) {
 
   const [queue, setQueue] = useState<ReviewV2Task[]>([])
 
-  const [batchInfo, setBatchInfo] = useState<{ id: string; name: string } | null>(null)
+  const [batchInfo, setBatchInfo] = useState<{
+    id: string
+    name: string
+    review_targets?: import('../api/types').ReviewTarget[]
+  } | null>(null)
 
   const [currentIndex, setCurrentIndex] = useState(0)
 
@@ -266,7 +270,11 @@ export function useReviewV2Session(batchId?: string | null) {
 
         setQueue(res.items)
 
-        setBatchInfo({ id: res.batch.id, name: res.batch.name })
+        setBatchInfo({
+          id: res.batch.id,
+          name: res.batch.name,
+          review_targets: res.batch.review_targets,
+        })
 
         setStaged(restored.staged)
 

@@ -2,14 +2,15 @@ import { ExportOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Space, Tabs, Tag, Typography } from 'antd'
 import { useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { ReviewV2ClipCard as ClipCard, ReviewV2Task } from '../api/types'
+import type { ReviewTarget, ReviewV2ClipCard as ClipCard, ReviewV2Task } from '../api/types'
 import { ClipMediaPanel } from './ClipMediaPanel'
 import type { ClipTimelineState } from './ClipTimelinePanel'
-import { ReviewBboxQaBar } from './ReviewBboxQaBar'
 import { clipDisplayName } from '../utils/clipDisplay'
 
 type Props = {
   task: ReviewV2Task
+  /** From assignment batch; default labels-only (legacy). */
+  reviewTargets?: ReviewTarget[]
 }
 
 function parseAnchorTimestampNs(value: unknown): number | undefined {
@@ -42,33 +43,49 @@ function explorerHref(task: ReviewV2Task): string {
   return `/clips/${encodeURIComponent(task.clip_id)}?${params}`
 }
 
-export function ReviewClipMediaPanel({ task }: Props) {
+export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
   const { clip_card: card } = task
-  // Prefer live explorer preview (same source as 带框 tab); card flag can lag or miss.
   const [liveHasBbox, setLiveHasBbox] = useState<boolean | null>(null)
-  const [sideTab, setSideTab] = useState<'bbox' | 'asr'>('bbox')
+  const [sideTab, setSideTab] = useState<'asr'>('asr')
   const hasBbox = liveHasBbox ?? Boolean(card.has_bbox_preview)
+  const targets = reviewTargets?.length ? reviewTargets : (['labels'] as ReviewTarget[])
+  const reviewBboxes = targets.includes('bboxes')
+  const reviewLabels = targets.includes('labels')
 
   const onTimelineStateChange = useCallback((state: ClipTimelineState) => {
     setLiveHasBbox(state.hasBboxPreview)
   }, [])
 
-  // Reset when switching tasks so we don't keep the previous clip's live flag.
   const mediaKey = `${task.clip_id}:${task.run_id}`
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }} key={mediaKey}>
-      {hasBbox ? (
+      {reviewBboxes ? (
+        <Alert
+          type="info"
+          showIcon
+          message="识别框校核"
+          description="切换到「带可编辑框」按帧新建/删除/调整与改识别内容，保存本帧写回 bboxes.jsonl。「原图参考」无叠加框。"
+          data-testid="review-bbox-edit-notice"
+          action={
+            <Link to={explorerHref(task)} target="_blank" rel="noreferrer">
+              <Button size="small" icon={<ExportOutlined />} data-testid="review-open-explorer">
+                打开总览
+              </Button>
+            </Link>
+          }
+        />
+      ) : hasBbox ? (
         <Alert
           type="info"
           showIcon
           message="检测框预览"
-          description="默认展示带框预览，仅供观察检测质量；校核目标仍是右侧 Taxonomy 字段，不是框本身。"
+          description="本任务校核目标为标签。可在「带可编辑框」查看/改框；若需框校核任务，请派发时选择校核目标「识别框」。总览「带识别框预览」为只读 jsonl 叠加。"
           data-testid="review-bbox-preview-notice"
           action={
             <Link to={explorerHref(task)} target="_blank" rel="noreferrer">
               <Button size="small" icon={<ExportOutlined />} data-testid="review-open-explorer">
-                打开 Explorer 细看
+                打开总览
               </Button>
             </Link>
           }
@@ -77,7 +94,7 @@ export function ReviewClipMediaPanel({ task }: Props) {
         <div style={{ textAlign: 'right' }}>
           <Link to={explorerHref(task)} target="_blank" rel="noreferrer">
             <Button size="small" type="link" icon={<ExportOutlined />} data-testid="review-open-explorer">
-              打开 Explorer 细看
+              打开总览
             </Button>
           </Link>
         </div>
@@ -86,6 +103,7 @@ export function ReviewClipMediaPanel({ task }: Props) {
       <ClipMediaPanel
         clipId={task.clip_id}
         runId={task.run_id}
+        previewContext="review"
         initialTimestampNs={parseAnchorTimestampNs(card.anchor_timestamp_ns)}
         title={clipDisplayName({ clip_id: card.clip_id })}
         labelPreview={card.label_preview}
@@ -99,32 +117,17 @@ export function ReviewClipMediaPanel({ task }: Props) {
                 {card.review_status === 'reviewed' ? 'Clip 已校核' : 'Clip 待校核'}
               </Tag>
             ) : null}
-            {hasBbox ? <Tag color="blue">有 BBox 预览</Tag> : null}
+            {hasBbox ? <Tag color="blue">有 BBox</Tag> : null}
+            {reviewBboxes ? <Tag color="geekblue">校核识别框</Tag> : null}
+            {reviewLabels ? <Tag>校核标签</Tag> : null}
           </>
         }
       />
 
       <Tabs
         activeKey={sideTab}
-        onChange={(k) => setSideTab(k as 'bbox' | 'asr')}
+        onChange={(k) => setSideTab(k as 'asr')}
         items={[
-          {
-            key: 'bbox',
-            label: 'BBox 质量',
-            children:
-              liveHasBbox === null && !card.has_bbox_preview ? (
-                <Typography.Text type="secondary" data-testid="bbox-qa-pending">
-                  正在确认是否有带框预览…
-                </Typography.Text>
-              ) : (
-                <ReviewBboxQaBar
-                  clipId={task.clip_id}
-                  runId={task.run_id}
-                  hasBboxPreview={hasBbox}
-                  initial={card.bbox_qa ?? null}
-                />
-              ),
-          },
           {
             key: 'asr',
             label: 'ASR 文本',

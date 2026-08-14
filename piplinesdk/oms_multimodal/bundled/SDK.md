@@ -1,7 +1,7 @@
 # OMS Multimodal SDK 使用说明
 
 > **软件包名**：`oms-multimodal-sdk`  
-> **当前版本**：0.3.2  
+> **当前版本**：0.3.3  
 > **Python 要求**：建议 3.11 或 3.12（最低 3.10）  
 > **本文读者**：第一次使用本 SDK 的开发者（不要求事先了解任何内部项目）
 
@@ -17,15 +17,16 @@
 4. [认证与配置](#4-认证与配置)
 5. [核心概念（先看懂这些词）](#5-核心概念先看懂这些词)
 6. [推荐用法：按步骤运行流水线](#6-推荐用法按步骤运行流水线)
-7. [客户端 API（OmsMultimodalClient）](#7-客户端-apiomsmultimodalclient)
-8. [配置类参考](#8-配置类参考)
-9. [低级 API](#9-低级-api)
-10. [命令行工具](#10-命令行工具)
-11. [输出文件格式](#11-输出文件格式)
-12. [错误处理](#12-错误处理)
-13. [更多代码示例](#13-更多代码示例)
-14. [架构与限制](#14-架构与限制)
-15. [术语表](#15-术语表)
+7. [帧级检测框 BBox 与双预览](#7-帧级检测框-bbox-与双预览)
+8. [客户端 API（OmsMultimodalClient）](#8-客户端-apiomsmultimodalclient)
+9. [配置类参考](#9-配置类参考)
+10. [低级 API](#10-低级-api)
+11. [命令行工具](#11-命令行工具)
+12. [输出文件格式](#12-输出文件格式)
+13. [错误处理](#13-错误处理)
+14. [更多代码示例](#14-更多代码示例)
+15. [架构与限制](#15-架构与限制)
+16. [术语表](#16-术语表)
 
 可运行示例目录：`examples/`（见该目录下的 `README.md`）。
 
@@ -37,11 +38,12 @@
 
 1. **切开时间片段**：把整段录制切成约 15～20 秒的片段（称为 clip）
 2. **抽出画面与声音**：多路摄像头图片、音频 WAV、预览视频等
-3. **语音转文字**：调用语音识别模型，得到转写文本
-4. **场景打标**：调用多模态大模型，按你提供的标签体系给出结构化标签
-5. **生成向量**：调用多模态向量模型，得到可用于相似度检索的融合向量
+3. **（可选）帧级画框**：可插拔检测器在帧上画框，并可选编码带框预览 MP4
+4. **语音转文字**：调用语音识别模型，得到转写文本
+5. **场景打标**：调用多模态大模型，按你提供的标签体系给出结构化标签（支持扁平枚举与嵌套取值树）
+6. **生成向量**：调用多模态向量模型，得到可用于相似度检索的融合向量
 
-你可以只做本地解析（不联网），也可以按步骤打开语音识别 / 打标 / 向量。
+你可以只做本地解析（不联网），也可以按步骤打开检测 / 语音识别 / 打标 / 向量。
 
 ### 1.1 你最终会得到什么
 
@@ -50,24 +52,28 @@
 | 文件 | 含义（通俗） |
 |------|----------------|
 | `clips_index.jsonl` | 每个时间片段的索引 |
+| `bboxes.jsonl` | （可选）帧级检测框 |
 | `asr.jsonl` | 语音识别结果 |
 | `labels.jsonl` | 场景标签结果 |
 | `fusion_embeddings.jsonl` | 融合向量（一行一个片段） |
-| `clip_videos.jsonl` | 预览视频路径记录 |
-| `preview/` | 给人看的预览视频、音频、清单 |
+| `clip_videos.jsonl` | 预览视频路径记录（可含 plain / bbox） |
+| `preview/` | 给人看的预览视频、音频、清单（可含 `clip_preview_bbox_cameraN.mp4`） |
 | `run.json` | 本次运行的元信息（版本、完成步骤等） |
 
 ### 1.2 能力一览（按步骤）
 
-| 你想做的事 | 是否需要联网调用大模型 | 推荐函数 |
-|------------|------------------------|----------|
+| 你想做的事 | 是否需要联网调用大模型 | 推荐函数 / 步骤名 |
+|------------|------------------------|-------------------|
 | 查看 bag 里有哪些话题 | 否 | `inspect_bag` |
-| 只解析 bag、切片段、导出媒体 | 否 | `extract_clips` 或 `client.extract_bag` |
-| 整理预览目录 | 否 | `materialize_preview` |
-| 语音转文字 | 是 | `transcribe_clips` |
-| 场景打标 | 是 | `label_clips` |
-| 生成融合向量 | 是 | `embed_clips` |
+| 只解析 bag、切片段、导出媒体 | 否 | `extract_clips` / `extract` |
+| 帧级检测 + 画框 | 否（本机检测器） | `annotate_bboxes` / `bbox` |
+| 编码 plain / bbox 预览 MP4 | 否 | `encode_preview_videos` / `encode` |
+| 整理预览目录 | 否 | `materialize_preview` / `preview` |
+| 语音转文字 | 是 | `transcribe_clips` / `asr` |
+| 场景打标 | 是 | `label_clips` / `label` |
+| 生成融合向量 | 是 | `embed_clips` / `embed` |
 | 按你指定的步骤组合执行 | 视步骤而定 | **`run_stages`（推荐）** |
+| 一键复合（含可选 bbox） | 视配置 | `infer_full` |
 | 一键跑完全流程（旧写法） | 是 | `client.process_bag` |
 
 ### 1.3 两种「模型调用方式」
@@ -90,8 +96,9 @@ ROS1 录制文件 (.bag)
   解析并切成多个 clip（约 15～20 秒）
   · 多路相机帧、音频 WAV
   · 声学频谱图（PNG）、Mel 特征
-  · 预览 MP4（可选）
         │
+        ├─（可选）annotate_bbox → bboxes.jsonl + *_bbox.jpg
+        ├─（可选）encode_preview → plain / bbox MP4
         ▼
   语音识别 → 得到转写文本
         │
@@ -102,6 +109,9 @@ ROS1 录制文件 (.bag)
         │                  │
         ▼                  ▼
   labels.jsonl      fusion_embeddings.jsonl
+        │
+        ▼
+  materialize_preview → preview/（含 manifest，可带 bbox 变体）
 ```
 
 ---
@@ -115,11 +125,11 @@ ROS1 录制文件 (.bag)
 ```powershell
 cd piplinesdk
 py -3.11 -m pip install -e .
-```
 
-如果要用 `MODEL_BACKEND=mc`（MaxCompute 路径），再执行：
+# 可选：YOLO 检测（BBOX_DETECTOR=yolo）
+py -3.11 -m pip install -e ".[bbox]"
 
-```powershell
+# 可选：MaxCompute / MaxFrame AI（MODEL_BACKEND=mc）
 py -3.11 -m pip install -e ".[mc]"
 ```
 
@@ -136,7 +146,7 @@ py -3.11 -m pip install -e ".[mc]"
 若目录里已有构建好的 wheel 文件：
 
 ```powershell
-py -3.11 -m pip install .\oms_multimodal_sdk-0.3.2-py3-none-any.whl
+py -3.11 -m pip install .\oms_multimodal_sdk-0.3.3-py3-none-any.whl
 ```
 
 ### 2.3 Windows 上找不到 `oms-multimodal` 命令
@@ -317,6 +327,20 @@ py -3.11 examples\02_extract_only.py
 | `ACOUSTIC_PANEL_FMAX` | 否 | 空（用奈奎斯特频率） | Mel 最高频率（赫兹） |
 | `ACOUSTIC_PANEL_WIDTH` | 否 | `768` | 频谱图宽度（像素） |
 | `ACOUSTIC_PANEL_HEIGHT` | 否 | `256` | 频谱图高度（像素） |
+| `BBOX_ENABLED` | 否 | `false` | 是否在 `infer_full` 中强制跑检测（也可只开 `ENCODE_BBOX`） |
+| `BBOX_DETECTOR` | 否 | `noop` | `noop` / `stub` / `opencv` / `yolo` |
+| `BBOX_ELEMENT` | 否 | `element` | OpenCV/stub 写到框上的元素名 |
+| `ENCODE_PLAIN` | 否 | `true` | 是否编码无框预览 MP4 |
+| `ENCODE_BBOX` | 否 | `false` | 是否编码带框预览 MP4（为 true 时 `infer_full` 会先 annotate） |
+| `BBOX_YOLO_MODEL` | 否 | `yolov8n.pt` | YOLO 权重 |
+| `BBOX_YOLO_CONF` | 否 | `0.25` | YOLO 置信度阈值 |
+| `BBOX_YOLO_CLASSES` | 否 | 空=全部 | 逗号分隔的类 id 或类名（如 `0` 或 `person,car`） |
+| `BBOX_OPENCV_CASCADE` | 否 | 默认人脸 Haar | OpenCV 4：cascade XML 路径或文件名 |
+| `BBOX_OPENCV_YUNET` | 否 | SDK 内置 | OpenCV 5：YuNet ONNX 路径 |
+| `OMNI_VIDEO_VARIANT` | 否 | `auto` | Omni 选预览片：`plain` / `bbox` / `auto` |
+| `LABEL_TAXONOMY_DEPTH` | 否 | `0` | 嵌套取值树全局最大深度（0=不裁） |
+| `LABEL_TAXONOMY_DEPTH_BY_DIM` | 否 | 空 | 按维度覆盖，如 `L1.3=2` |
+| `LABEL_TREE_OUTPUT` | 否 | `leaf` | 嵌套树输出：`leaf` / `path` / `ancestors` |
 
 使用 `MODEL_BACKEND=mc` 时，还需要 MaxCompute 相关变量（如 `ODPS_ACCESS_ID`、`ODPS_ACCESS_KEY`、`ODPS_PROJECT`、`ODPS_ENDPOINT` 等），以及：
 
@@ -407,6 +431,16 @@ TopicInfo(
 
 打标时模型必须知道「有哪些标签、标签什么意思」。这些定义放在一份 YAML 文件里（安装包自带一份 `oms_label_taxonomy.yaml`）。SDK 会把它编进提示词，并解析模型返回的 JSON。
 
+取值可以是：
+
+| `dtype` / schema | 说明 |
+|------------------|------|
+| 扁平 `enum` | `values: ["sunny", "rainy"]` |
+| 嵌套 `enum_tree` | `values: [{id, children: [...]}]`，可用脚手架 `enum_tree_node` / `make_enum_tree_schema` |
+| `bool` / `string` | 布尔与自由文本 |
+
+嵌套树可按深度裁剪后再进 prompt：`LABEL_TAXONOMY_DEPTH`、`LABEL_TAXONOMY_DEPTH_BY_DIM`、`LABEL_TREE_OUTPUT`（见第 4 节环境变量）。
+
 ### 5.5 声学频谱图与 Mel 特征
 
 向量模型通常不能直接吃原始音频波形，因此 SDK 会：
@@ -451,12 +485,20 @@ ctx = RunContext(
 | 函数 | 步骤英文名 | 主要写出的文件 |
 |------|------------|----------------|
 | `extract_clips(...)` | `extract` | `clips_index.jsonl`、`clip_videos.jsonl`、工作目录下的媒体 |
+| `annotate_bboxes(...)` | `bbox` | `bboxes.jsonl`、`*_bbox.jpg`、回写 clips_index |
+| `encode_preview_videos(...)` | `encode` | plain / bbox MP4，回写 `clip_videos.jsonl` |
 | `transcribe_clips(...)` | `asr` | `asr.jsonl`（asr = Automatic Speech Recognition，自动语音识别） |
-| `materialize_preview(...)` | `preview` | `preview/` 下的 MP4、音频、`manifest.json` |
+| `materialize_preview(...)` | `preview` | `preview/` 下的 MP4、音频、`manifest.json`（可含 `cameras_bbox`） |
 | `label_clips(...)` | `label` | `labels.jsonl` |
 | `embed_clips(...)` | `embed` | `fusion_embeddings.jsonl` |
 | `write_run_json(...)` | `upload`（表示「结果已落盘可交付」） | `run.json` |
-| `infer_full(...)` | （复合接口） | 依次执行解析→语音识别→打标→向量→预览 |
+| `infer_full(...)` | （复合接口） | `extract → [bbox] → encode → asr → label → embed → preview` |
+
+推荐顺序：
+
+```text
+extract → [bbox] → encode → asr → preview → label → embed → upload
+```
 
 ### 6.3 `parse_stages` 与 `run_stages`
 
@@ -469,7 +511,10 @@ parse_stages(None)
 # 只跑解析 + 语音识别（适合先验证联网能力）
 parse_stages("extract,asr")
 
-# 别名：transcribe 等同于 asr
+# 本地无 AI：解析 + stub 画框 + 编码双预览
+parse_stages("extract,bbox,encode,preview")
+
+# 别名：transcribe=asr，annotate_bbox=bbox，encode_preview=encode
 parse_stages("extract,transcribe")
 
 result = run_stages(
@@ -507,7 +552,71 @@ print(result.errors)               # 步骤内收集到的错误
 
 ---
 
-## 7. 客户端 API（OmsMultimodalClient）
+## 7. 帧级检测框 BBox 与双预览
+
+检测对象在 SDK 里叫 **element（元素）**，与业务 Taxonomy 标签树无关。框写入 `bboxes.jsonl` 的 `element` 字段（`label` 为兼容别名）。
+
+### 7.1 检测器一览
+
+| `BBOX_DETECTOR` | 作用 | 如何指定「类别」 |
+|-----------------|------|------------------|
+| `noop`（默认） | 不检测 | — |
+| `stub` | 画面中央假框（冒烟） | 仅改 `BBOX_ELEMENT` 名字 |
+| `opencv` | OpenCV：4.x 用 Haar；5.x 自动 YuNet | **不能多类过滤**；换 cascade/YuNet 等于换检测目标；框名用 `BBOX_ELEMENT` |
+| `yolo` | Ultralytics YOLO（需 `pip install -e ".[bbox]"`） | **可以**：`BBOX_YOLO_CLASSES=0` 或 `person,car`；类名写入 `element` |
+
+查看目录：
+
+```python
+from oms_multimodal import list_detectors, list_yolo_class_catalog, list_yolo_class_presets
+
+print(list_detectors())
+print(list_yolo_class_presets())   # 常用预设
+# print(list_yolo_class_catalog())  # COCO80 全表
+```
+
+### 7.2 最小本机示例（无需云端密钥）
+
+```powershell
+$env:BBOX_DETECTOR = "stub"
+$env:ENCODE_PLAIN = "1"
+$env:ENCODE_BBOX = "1"
+py -3.11 examples\03_run_stages.py extract,bbox,encode,preview
+```
+
+或代码：
+
+```python
+import os
+from pathlib import Path
+from oms_multimodal import OmsMultimodalClient, RunContext, infer_full, ClipConfig
+
+os.environ["BBOX_ENABLED"] = "1"
+os.environ["BBOX_DETECTOR"] = "stub"
+os.environ["ENCODE_PLAIN"] = "1"
+os.environ["ENCODE_BBOX"] = "1"
+
+client = OmsMultimodalClient(load_dotenv=True)
+ctx = RunContext(run_dir=Path("output/bbox_demo"), media_mode="local")
+infer_full(ctx, "path/to.bag", client, clip_config=ClipConfig(max_clips=1))
+# → run_dir/bboxes.jsonl 、 preview/clip_preview_camera*.mp4 、 preview/clip_preview_bbox_camera*.mp4
+```
+
+YOLO 只要「人」：
+
+```powershell
+$env:BBOX_DETECTOR = "yolo"
+$env:BBOX_YOLO_CLASSES = "person"   # 或 COCO id: 0
+$env:ENCODE_BBOX = "1"
+```
+
+### 7.3 与 HMI 的关系（本仓库）
+
+本地 HMI「管线执行参数」会把 `bbox_enabled` / 检测器等写入上述环境变量，worker 走 `infer_full`；Explorer 在有 `bbox_url` 时可切换 Plain | BBox。详见仓库 `project-management/acceptance/HMI-SDK-BBOX.md`。
+
+---
+
+## 8. 客户端 API（OmsMultimodalClient）
 
 ### 构造函数
 
@@ -654,7 +763,7 @@ assets = client.render_acoustic_assets("clip.wav", "clips/demo")
 
 ---
 
-## 8. 配置类参考
+## 9. 配置类参考
 
 ### `ClipConfig`
 
@@ -730,7 +839,7 @@ class AcousticPanelConfig:
 
 ---
 
-## 9. 低级 API
+## 10. 低级 API
 
 如需绕过 `OmsMultimodalClient` 直接组合模块：
 
@@ -775,7 +884,7 @@ for clip in extractor.iter_clips(acoustic_panel_config=AcousticPanelConfig()):
 
 ---
 
-## 10. 命令行工具
+## 11. 命令行工具
 
 **推荐入口**（不依赖 PATH）：
 
@@ -825,7 +934,22 @@ python -m oms_multimodal run --manifest rosbag/manifest.json
 
 ---
 
-## 11. 输出文件格式
+## 12. 输出文件格式
+
+### bboxes.jsonl（可选）
+
+```json
+{
+  "clip_id": "output_0000",
+  "topic": "/camera0/image_raw/compressed",
+  "timestamp_ns": 1234567890,
+  "image_path": ".../frame.jpg",
+  "annotated_image_path": ".../frame_bbox.jpg",
+  "boxes": [
+    {"x1": 10, "y1": 20, "x2": 100, "y2": 200, "element": "person", "label": "person", "score": 0.91, "class_id": 0}
+  ]
+}
+```
 
 ### fusion_embeddings.jsonl
 
@@ -898,7 +1022,7 @@ python -m oms_multimodal run --manifest rosbag/manifest.json
 
 ---
 
-## 12. 错误处理
+## 13. 错误处理
 
 ### 异常类型
 
@@ -931,7 +1055,7 @@ assert result.embedding_rows + len(result.errors) <= total_clips
 
 ---
 
-## 13. 更多代码示例
+## 14. 更多代码示例
 
 > 更完整、可直接跑的脚本见 **`examples/`** 目录。
 
@@ -1025,7 +1149,7 @@ render_acoustic_panel(
 
 ---
 
-## 14. 架构与限制
+## 15. 架构与限制
 
 ### Rosbag Topic 约定
 
@@ -1068,7 +1192,7 @@ output/work/{bag_stem}/
 
 ---
 
-## 15. 术语表
+## 16. 术语表
 
 | 说法 | 完整含义 |
 |------|----------|
@@ -1088,6 +1212,9 @@ output/work/{bag_stem}/
 | `MODEL_BACKEND=api` | 用百炼 HTTP 调用模型（本机试用默认） |
 | `MODEL_BACKEND=mc` | 用 MaxCompute / MaxFrame AI 调用模型（进阶） |
 | `run_stages` | 按步骤名组合执行流水线的推荐入口 |
+| `infer_full` | 单次复合：extract→[bbox]→encode→asr→label→embed→preview |
+| BBox / element | 帧级检测框；`element` 为通用元素名（非 Taxonomy 标签） |
+| `enum_tree` | 嵌套取值树 schema；可用深度裁剪后再进打标 prompt |
 | `jsonl` | JSON Lines：每行一个 JSON 对象的文本文件 |
 | ffmpeg | 常用的音视频转码工具；生成预览 MP4 时可能用到 |
 

@@ -60,7 +60,7 @@ function settingsSummaryItems(
   taxonomyVersions: TaxonomyVersionOption[],
 ) {
   const bboxLabel = settings.bbox_enabled
-    ? `${settings.bbox_detector || 'opencv'}${settings.encode_bbox ? ' + bbox MP4' : ''}`
+    ? `${settings.bbox_detector || 'opencv'} + jsonl`
     : '关闭'
   return [
     { key: 'omni', label: '打标模型', children: settings.omni_model ?? 'default' },

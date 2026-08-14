@@ -69,7 +69,7 @@ class TestBBoxCapability(unittest.TestCase):
             # original preserved
             self.assertTrue(Path(clip.frames[0].image_path).is_file())
 
-    def test_encode_bbox_after_annotate(self) -> None:
+    def test_encode_plain_ignores_bbox_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             clip = _make_clip(root / "media")
@@ -77,14 +77,14 @@ class TestBBoxCapability(unittest.TestCase):
             write_clips_index(ctx.clips_index_path, iter([clip]))
             annotate_bboxes(ctx, detector=StubDetector())
 
-            # Skip real ffmpeg if unavailable — mock encode path
             with patch(
                 "oms_multimodal.capabilities.encode_preview.render_clip_preview_video",
                 side_effect=lambda clip, out, **kw: self._fake_encode(clip, out, **kw),
             ):
                 enc = encode_preview_videos(ctx, variants=("plain", "bbox"))
             self.assertEqual(enc.plain_count, 1)
-            self.assertEqual(enc.bbox_count, 1)
+            self.assertEqual(enc.bbox_count, 0)
+            self.assertEqual(enc.variants, ["plain"])
             self.assertTrue(ctx.videos_path.is_file())
 
     def _fake_encode(self, clip, out, **kw):
@@ -102,7 +102,8 @@ class TestBBoxCapability(unittest.TestCase):
         }
         return path
 
-    def test_planner_inserts_annotate_when_encode_bbox(self) -> None:
+    def test_planner_encode_bbox_flag_does_not_force_annotate(self) -> None:
+        """encode_bbox is deprecated; annotate only when bbox_enabled."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             plan = CapabilityPlanner().plan(
@@ -114,15 +115,16 @@ class TestBBoxCapability(unittest.TestCase):
                     need_preview=False,
                     encode_plain=True,
                     encode_bbox=True,
+                    bbox_enabled=False,
                     skip_existing=True,
                 )
             )
             ids = plan.capability_ids
-            self.assertIn("annotate_bbox", ids)
+            self.assertNotIn("annotate_bbox", ids)
             self.assertIn("encode_preview", ids)
-            self.assertLess(ids.index("annotate_bbox"), ids.index("encode_preview"))
+            self.assertEqual(plan.steps[ids.index("encode_preview")].params.get("variants"), ["plain"])
 
-    def test_pick_preview_video_variant(self) -> None:
+    def test_pick_preview_video_always_plain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             plain = root / "plain.mp4"
@@ -139,11 +141,11 @@ class TestBBoxCapability(unittest.TestCase):
                 clip_video_bbox_path=str(boxed),
             )
             with patch.dict(os.environ, {"OMNI_VIDEO_VARIANT": "auto"}):
-                self.assertEqual(pick_preview_video_path(clip), str(boxed))
+                self.assertEqual(pick_preview_video_path(clip), str(plain))
             with patch.dict(os.environ, {"OMNI_VIDEO_VARIANT": "plain"}):
                 self.assertEqual(pick_preview_video_path(clip), str(plain))
             with patch.dict(os.environ, {"OMNI_VIDEO_VARIANT": "bbox"}):
-                self.assertEqual(pick_preview_video_path(clip), str(boxed))
+                self.assertEqual(pick_preview_video_path(clip), str(plain))
 
     def test_omni_frame_remap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

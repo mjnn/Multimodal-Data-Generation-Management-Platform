@@ -5,7 +5,7 @@ import { api } from '../api'
 import type { ClipOverview, TimelineMeta, TimelineSnapshot } from '../api/types'
 import { AudioWaveform } from './AudioWaveform'
 import { ClipSyncedAudio } from './ClipSyncedAudio'
-import { ClipPreviewVideo } from './ClipPreviewVideo'
+import { ClipPreviewVideo, type PreviewContext } from './ClipPreviewVideo'
 import { TimelineMinimap } from './TimelineMinimap'
 import { TimelineScrubber } from './TimelineScrubber'
 import { useTimelineKeyboard } from '../hooks/useTimelineKeyboard'
@@ -28,8 +28,13 @@ type ClipTimelinePanelProps = {
   initialTimestampNs?: number
   /** Put preview above timeline controls (review workbench). */
   camerasFirst?: boolean
+  /** browse = 总览；review = 校核 */
+  previewContext?: PreviewContext
   onClipReady?: (clip: ClipOverview) => void
   onTimelineStateChange?: (state: ClipTimelineState) => void
+  selectedBoxKey?: string | null
+  onSelectedBoxChange?: (key: string | null) => void
+  onOverlaySaved?: () => void
 }
 
 function resolveInitialCursorNs(
@@ -51,8 +56,12 @@ export function ClipTimelinePanel({
   runId,
   initialTimestampNs,
   camerasFirst = false,
+  previewContext = 'browse',
   onClipReady,
   onTimelineStateChange,
+  selectedBoxKey,
+  onSelectedBoxChange,
+  onOverlaySaved,
 }: ClipTimelinePanelProps) {
   const [clip, setClip] = useState<ClipOverview | null>(null)
   const [meta, setMeta] = useState<TimelineMeta | null>(null)
@@ -155,6 +164,9 @@ export function ClipTimelinePanel({
   const previewBlock = mp4Preview ? (
     <div className="clip-preview-stage">
       <ClipPreviewVideo
+        clipId={clipId}
+        runId={runId}
+        previewContext={previewContext}
         gridUrl={mp4Preview.grid_url}
         cameras={mp4Preview.cameras}
         hasBboxPreview={Boolean(
@@ -174,6 +186,9 @@ export function ClipTimelinePanel({
         onCursorChange={setCursorNs}
         onPlayingChange={setPlaying}
         height={camerasFirst ? 520 : 480}
+        selectedBoxKey={selectedBoxKey}
+        onSelectedBoxChange={onSelectedBoxChange}
+        onOverlaySaved={onOverlaySaved}
       />
       {clipAudioUrl ? (
         <ClipSyncedAudio

@@ -20,9 +20,19 @@ type Props = {
   clipId: string
   runId: string
   cursorNs: number
+  selectedBoxKey?: string | null
+  onSelectBox?: (key: string | null) => void
+  refreshToken?: number
 }
 
-export function ClipBboxDetailSection({ clipId, runId, cursorNs }: Props) {
+export function ClipBboxDetailSection({
+  clipId,
+  runId,
+  cursorNs,
+  selectedBoxKey,
+  onSelectBox,
+  refreshToken = 0,
+}: Props) {
   const [loading, setLoading] = useState(false)
   const [hasBboxes, setHasBboxes] = useState(false)
   const [detections, setDetections] = useState<ClipBboxDetection[]>([])
@@ -60,7 +70,7 @@ export function ClipBboxDetailSection({ clipId, runId, cursorNs }: Props) {
     return () => {
       cancelled = true
     }
-  }, [clipId, runId, cursorNs])
+  }, [clipId, runId, cursorNs, refreshToken])
 
   const columns: ColumnsType<ClipBboxDetection> = [
     {
@@ -127,7 +137,10 @@ export function ClipBboxDetailSection({ clipId, runId, cursorNs }: Props) {
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description={message || '本 Clip 无 bboxes.jsonl（需启用 BBox 并重跑管线）'}
+        description={
+          message ||
+          '本 Clip 无 bboxes.jsonl。请在校核页「带可编辑框」中新建并保存本帧。'
+        }
         style={{ margin: '8px 0' }}
       />
     )
@@ -137,25 +150,39 @@ export function ClipBboxDetailSection({ clipId, runId, cursorNs }: Props) {
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="当前时刻 ±200ms 内无检测框"
+        description="当前时刻 ±200ms 内无检测框。请在校核页「带可编辑框」中新建后保存本帧。"
         style={{ margin: '8px 0' }}
       />
     )
   }
 
   return (
-    <Table<ClipBboxDetection>
+    <div data-testid="bbox-detail-section">
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '0 0 8px' }}>
+        切换到「带识别框预览」可只读查看当前 jsonl 框；新建 / 删框 / 调大小 / 改识别内容请到校核页「带可编辑框」。
+      </Typography.Paragraph>
+      <Table<ClipBboxDetection>
       size="small"
       loading={loading}
-      rowKey={(r) =>
-        `${r.camera}-${r.timestamp_ns}-${r.box_index ?? 0}-${r.x1}-${r.y1}`
-      }
+      rowKey={(r) => `${r.camera}:${r.timestamp_ns}:${r.box_index ?? 0}`}
       columns={columns}
       dataSource={detections}
       pagination={false}
       scroll={{ x: 780 }}
       locale={{ emptyText: '无检测结果' }}
+      rowClassName={(r) => {
+        const key = `${r.camera}:${r.timestamp_ns}:${r.box_index ?? 0}`
+        return key === selectedBoxKey ? 'bbox-detail-row--selected' : ''
+      }}
+      onRow={(r) => ({
+        onClick: () => {
+          const key = `${r.camera}:${r.timestamp_ns}:${r.box_index ?? 0}`
+          onSelectBox?.(key === selectedBoxKey ? null : key)
+        },
+        style: { cursor: onSelectBox ? 'pointer' : undefined },
+      })}
     />
+    </div>
   )
 }
 

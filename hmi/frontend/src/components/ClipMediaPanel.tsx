@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { ClipOverview } from '../api/types'
 import { formatCollectionPeriod } from '../utils/format'
 import { ClipTimelinePanel, type ClipTimelineState } from './ClipTimelinePanel'
+import type { PreviewContext } from './ClipPreviewVideo'
 
 export type ClipMediaPanelProps = {
   clipId: string
@@ -17,7 +18,12 @@ export type ClipMediaPanelProps = {
   testId?: string
   /** When false, hide title/label block under the video (detail shown elsewhere). */
   showMetaBelow?: boolean
+  /** browse = 总览只读预览；review = 校核可编辑框 */
+  previewContext?: PreviewContext
   onTimelineStateChange?: (state: ClipTimelineState) => void
+  selectedBoxKey?: string | null
+  onSelectedBoxChange?: (key: string | null) => void
+  onOverlaySaved?: () => void
 }
 
 export function ClipMediaPanel({
@@ -30,7 +36,11 @@ export function ClipMediaPanel({
   className,
   testId,
   showMetaBelow = true,
+  previewContext = 'browse',
   onTimelineStateChange,
+  selectedBoxKey,
+  onSelectedBoxChange,
+  onOverlaySaved,
 }: ClipMediaPanelProps) {
   const [clipOverview, setClipOverview] = useState<ClipOverview | null>(null)
 
@@ -61,8 +71,12 @@ export function ClipMediaPanel({
             runId={runId}
             initialTimestampNs={initialTimestampNs}
             camerasFirst
+            previewContext={previewContext}
             onClipReady={handleClipReady}
             onTimelineStateChange={onTimelineStateChange}
+            selectedBoxKey={selectedBoxKey}
+            onSelectedBoxChange={onSelectedBoxChange}
+            onOverlaySaved={onOverlaySaved}
           />
           <Typography.Text type="secondary" className="review-clip-card__media-hint">
             <VideoCameraOutlined /> Clip 级 MP4 预览 · 空格播放（含音频）

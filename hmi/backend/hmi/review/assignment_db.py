@@ -12,6 +12,8 @@ from hmi.app_db import _utc_now_iso, db_conn
 BATCH_STATUSES = frozenset({"open", "closed"})
 ITEM_STATUSES = frozenset({"pending", "claimed", "done"})
 BATCH_KINDS = frozenset({"low_confidence", "assigned", "public_pool"})
+REVIEW_TARGETS = frozenset({"labels", "bboxes"})
+BBOX_SENTINEL_LABEL_ID = "__bbox__"
 
 _ASSIGNMENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS review_assignment_batch (
@@ -70,6 +72,39 @@ def _ensure_batch_kind_column(conn: sqlite3.Connection) -> None:
             ADD COLUMN batch_kind TEXT NOT NULL DEFAULT 'public_pool'
             """
         )
+    if "review_targets_json" not in cols:
+        conn.execute(
+            """
+            ALTER TABLE review_assignment_batch
+            ADD COLUMN review_targets_json TEXT NOT NULL DEFAULT '["labels"]'
+            """
+        )
+
+
+def _parse_review_targets(raw: str | None) -> list[str]:
+    if not raw:
+        return ["labels"]
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return ["labels"]
+    if not isinstance(parsed, list):
+        return ["labels"]
+    out = [str(x).strip() for x in parsed if str(x).strip() in REVIEW_TARGETS]
+    return out or ["labels"]
+
+
+def normalize_review_targets(targets: list[str] | None) -> list[str]:
+    if not targets:
+        return ["labels"]
+    out: list[str] = []
+    for t in targets:
+        key = str(t).strip().lower()
+        if key in REVIEW_TARGETS and key not in out:
+            out.append(key)
+    if not out:
+        raise ValueError("校核目标至少选择一项：标签 或 识别框")
+    return out
 
 
 def ensure_assignment_schema() -> None:
@@ -95,13 +130,17 @@ def _parse_label_ids(raw: str | None) -> list[str]:
 
 
 def _batch_row(row: sqlite3.Row, *, stats: dict[str, int] | None = None) -> dict[str, Any]:
+    keys = set(row.keys())
     out: dict[str, Any] = {
         "id": row["id"],
         "name": row["name"],
         "label_ids": _parse_label_ids(row["label_ids_json"]),
         "queue_limit": int(row["queue_limit"]),
         "assignee_id": row["assignee_id"],
-        "batch_kind": row["batch_kind"] if "batch_kind" in row.keys() else "public_pool",
+        "batch_kind": row["batch_kind"] if "batch_kind" in keys else "public_pool",
+        "review_targets": _parse_review_targets(
+            row["review_targets_json"] if "review_targets_json" in keys else None
+        ),
         "status": row["status"],
         "created_by": row["created_by"],
         "created_at": row["created_at"],
@@ -121,15 +160,17 @@ def create_batch(
     created_by: str,
     items: list[dict[str, Any]],
     batch_kind: str = "public_pool",
+    review_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     if batch_kind not in BATCH_KINDS:
         raise ValueError(f"无效任务类型: {batch_kind}")
-    if not label_ids:
-        raise ValueError("至少选择一个标签")
+    targets = normalize_review_targets(review_targets)
+    if "labels" in targets and not label_ids:
+        raise ValueError("校核目标含「标签」时至少选择一个标签")
     if queue_limit < 1:
         raise ValueError("队列数量至少为 1")
     if not items:
-        raise ValueError("当前标签范围内没有可派发的校核条目")
+        raise ValueError("当前范围内没有可派发的校核条目")
 
     batch_id = str(uuid.uuid4())
     now = _utc_now_iso()
@@ -139,9 +180,9 @@ def create_batch(
         conn.execute(
             """
             INSERT INTO review_assignment_batch (
-              id, name, label_ids_json, queue_limit, assignee_id, batch_kind, status,
-              created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+              id, name, label_ids_json, queue_limit, assignee_id, batch_kind,
+              review_targets_json, status, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
             """,
             (
                 batch_id,
@@ -150,6 +191,7 @@ def create_batch(
                 queue_limit,
                 assignee_id,
                 batch_kind,
+                json.dumps(targets, ensure_ascii=False),
                 created_by,
                 now,
                 now,

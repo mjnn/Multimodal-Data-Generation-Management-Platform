@@ -25,7 +25,7 @@ class TestPipelineBboxSettings(unittest.TestCase):
             self.assertFalse(cfg["bbox_enabled"])
             self.assertEqual(cfg["bbox_detector"], "opencv")
             self.assertTrue(cfg["encode_plain"])
-            self.assertFalse(cfg["encode_bbox"])
+            self.assertNotIn("encode_bbox", cfg)
 
             saved = ps.save_pipeline_settings(
                 {
@@ -33,7 +33,6 @@ class TestPipelineBboxSettings(unittest.TestCase):
                     "bbox_detector": "opencv",
                     "bbox_element": "face",
                     "encode_plain": True,
-                    "encode_bbox": False,
                     "bbox_in_label_prompt": True,
                     "bbox_face_attrs": True,
                 }
@@ -41,8 +40,7 @@ class TestPipelineBboxSettings(unittest.TestCase):
             self.assertTrue(saved["bbox_enabled"])
             self.assertEqual(saved["bbox_detector"], "opencv")
             self.assertEqual(saved["bbox_element"], "face")
-            # Opening bbox forces encode_bbox
-            self.assertTrue(saved["encode_bbox"])
+            self.assertNotIn("encode_bbox", saved)
             self.assertTrue(saved["bbox_in_label_prompt"])
             self.assertTrue(saved["bbox_face_attrs"])
 
@@ -52,7 +50,7 @@ class TestPipelineBboxSettings(unittest.TestCase):
             self.assertEqual(applied["BBOX_ENABLED"], "1")
             self.assertEqual(applied["BBOX_DETECTOR"], "opencv")
             self.assertEqual(applied["BBOX_ELEMENT"], "face")
-            self.assertEqual(applied["ENCODE_BBOX"], "1")
+            self.assertNotIn("ENCODE_BBOX", applied)
             self.assertEqual(applied["ENCODE_PLAIN"], "1")
             self.assertEqual(applied.get("BBOX_YOLO_CLASSES", ""), "")
 

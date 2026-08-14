@@ -301,7 +301,7 @@ function ReviewWorkbenchContent({
 
               <Col xs={24} xl={15} className="review-workbench-layout__media">
 
-                <ReviewClipMediaPanel task={task} />
+                <ReviewClipMediaPanel task={task} reviewTargets={batchInfo?.review_targets} />
 
               </Col>
 

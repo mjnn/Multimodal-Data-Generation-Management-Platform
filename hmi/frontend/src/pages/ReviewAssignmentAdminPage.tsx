@@ -22,6 +22,7 @@ import type {
   ReviewAssignmentBatch,
   ReviewAssignmentItem,
   ReviewAssignmentReviewer,
+  ReviewTarget,
 } from '../api/types'
 import { ContentCard, FromAuditBackLink } from '../components/ui'
 
@@ -79,9 +80,12 @@ export function ReviewAssignmentAdminPage() {
     name: string
     queue_limit: number
     assignee_id?: string
+    review_targets: ReviewTarget[]
   }>()
 
   const treeData = useMemo(() => buildCheckableTree(taxonomy), [taxonomy])
+  const reviewTargets = Form.useWatch('review_targets', form) as ReviewTarget[] | undefined
+  const needsLabels = (reviewTargets ?? ['labels']).includes('labels')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -109,14 +113,16 @@ export function ReviewAssignmentAdminPage() {
 
   const handlePreview = async () => {
     const queueLimit = form.getFieldValue('queue_limit') ?? 50
-    if (!labelIds.length) {
-      message.warning('请至少选择一个标签')
+    const targets = (form.getFieldValue('review_targets') as ReviewTarget[] | undefined) ?? ['labels']
+    if (targets.includes('labels') && !labelIds.length) {
+      message.warning('校核目标含「标签」时请至少选择一个标签')
       return
     }
     try {
       const res = await api.previewReviewAssignment({
         label_ids: labelIds,
         queue_limit: queueLimit,
+        review_targets: targets,
       })
       setPreviewCount(res.count)
     } catch {
@@ -126,8 +132,9 @@ export function ReviewAssignmentAdminPage() {
 
   const handleDispatch = async () => {
     const values = await form.validateFields()
-    if (!labelIds.length) {
-      message.warning('请至少选择一个标签')
+    const targets = values.review_targets?.length ? values.review_targets : (['labels'] as ReviewTarget[])
+    if (targets.includes('labels') && !labelIds.length) {
+      message.warning('校核目标含「标签」时请至少选择一个标签')
       return
     }
     try {
@@ -136,6 +143,7 @@ export function ReviewAssignmentAdminPage() {
         label_ids: labelIds,
         queue_limit: values.queue_limit,
         assignee_id: values.assignee_id || null,
+        review_targets: targets,
       })
       message.success('校核任务已派发')
       form.resetFields()
@@ -275,13 +283,33 @@ export function ReviewAssignmentAdminPage() {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ queue_limit: 50 }}
+          initialValues={{ queue_limit: 50, review_targets: ['labels'] as ReviewTarget[] }}
           onValuesChange={() => setPreviewCount(null)}
         >
           <Form.Item name="name" label="任务名称" rules={[{ required: true, message: '请输入任务名称' }]}>
             <Input placeholder="例如：时段标签专项校核" maxLength={120} />
           </Form.Item>
-          <Form.Item label="标签范围（可多选）" required>
+          <Form.Item
+            name="review_targets"
+            label="校核目标"
+            rules={[{ required: true, message: '请选择校核目标' }]}
+            extra="可多选：标签字段校核、识别框按帧校核"
+          >
+            <Select
+              mode="multiple"
+              allowClear={false}
+              options={[
+                { value: 'labels', label: '标签' },
+                { value: 'bboxes', label: '识别框' },
+              ]}
+              data-testid="review-targets-select"
+            />
+          </Form.Item>
+          <Form.Item
+            label="标签范围（可多选）"
+            required={needsLabels}
+            extra={needsLabels ? undefined : '当前校核目标不含「标签」，可不选'}
+          >
             <Tree
               checkable
               selectable={false}

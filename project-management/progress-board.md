@@ -1,6 +1,6 @@
 # 进度看板
 
-> 最后更新：2026-08-12
+> 最后更新：2026-08-14
 
 ## Todo
 
@@ -19,6 +19,7 @@
 
 | ID | 标题 | 完成日 |
 |----|------|--------|
+| **HMI-BBOX-OVERLAY** | 可编辑 BBox 叠加层（bboxes.jsonl） | 2026-08-14 |
 | **HMI-SDK-MODALITY** | 原始媒体上传 + Planner 模态编排（local） | 2026-08-12 |
 | **HMI-SDK-BBOX** | 本地 BBox 参数 + infer_full + Plain/BBox + enum_tree | 2026-08-12 |
 | **HMI-TEST-MODE** | 测试模式开关 + 重置测试数据（云端清 OSS+MC） | 2026-08-11 |

@@ -90,3 +90,4 @@ M10,milestone,M10,M10 taxonomy semantic hub exit,done,100,TBD,P0,2026-07-31,2026
 HMI-TEST-MODE,task,HMI,test mode switch + reset test data,done,100,TBD,P1,2026-08-11,2026-08-11,2026-08-11,2026-08-11,,HMI_TEST_MODE OSS reset cloud MC+OSS acceptance/HMI-TEST-MODE.md
 HMI-SDK-BBOX,task,HMI,SDK BBox+enum_tree HMI local,done,100,TBD,P1,2026-08-12,2026-08-12,2026-08-12,2026-08-12,,acceptance/HMI-SDK-BBOX.md infer_full Plain|BBox
 HMI-SDK-MODALITY,task,HMI,raw video/audio/text upload + planner modality gate,done,100,TBD,P1,2026-08-12,2026-08-12,2026-08-12,2026-08-12,,acceptance/HMI-SDK-MODALITY.md local ingest_sources; cloud media TBD
+HMI-BBOX-OVERLAY,task,HMI,editable bbox overlay from bboxes.jsonl,done,100,TBD,P1,2026-08-14,2026-08-14,2026-08-14,2026-08-14,,acceptance/HMI-BBOX-OVERLAY.md plain SVG overlay + PUT upsert

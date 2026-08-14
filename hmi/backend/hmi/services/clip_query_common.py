@@ -9,24 +9,21 @@ from typing import Any
 import numpy as np
 
 from hmi.labels_util import extract_scene_description, labels_preview, match_label_filters, parse_labels_json
-from hmi.vec import cos_sim, parse_embedding
+from hmi.vec import cos_sim
 
 _TOKEN_RE = re.compile(r"[\u4e00-\u9fff]|[a-zA-Z0-9_]+")
 
 # Semantic filter policy (overview clip search):
-# - Text floor: lexical overlap must be meaningful (not a stray char).
-# - Embed floor: cosine vs clip vectors; well below find_similar(0.75) so NL
-#   queries still hit, but high enough that weak positive sims are dropped.
-# - Relative cutoff: after absolute floors, keep scores within band of the best
-#   hit so a long tail of barely-above-threshold clips is not returned.
-# - Flat-band guard: if survivors are many and nearly identical mid scores,
-#   treat as "no discriminative signal" → empty (avoids returning the corpus).
+# - Text floor: lexical overlap on scene / label text.
+# - Embed floor: cosine(query_text_vec, scene+label_text_vec) — NOT clip fusion vectors.
+# - Relative cutoff + flat-band guard: drop long tails / non-discriminative mid bands.
 DEFAULT_MIN_TEXT_SCORE = 0.25
 DEFAULT_MIN_EMBED_SCORE = 0.40
 DEFAULT_RELATIVE_CUTOFF = 0.85
 DEFAULT_FLAT_BEST_MAX = 0.55
 DEFAULT_FLAT_SPREAD_MAX = 0.06
 DEFAULT_FLAT_MIN_COUNT = 2
+_EMBED_BATCH_SIZE = 16
 
 
 def normalize_label_filters(raw: Any) -> dict[str, Any] | None:
@@ -115,64 +112,127 @@ def scene_text_for_clip(
     return extract_scene_description(labels_json, scene_summary=scene_summary)
 
 
-def try_embed_query_text(query: str, *, dimension: int | None = None) -> np.ndarray | None:
-    """Embed NL query with qwen3-vl-embedding (text-only). Returns None if unavailable."""
-    text = (query or "").strip()
-    if not text:
-        return None
+def semantic_document_text(scene: str, preview: str = "") -> str:
+    """Text corpus for semantic embedding: scene description + optional label preview."""
+    parts: list[str] = []
+    s = (scene or "").strip()
+    p = (preview or "").strip()
+    if s:
+        parts.append(s)
+    if p and p != s:
+        parts.append(p)
+    return "\n".join(parts)
+
+
+def _embed_dimension(dimension: int | None) -> int:
+    if dimension is not None:
+        return int(dimension)
+    try:
+        return int(os.getenv("HMI_SEMANTIC_EMBED_DIM", "1024") or "1024")
+    except ValueError:
+        return 1024
+
+
+def try_embed_texts(texts: list[str], *, dimension: int | None = None) -> dict[str, np.ndarray]:
+    """Embed unique non-empty texts with qwen3-vl-embedding (text-only).
+
+    Returns map of original text → vector. Missing texts when API unavailable.
+    Does **not** use clip fusion / multimodal vectors.
+    """
+    unique: list[str] = []
+    seen: set[str] = set()
+    for t in texts:
+        s = (t or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        unique.append(s)
+    if not unique:
+        return {}
+
     api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
     if not api_key:
-        return None
+        return {}
     try:
         from http import HTTPStatus
 
         from dashscope import MultiModalEmbedding
     except Exception:
-        return None
+        return {}
+
     model = os.getenv("HMI_SEMANTIC_EMBED_MODEL", "qwen3-vl-embedding").strip() or "qwen3-vl-embedding"
-    dim = dimension
-    if dim is None:
+    dim = _embed_dimension(dimension)
+    out: dict[str, np.ndarray] = {}
+
+    for i in range(0, len(unique), _EMBED_BATCH_SIZE):
+        batch = unique[i : i + _EMBED_BATCH_SIZE]
         try:
-            dim = int(os.getenv("HMI_SEMANTIC_EMBED_DIM", "1024") or "1024")
-        except ValueError:
-            dim = 1024
-    try:
-        resp = MultiModalEmbedding.call(
-            api_key=api_key,
-            model=model,
-            input=[{"text": text}],
-            enable_fusion=True,
-            dimension=dim,
-        )
-        if getattr(resp, "status_code", None) != HTTPStatus.OK:
-            return None
-        embeddings = (getattr(resp, "output", None) or {}).get("embeddings") or []
-        if not embeddings:
-            return None
-        vec = embeddings[0].get("embedding")
-        if not isinstance(vec, list) or not vec:
-            return None
-        return np.asarray(vec, dtype=np.float32)
-    except Exception:
+            resp = MultiModalEmbedding.call(
+                api_key=api_key,
+                model=model,
+                input=[{"text": t} for t in batch],
+                enable_fusion=True,
+                dimension=dim,
+            )
+            if getattr(resp, "status_code", None) != HTTPStatus.OK:
+                continue
+            embeddings = (getattr(resp, "output", None) or {}).get("embeddings") or []
+            # API may return one embedding per input; index by order when possible.
+            if len(embeddings) == len(batch):
+                for text, item in zip(batch, embeddings, strict=True):
+                    vec = item.get("embedding") if isinstance(item, dict) else None
+                    if isinstance(vec, list) and vec:
+                        out[text] = np.asarray(vec, dtype=np.float32)
+            else:
+                # Fallback: single / partial — map first available by text field if present.
+                for item in embeddings:
+                    if not isinstance(item, dict):
+                        continue
+                    vec = item.get("embedding")
+                    if not isinstance(vec, list) or not vec:
+                        continue
+                    # Prefer explicit text key; else assign remaining in order.
+                    key = str(item.get("text") or "").strip()
+                    if key and key in seen and key not in out:
+                        out[key] = np.asarray(vec, dtype=np.float32)
+                    elif batch:
+                        # Consume next unmatched batch item
+                        for t in batch:
+                            if t not in out:
+                                out[t] = np.asarray(vec, dtype=np.float32)
+                                break
+        except Exception:
+            continue
+    return out
+
+
+def try_embed_query_text(query: str, *, dimension: int | None = None) -> np.ndarray | None:
+    """Embed NL query (text-only). Returns None if unavailable."""
+    text = (query or "").strip()
+    if not text:
         return None
+    return try_embed_texts([text], dimension=dimension).get(text)
 
 
 def score_clip_candidate(
     *,
     labels_json: dict[str, Any] | None,
     scene_summary: str | None,
-    vector_json: str | None,
     label_filters: dict[str, Any] | None,
     semantic_query: str,
     query_vec: np.ndarray | None,
+    document_vec: np.ndarray | None = None,
     min_semantic_score: float,
     min_embed_score: float = DEFAULT_MIN_EMBED_SCORE,
+    # Deprecated: ignored (was clip fusion vector). Kept for call-site compatibility.
+    vector_json: str | None = None,
 ) -> dict[str, Any] | None:
     """Return scored hit dict or None if filtered out.
 
-    Semantic pass rule (when query non-empty): keep if text_score >= text floor
-    OR embed_score >= embed floor. Weak positive cosine alone must not pass.
+    Embedding compares query text ↔ scene/label document text vectors only.
+    ``vector_json`` (clip fusion) is ignored.
     """
+    _ = vector_json  # intentionally unused
     parsed = labels_json if isinstance(labels_json, dict) else parse_labels_json(labels_json)
     if label_filters and not match_label_filters(parsed, label_filters):
         return None
@@ -198,10 +258,8 @@ def score_clip_candidate(
         text_score = max(text_score, text_relevance_score(q, preview) * 0.92)
 
     embed_score = 0.0
-    if query_vec is not None and vector_json:
-        vec = parse_embedding(str(vector_json))
-        if vec is not None and vec.shape == query_vec.shape:
-            embed_score = float(cos_sim(query_vec, vec))
+    if query_vec is not None and document_vec is not None and query_vec.shape == document_vec.shape:
+        embed_score = float(cos_sim(query_vec, document_vec))
 
     text_ok = text_score >= text_floor
     embed_ok = embed_score >= embed_floor

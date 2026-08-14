@@ -458,14 +458,17 @@ def query_overview_clips(
     top_k: int = 200,
     min_score: float = 0.25,
 ) -> dict[str, Any]:
-    """Clip-level overview search against MC fact_clip_label (+ optional embeddings)."""
-    from hmi.labels_util import labels_to_clip_dict
+    """Clip-level overview search: label filters + scene/label text semantic query."""
+    from hmi.labels_util import labels_preview, labels_to_clip_dict
     from hmi.services.clip_query_common import (
         DEFAULT_MIN_TEXT_SCORE,
         apply_semantic_rank_cutoff,
         normalize_label_filters,
+        scene_text_for_clip,
         score_clip_candidate,
+        semantic_document_text,
         try_embed_query_text,
+        try_embed_texts,
     )
 
     filters = normalize_label_filters(label_filters)
@@ -501,20 +504,9 @@ def query_overview_clips(
         f"FROM {label_tbl} WHERE {where_clip}"
     )
 
-    emb_by: dict[tuple[str, str], str] = {}
-    try:
-        emb_tbl = table_name(settings, "fact_clip_embedding")
-        emb_rows = query(
-            f"SELECT clip_id, run_id, vector_json FROM {emb_tbl} WHERE {where_clip}"
-        )
-        for row in emb_rows:
-            emb_by[(str(row["clip_id"]), str(row["run_id"]))] = str(row.get("vector_json") or "")
-    except Exception:
-        emb_by = {}
-
     query_vec = try_embed_query_text(query_text) if query_text else None
-    embedding_used = query_vec is not None
-    items: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    doc_texts: list[str] = []
     for row in label_rows:
         clip_id = str(row["clip_id"])
         run_id = str(row["run_id"])
@@ -523,21 +515,42 @@ def query_overview_clips(
         scene_summary = str(row.get("scene_summary") or "").strip() or None
         if filters and not flat:
             continue
+        labels_dict = flat if isinstance(flat, dict) else {}
+        scene = scene_text_for_clip(labels_dict, scene_summary=scene_summary)
+        preview = labels_preview(labels_dict) if labels_dict else ""
+        doc = semantic_document_text(scene, preview) if query_vec is not None else ""
+        pending.append(
+            {
+                "clip_id": clip_id,
+                "run_id": run_id,
+                "labels_json": labels_dict,
+                "scene_summary": scene_summary,
+                "doc_text": doc,
+            }
+        )
+        if doc:
+            doc_texts.append(doc)
+
+    doc_vecs = try_embed_texts(doc_texts) if (query_vec is not None and doc_texts) else {}
+    embedding_used = query_vec is not None and bool(doc_vecs)
+
+    items: list[dict[str, Any]] = []
+    for row in pending:
         scored = score_clip_candidate(
-            labels_json=flat if isinstance(flat, dict) else {},
-            scene_summary=scene_summary,
-            vector_json=emb_by.get((clip_id, run_id)),
+            labels_json=row["labels_json"],
+            scene_summary=row["scene_summary"],
             label_filters=filters,
             semantic_query=query_text,
             query_vec=query_vec,
+            document_vec=doc_vecs.get(row.get("doc_text") or ""),
             min_semantic_score=text_floor if query_text else 0.0,
         )
         if scored is None:
             continue
         items.append(
             {
-                "clip_id": clip_id,
-                "run_id": run_id,
+                "clip_id": row["clip_id"],
+                "run_id": row["run_id"],
                 "score": scored["score"],
                 "match_mode": scored["match_mode"],
                 "scene_description": scored.get("scene_description") or "",

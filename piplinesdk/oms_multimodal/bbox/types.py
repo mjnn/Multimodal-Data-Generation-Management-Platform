@@ -159,7 +159,11 @@ class BBox:
 
 @dataclass
 class FrameBBoxes:
-    """Detections for one frame (elements with boxes)."""
+    """Detections for one frame (elements with boxes).
+
+    Box xyxy are in **native frame pixels** (``image_width`` × ``image_height``),
+    not preview-MP4 canvas pixels.
+    """
 
     clip_id: str
     topic: str
@@ -167,9 +171,11 @@ class FrameBBoxes:
     image_path: str
     boxes: list[BBox] = field(default_factory=list)
     annotated_image_path: str | None = None
+    image_width: int | None = None
+    image_height: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "clip_id": self.clip_id,
             "topic": self.topic,
             "timestamp_ns": self.timestamp_ns,
@@ -178,3 +184,8 @@ class FrameBBoxes:
             "boxes": [b.to_dict() for b in self.boxes],
             "elements": [b.to_dict() for b in self.boxes],  # explicit alias
         }
+        if self.image_width is not None:
+            out["image_width"] = int(self.image_width)
+        if self.image_height is not None:
+            out["image_height"] = int(self.image_height)
+        return out

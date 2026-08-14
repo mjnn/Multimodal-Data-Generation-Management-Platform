@@ -62,7 +62,7 @@ def annotate_bboxes(
                 if boxes:
                     draw_bboxes_on_image(src, boxes, dst)
                 else:
-                    # Still materialize a sidecar so encode_bbox has a stable path.
+                    # Sidecar for Omni frame remap / QA; HMI overlays jsonl (no bbox MP4 bake).
                     if not dst.is_file():
                         dst.write_bytes(src.read_bytes())
                 annotated = str(dst.resolve())
@@ -70,6 +70,22 @@ def annotate_bboxes(
                 path_map[frame.image_path] = annotated
                 frame_count += 1
                 box_count += len(boxes)
+                iw: int | None = None
+                ih: int | None = None
+                try:
+                    from PIL import Image
+
+                    with Image.open(src) as im:
+                        iw, ih = int(im.size[0]), int(im.size[1])
+                except Exception:  # noqa: BLE001
+                    try:
+                        import cv2
+
+                        mat = cv2.imread(str(src))
+                        if mat is not None:
+                            ih, iw = int(mat.shape[0]), int(mat.shape[1])
+                    except Exception:  # noqa: BLE001
+                        iw, ih = None, None
                 rows.append(
                     FrameBBoxes(
                         clip_id=clip.clip_id,
@@ -78,6 +94,8 @@ def annotate_bboxes(
                         image_path=frame.image_path,
                         boxes=boxes,
                         annotated_image_path=annotated,
+                        image_width=iw,
+                        image_height=ih,
                     ).to_dict()
                 )
             clip.bbox_enabled = True

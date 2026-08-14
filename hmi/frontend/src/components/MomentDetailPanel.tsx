@@ -27,6 +27,9 @@ interface Props {
   sceneDescription?: string | null
   asrSegments?: AudioSegment[]
   events?: EventLabel[]
+  selectedBoxKey?: string | null
+  onSelectBox?: (key: string | null) => void
+  bboxRefreshToken?: number
 }
 
 function mergeAsrText(segments: AudioSegment[]): string {
@@ -42,6 +45,9 @@ export function MomentDetailPanel({
   sceneDescription,
   asrSegments = [],
   events = [],
+  selectedBoxKey,
+  onSelectBox,
+  bboxRefreshToken,
 }: Props) {
   const { user } = useAuth()
   const canQuickReview = canAccessReview(user?.roles)
@@ -178,7 +184,14 @@ export function MomentDetailPanel({
       key: 'bbox',
       label: clipBboxCollapseLabel(),
       children: (
-        <ClipBboxDetailSection clipId={clip.clip_id} runId={runId} cursorNs={cursorNs} />
+        <ClipBboxDetailSection
+          clipId={clip.clip_id}
+          runId={runId}
+          cursorNs={cursorNs}
+          selectedBoxKey={selectedBoxKey}
+          onSelectBox={onSelectBox}
+          refreshToken={bboxRefreshToken}
+        />
       ),
     },
     {

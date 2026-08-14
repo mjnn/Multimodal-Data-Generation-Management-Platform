@@ -26,6 +26,8 @@ export function ClipExplorerPage() {
   const [similarCompositeId, setSimilarCompositeId] = useState<string | null>(null)
   const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
   const [clipLabelMeta, setClipLabelMeta] = useState<ClipLabelView | null>(null)
+  const [selectedBoxKey, setSelectedBoxKey] = useState<string | null>(null)
+  const [bboxRefreshToken, setBboxRefreshToken] = useState(0)
 
   const initialTimestampNs = useMemo(() => {
     const tParam = searchParams.get('t')
@@ -90,6 +92,10 @@ export function ClipExplorerPage() {
     })
   }, [timelineState?.meta.clip_label, clipLabelMeta, taxonomyNodes])
 
+  useEffect(() => {
+    setSelectedBoxKey(null)
+  }, [clipId, runId])
+
   const handleTimelineStateChange = useCallback((state: ClipTimelineState) => {
     setTimelineState(state)
   }, [])
@@ -137,6 +143,9 @@ export function ClipExplorerPage() {
         showMetaBelow={false}
         testId="clip-explorer-media"
         onTimelineStateChange={handleTimelineStateChange}
+        selectedBoxKey={selectedBoxKey}
+        onSelectedBoxChange={setSelectedBoxKey}
+        onOverlaySaved={() => setBboxRefreshToken((n) => n + 1)}
       />
 
       {timelineState ? (
@@ -148,6 +157,9 @@ export function ClipExplorerPage() {
           sceneDescription={sceneDescription}
           asrSegments={timelineState.meta.asr_segments}
           events={timelineState.meta.events}
+          selectedBoxKey={selectedBoxKey}
+          onSelectBox={setSelectedBoxKey}
+          bboxRefreshToken={bboxRefreshToken}
         />
       ) : (
         <ContentCard title="Clip 详情">

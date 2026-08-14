@@ -1,5 +1,13 @@
 # 进度变更日志（倒序）
 
+## 2026-08-14 — HMI-BBOX-OVERLAY（可编辑 jsonl 叠加）
+
+- **后端**：`upsert_frame_boxes` 原子写 `bboxes.jsonl`；`PUT /api/clips/{id}/bboxes` + audit `clip.bboxes_upsert`（仅 local）
+- **前端**：`BBoxOverlayLayer` 原图 letterbox 叠加；默认原图；「烧录预览」降级；暂停可拖/改角/删/双击新建；保存写回
+- **接线**：Explorer `clipId/runId` + 侧栏选中联动；`e2e/bbox-overlay.spec.ts`
+- **验收**：`acceptance/HMI-BBOX-OVERLAY.md`；`test_hmi_bbox_overlay.py` **2/2**
+- **下一步仍推荐**：HMI 在线 H-2（未抢跑 M9.3 出口）
+
 ## 2026-08-12 — HMI-SDK-MODALITY（原始媒体 + Planner 模态门控）
 
 - **Planner**：`source_manifest` / 显式模态 → 跳过 encode（成片）、ASR（无音频）、bbox/encode（无视频）；新增 `ingest_sources`（抽帧）

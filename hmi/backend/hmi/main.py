@@ -30,6 +30,7 @@ from hmi.auth.deps import (
     require_overview_access,
     require_pipeline_access,
     require_pipeline_write,
+    require_reviewer,
 )
 from hmi.config import get_settings
 from hmi.oss_shortcuts import OssShortcutsPutRequest, get_shortcuts_for_user, save_shortcuts_for_user
@@ -485,6 +486,67 @@ def api_clip_bboxes(
     return bboxes_at_timestamp(clip_id, rid, int(timestamp_ns), window_ms=window_ms)
 
 
+class BBoxFrameUpsertBody(BaseModel):
+    mode: str = "upsert_frame"
+    frame: dict[str, Any]
+
+
+@app.put("/api/clips/{clip_id}/bboxes")
+def api_put_clip_bboxes(
+    clip_id: str,
+    body: BBoxFrameUpsertBody,
+    run_id: str = Query(..., min_length=1),
+    user: dict[str, Any] = Depends(require_reviewer),
+) -> dict[str, Any]:
+    """Upsert one frame's boxes into local artifacts/.../bboxes.jsonl (editable overlay source)."""
+    from hmi.audit import append_audit_log
+    from hmi.data_source import is_local_mode
+    from hmi.media.bbox_jsonl import upsert_frame_boxes
+
+    clip_id = unquote(clip_id)
+    rid = run_id.strip()
+    if not is_local_mode():
+        raise HTTPException(501, "云端暂不支持写回 bboxes.jsonl")
+    mode = (body.mode or "upsert_frame").strip().lower()
+    if mode != "upsert_frame":
+        raise HTTPException(400, f"unsupported mode: {body.mode}")
+    frame = body.frame or {}
+    if not isinstance(frame, dict):
+        raise HTTPException(400, "frame must be an object")
+    try:
+        ts = int(frame.get("timestamp_ns"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "frame.timestamp_ns is required") from None
+    boxes = frame.get("boxes")
+    if not isinstance(boxes, list):
+        raise HTTPException(400, "frame.boxes must be a list")
+    topic = frame.get("topic")
+    camera = frame.get("camera")
+    result = upsert_frame_boxes(
+        clip_id,
+        rid,
+        timestamp_ns=ts,
+        boxes=[b for b in boxes if isinstance(b, dict)],
+        topic=str(topic) if topic is not None else None,
+        camera=str(camera) if camera is not None else None,
+    )
+    append_audit_log(
+        actor_id=user["id"],
+        action="clip.bboxes_upsert",
+        resource_type="clip_bboxes",
+        resource_id=f"{clip_id}:{rid}:{ts}",
+        detail={
+            "clip_id": clip_id,
+            "run_id": rid,
+            "timestamp_ns": ts,
+            "camera": camera,
+            "topic": topic,
+            "box_count": len(boxes),
+        },
+    )
+    return result
+
+
 @app.get("/api/clips/{clip_id}/events")
 def api_events(
     clip_id: str,
@@ -525,7 +587,7 @@ class OverviewClipQueryBody(BaseModel):
     label_filters: dict[str, Any] | None = None
     semantic_query: str = ""
     top_k: int = 200
-    # Text lexical floor; embedding uses a higher fixed floor in clip_query_common.
+    # Text lexical floor; embedding floor compares query text ↔ scene/label text vectors.
     min_score: float = 0.25
 
 
@@ -831,7 +893,6 @@ def api_put_pipeline_settings(
         "bbox_detector",
         "bbox_element",
         "encode_plain",
-        "encode_bbox",
         "bbox_yolo_model",
         "bbox_yolo_conf",
         "bbox_yolo_classes",

@@ -91,9 +91,9 @@ export function OverviewClipSearchPanel({ onApplied }: Props) {
       if (hits.length === 0) {
         setHint(res.message || '未匹配到相关 Clip（0 条）')
       } else if (res.embedding_used) {
-        setHint(`已匹配 ${hits.length} 条（场景检索：向量相似度 ≥ 阈值，并叠加文本相关度）`)
+        setHint(`已匹配 ${hits.length} 条（场景/标签文本向量 + 文本相关度）`)
       } else if (hasSemantic) {
-        setHint(`已匹配 ${hits.length} 条（场景检索：文本相关度 ≥ 阈值；配置 DASHSCOPE_API_KEY 可启用向量）`)
+        setHint(`已匹配 ${hits.length} 条（场景/标签文本相关度；配置 DASHSCOPE_API_KEY 可启用文本向量）`)
       } else {
         setHint(`已匹配 ${hits.length} 条（按标签筛选）`)
       }
@@ -139,10 +139,9 @@ export function OverviewClipSearchPanel({ onApplied }: Props) {
             场景描述语义检索
           </Typography.Text>
           <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 0 }}>
-            用自然语言描述场景（如「夜间后排儿童」）。仅返回相关度达到阈值的 Clip：文本相关度
-            ≥ 0.25，或向量余弦相似度 ≥ 0.40；并在最佳匹配附近做相对截断（弱且均匀的相似度视为无命中）。无关查询会返回 0
-            条。若已配置 DASHSCOPE_API_KEY 且存在 clip 向量，则叠加 embedding 相似度；标签筛选与场景检索为
-            AND。
+            用自然语言描述场景（如「夜间后排儿童」）。匹配对象是场景描述与标签文本：文本相关度 ≥
+            0.25，或（配置 DASHSCOPE_API_KEY 后）查询文本向量与场景/标签文本向量的余弦 ≥ 0.40；并在最佳匹配附近做相对截断。不使用
+            Clip 多模态 fusion 向量。标签筛选与场景检索为 AND。
           </Typography.Paragraph>
           <Input.TextArea
             rows={2}

@@ -37,20 +37,12 @@ def resolved_media_mode(config: McBackendConfig) -> McMediaMode:
 
 
 def pick_preview_video_path(clip: Clip) -> str | None:
-    """按 OMNI_VIDEO_VARIANT=plain|bbox|auto 选择预览 MP4。
+    """Select plain preview MP4 for Omni (bbox-baked MP4 capability removed).
 
-    - plain: 仅原视频
-    - bbox: 优先带框图，否则回退 plain
-    - auto（默认）: 有 bbox 视频则用 bbox，否则 plain
+    ``OMNI_VIDEO_VARIANT`` still remaps **frame** paths via ``resolve_omni_frame_path``;
+    video input always prefers plain preview.
     """
-    variant = omni_video_variant()
-    plain = _first_existing_video(clip.clip_video_path, clip.clip_video_paths)
-    bbox = _first_existing_video(clip.clip_video_bbox_path, clip.clip_video_bbox_paths)
-    if variant == "plain":
-        return plain
-    if variant == "bbox":
-        return bbox or plain
-    return bbox or plain
+    return _first_existing_video(clip.clip_video_path, clip.clip_video_paths)
 
 
 def resolve_omni_frame_path(clip: Clip, image_path: str) -> str:

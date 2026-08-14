@@ -27,9 +27,9 @@ def infer_full(
     clip_config: ClipConfig | None = None,
     skip_asr: bool = False,
 ) -> InferFullResult:
-    """sdk_infer：extract → [annotate_bbox] → encode_preview → asr → label → embed → preview。
+    """sdk_infer：extract → [annotate_bbox] → encode_preview(plain) → asr → label → embed → preview。
 
-    bbox / 双视频由 ``BBOX_ENABLED`` / ``ENCODE_PLAIN`` / ``ENCODE_BBOX`` 决定。
+    bbox 检测由 ``BBOX_ENABLED`` 决定；预览 MP4 仅 plain（``ENCODE_PLAIN``）。
     """
     extracted = extract_clips(ctx, bag_path, client=client, clip_config=clip_config)
     errors: list[dict[str, str]] = []
@@ -41,7 +41,7 @@ def infer_full(
         "yes",
         "on",
     }
-    if bbox_enabled or "bbox" in variants:
+    if bbox_enabled:
         br = annotate_bboxes(ctx, client)
         errors.extend(br.errors)
     if variants:

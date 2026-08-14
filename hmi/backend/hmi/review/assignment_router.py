@@ -34,14 +34,16 @@ router = APIRouter(prefix="/api/review/assignments", tags=["review-assignments"]
 
 class CreateBatchBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    label_ids: list[str] = Field(min_length=1)
+    label_ids: list[str] = Field(default_factory=list)
     queue_limit: int = Field(ge=1, le=500)
     assignee_id: str | None = None
+    review_targets: list[str] = Field(default_factory=lambda: ["labels"])
 
 
 class PreviewBatchBody(BaseModel):
-    label_ids: list[str] = Field(min_length=1)
+    label_ids: list[str] = Field(default_factory=list)
     queue_limit: int = Field(ge=1, le=500)
+    review_targets: list[str] = Field(default_factory=lambda: ["labels"])
 
 
 class ClaimBody(BaseModel):
@@ -51,6 +53,7 @@ class ClaimBody(BaseModel):
 
 class ClaimLowConfidenceBody(BaseModel):
     limit: int = Field(default=20, ge=1, le=500)
+    review_targets: list[str] = Field(default_factory=lambda: ["labels"])
 
 
 class SaveWorkbenchSessionBody(BaseModel):
@@ -92,7 +95,14 @@ def api_preview_batch(
     body: PreviewBatchBody,
     _admin: dict = Depends(require_admin),
 ) -> dict[str, Any]:
-    items = preview_assignment_items(body.label_ids, body.queue_limit)
+    try:
+        items = preview_assignment_items(
+            body.label_ids,
+            body.queue_limit,
+            review_targets=body.review_targets,
+        )
+    except ValueError as exc:
+        raise _validation_error(str(exc)) from exc
     return {"count": len(items), "items": items[:20]}
 
 
@@ -115,6 +125,7 @@ def api_create_batch(
             queue_limit=body.queue_limit,
             assignee_id=body.assignee_id,
             created_by=admin["id"],
+            review_targets=body.review_targets,
         )
     except ValueError as exc:
         raise _validation_error(str(exc)) from exc
@@ -129,6 +140,7 @@ def api_create_batch(
             "label_ids": body.label_ids,
             "queue_limit": body.queue_limit,
             "assignee_id": body.assignee_id,
+            "review_targets": body.review_targets,
             "item_total": batch.get("item_total"),
         },
     )
@@ -235,6 +247,7 @@ def api_claim_low_confidence(
             assignee_id=user["id"],
             limit=body.limit,
             created_by=user["id"],
+            review_targets=body.review_targets,
         )
     except ValueError as exc:
         raise _validation_error(str(exc)) from exc
@@ -243,7 +256,7 @@ def api_claim_low_confidence(
         action="review.assignment.claim_low_confidence",
         resource_type="review_assignment_batch",
         resource_id=batch["id"],
-        detail={"limit": body.limit, "item_total": batch.get("item_total")},
+        detail={"limit": body.limit, "item_total": batch.get("item_total"), "review_targets": body.review_targets},
     )
     return batch
 
