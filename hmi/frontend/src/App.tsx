@@ -15,6 +15,9 @@ import { SystemEnvPage } from './pages/SystemEnvPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { OverviewPage } from './pages/OverviewPage'
+import { DataTypeHomePage } from './pages/DataTypeHomePage'
+import { DataTypeWorkspaceLayout } from './pages/DataTypeWorkspaceLayout'
+import { LakeManagePage } from './pages/LakeManagePage'
 import { OssManagePage } from './pages/OssManagePage'
 import { ReviewAssignmentAdminPage } from './pages/ReviewAssignmentAdminPage'
 import { ReviewAssignmentTasksPage } from './pages/ReviewAssignmentTasksPage'
@@ -42,7 +45,10 @@ export default function App() {
             <Route path="/register" element={<RegisterPage />} />
             <Route element={<RequireAuth />}>
               <Route element={<AppLayout />}>
-                <Route index element={<OverviewPage />} />
+                <Route index element={<DataTypeHomePage />} />
+                <Route path="w/:dataTypeId" element={<DataTypeWorkspaceLayout />}>
+                  <Route index element={<OverviewPage />} />
+                </Route>
                 <Route element={<RequireRole roles={STANDARD_ROLES} />}>
                   <Route path="taxonomy" element={<TaxonomyPage />} />
                   <Route path="taxonomy/:versionId" element={<TaxonomyPage />} />
@@ -53,6 +59,7 @@ export default function App() {
                   } />
                 </Route>
                 <Route element={<RequireRole roles={['admin', 'dataset_manager', 'pipeline_manager']} />}>
+                  <Route path="lake" element={<LakeManagePage />} />
                   <Route path="pipeline" element={
                     <Suspense fallback={<div style={{ textAlign: 'center', padding: 48 }}><Spin size="large" /></div>}>
                       <PipelineManagePage />

@@ -6,13 +6,15 @@
  * - 云端：目前仅 .bag；原始媒体请切 local
  */
 import { CloudUploadOutlined, DeleteOutlined, FolderOpenOutlined, InboxOutlined, PlayCircleOutlined } from '@ant-design/icons'
-import { Button, Descriptions, List, Modal, Progress, Space, Tag, Typography, Upload, message } from 'antd'
+import { Alert, Button, Descriptions, List, Modal, Progress, Select, Space, Tag, Typography, Upload, message } from 'antd'
 import type { UploadProps } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { api } from '../../api'
-import type { PipelineRunSettings, TaxonomyArchiveReason } from '../../api/types'
+import type { DataTypeRecipe, PipelineRunSettings, TaxonomyArchiveReason } from '../../api/types'
 import { useDataSourceMode } from '../../context/DataSourceModeContext'
+import { rememberDataTypeId } from '../../context/DataTypeWorkspaceContext'
 import { apiErrorMessage } from '../../utils/apiError'
+import { preflightUploadKinds } from '../../utils/dataTypePreflight'
 import {
   classifySourceFileName,
   collectSourcesFromDataTransfer,
@@ -58,13 +60,32 @@ function resolveTaxonomyConfirmLabel(
 function settingsSummaryItems(
   settings: PipelineRunSettings,
   taxonomyVersions: TaxonomyVersionOption[],
+  recipe?: DataTypeRecipe | null,
 ) {
-  const bboxLabel = settings.bbox_enabled
-    ? `${settings.bbox_detector || 'opencv'} + jsonl`
+  const bboxForced = Boolean(recipe?.bbox?.enabled)
+  const bboxOn = bboxForced || Boolean(settings.bbox_enabled)
+  const detector = bboxForced
+    ? recipe?.bbox?.detector || 'opencv'
+    : settings.bbox_detector || 'opencv'
+  const bboxLabel = bboxOn
+    ? `${detector} + jsonl${bboxForced ? '（配方强制）' : ''}`
     : '关闭'
+  const labelOn = recipe?.stages?.label?.enabled !== false
+  const embedOn = recipe?.stages?.embed?.enabled !== false
   return [
-    { key: 'omni', label: '打标模型', children: settings.omni_model ?? 'default' },
-    { key: 'embed', label: '向量模型', children: settings.embedding_model ?? 'default' },
+    recipe
+      ? { key: 'dtype', label: '数据类型', children: recipe.title }
+      : null,
+    {
+      key: 'omni',
+      label: '打标模型',
+      children: labelOn ? (settings.omni_model ?? 'default') : '关闭（配方）',
+    },
+    {
+      key: 'embed',
+      label: '向量模型',
+      children: embedOn ? (settings.embedding_model ?? 'default') : '关闭（配方）',
+    },
     {
       key: 'taxonomy',
       label: '标签树',
@@ -83,11 +104,13 @@ function settingsSummaryItems(
       children: String(settings.sdk_parallel ?? 1),
     },
     { key: 'bbox', label: 'BBox 检测', children: bboxLabel },
-  ]
+  ].filter(Boolean) as { key: string; label: string; children: string }[]
 }
 
 type Props = {
   onUploaded?: () => void
+  dataTypeId?: string
+  onDataTypeIdChange?: (id: string) => void
 }
 
 type StagedBag = StagedBagFile & { uid: string }
@@ -117,7 +140,7 @@ type UploadProgressState = {
   detail?: string
 }
 
-export function RosbagUploadCard({ onUploaded }: Props) {
+export function RosbagUploadCard({ onUploaded, dataTypeId, onDataTypeIdChange }: Props) {
   const { bumpDataRevision, dataSource } = useDataSourceMode()
   const [staging, setStaging] = useState<StagedBag[]>([])
   const [uploading, setUploading] = useState(false)
@@ -131,6 +154,11 @@ export function RosbagUploadCard({ onUploaded }: Props) {
     settings: PipelineRunSettings
     taxonomyVersions: TaxonomyVersionOption[]
   } | null>(null)
+  const [dataTypes, setDataTypes] = useState<DataTypeRecipe[]>([])
+  const selectedRecipe = useMemo(
+    () => dataTypes.find((t) => t.id === dataTypeId) ?? null,
+    [dataTypes, dataTypeId],
+  )
   const fileBatchRef = useRef<{ total: number; bags: number; done: number } | null>(null)
   /** Skip antd beforeUpload when we already handled a folder drop via FileSystemEntry walk. */
   const skipAntdDropBatchRef = useRef(false)
@@ -198,6 +226,35 @@ export function RosbagUploadCard({ onUploaded }: Props) {
     }
     return counts
   }, [staging])
+
+  const stagingKinds = useMemo(() => {
+    const kinds: string[] = []
+    for (const item of staging) {
+      const m = item.modality || classifySourceFileName(item.relativePath)
+      if (m) kinds.push(m)
+    }
+    return kinds
+  }, [staging])
+
+  const localPreflight = useMemo(
+    () => preflightUploadKinds(selectedRecipe, stagingKinds),
+    [selectedRecipe, stagingKinds],
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    void api
+      .listDataTypes()
+      .then((res) => {
+        if (!cancelled) setDataTypes((res.items || []).filter((t) => t.status === 'published'))
+      })
+      .catch(() => {
+        if (!cancelled) setDataTypes([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const removeStaged = useCallback((uid: string) => {
     setStaging((prev) => prev.filter((s) => s.uid !== uid))
@@ -272,6 +329,18 @@ export function RosbagUploadCard({ onUploaded }: Props) {
 
   const openParamsModal = async () => {
     if (!staging.length || uploading) return
+    if (dataSource !== 'cloud') {
+      if (!dataTypeId) {
+        message.error('请先选择数据类型')
+        return
+      }
+      if (!localPreflight.ok) {
+        message.error(
+          `预检失败：当前源缺少 ${localPreflight.missing.join('、') || '配方所需类型'}`,
+        )
+        return
+      }
+    }
     try {
       const res = await api.getPipelineSettings()
       setSettingsPreview({
@@ -313,6 +382,7 @@ export function RosbagUploadCard({ onUploaded }: Props) {
     try {
       const result = await api.createPipelineExecution(staging.map((s) => fileForUpload(s)), {
         trigger: uploadOnly ? false : undefined,
+        dataTypeId: dataSource === 'cloud' ? undefined : dataTypeId,
         onUploadProgress: ({ loaded, total, percent }) => {
           const byteTotal = total > 0 ? total : expectedTotal
           if (percent >= 100) {
@@ -391,6 +461,39 @@ export function RosbagUploadCard({ onUploaded }: Props) {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {dataSource !== 'cloud' ? (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Typography.Text strong>开跑数据类型</Typography.Text>
+          <div data-testid="pipeline-data-type-select">
+            <Select
+              style={{ minWidth: 280, maxWidth: 480 }}
+              placeholder="选择 published 数据类型"
+              value={dataTypeId || undefined}
+              options={dataTypes.map((t) => ({
+                value: t.id,
+                label: `${t.title}（${t.id}）`,
+              }))}
+              onChange={(id: string) => {
+                onDataTypeIdChange?.(id)
+                rememberDataTypeId(id)
+              }}
+            />
+          </div>
+          {selectedRecipe ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {selectedRecipe.purpose}
+            </Typography.Text>
+          ) : null}
+          {staging.length > 0 && dataTypeId && !localPreflight.ok ? (
+            <Alert
+              type="error"
+              showIcon
+              message="预检未通过，无法入队"
+              description={`当前文件不满足「${selectedRecipe?.title || dataTypeId}」所需源类型（缺 ${localPreflight.missing.join('、')}）。`}
+            />
+          ) : null}
+        </Space>
+      ) : null}
       <div onDragOver={onZoneDragOver} onDrop={onZoneDrop}>
         <Upload.Dragger
           accept=".bag,.mp4,.webm,.mov,.mkv,.avi,.wav,.mp3,.m4a,.flac,.ogg,.aac,.txt,.json,.md,.csv"
@@ -493,7 +596,10 @@ export function RosbagUploadCard({ onUploaded }: Props) {
               type="primary"
               icon={<PlayCircleOutlined />}
               loading={uploading}
-              disabled={parsingFolders}
+              disabled={
+                parsingFolders ||
+                (dataSource !== 'cloud' && (!dataTypeId || !localPreflight.ok))
+              }
               onClick={() => void openParamsModal()}
             >
               {dataSource === 'cloud' ? '上传并触发云端管线' : '确认执行管线'}
@@ -531,7 +637,11 @@ export function RosbagUploadCard({ onUploaded }: Props) {
             column={1}
             size="small"
             bordered
-            items={settingsSummaryItems(settingsPreview.settings, settingsPreview.taxonomyVersions)}
+            items={settingsSummaryItems(
+              settingsPreview.settings,
+              settingsPreview.taxonomyVersions,
+              selectedRecipe,
+            )}
           />
         ) : null}
         <Typography.Paragraph style={{ marginTop: 12, marginBottom: 0 }}>

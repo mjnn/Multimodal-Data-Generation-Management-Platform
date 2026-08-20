@@ -139,6 +139,30 @@ def save_uploaded_rosbag(
     }
 
 
+def persist_local_rosbag_source(filename: str, data: bytes) -> dict[str, str | int]:
+    """Write a rosbag into local OSS layout without enqueueing pipeline rows."""
+    if not filename.lower().endswith(".bag"):
+        raise ValueError("only .bag files are accepted")
+    bag_name = Path(filename).name
+    digest = hashlib.sha256(data).hexdigest()
+    coll = collection_dir_from_filename(filename)
+    storage_dir = bag_storage_dir_name(filename, digest)
+    dest_dir = LOCAL_OSS_ROOT / "rosbags" / storage_dir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    bag_path = dest_dir / bag_name
+    bag_path.write_bytes(data)
+    oss_key = f"rosbags/{storage_dir}/{bag_name}"
+    return {
+        "source_id": f"sha256:{digest}",
+        "content_hash": digest,
+        "clip_dir_name": coll,
+        "oss_key": oss_key,
+        "local_oss_key": f"local://{oss_key}",
+        "local_path": str(bag_path),
+        "size_bytes": len(data),
+    }
+
+
 def resolve_local_bag_path(bag_oss_key: str) -> Path | None:
     """Map ``local://rosbags/...`` to an absolute file under LOCAL_OSS_ROOT."""
     if not bag_oss_key.startswith("local://"):

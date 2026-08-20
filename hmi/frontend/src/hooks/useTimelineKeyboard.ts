@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { togglePlayWithReplay } from '../utils/playback'
 import { nextSnapPoint, type SnapPoint } from '../utils/timeline'
 
 interface Options {
@@ -31,7 +32,14 @@ export function useTimelineKeyboard({
 
       if (e.code === 'Space') {
         e.preventDefault()
-        onPlayingChange(!playing)
+        togglePlayWithReplay({
+          playing,
+          cursorNs,
+          startNs,
+          endNs,
+          onCursorChange,
+          onPlayingChange,
+        })
         return
       }
 

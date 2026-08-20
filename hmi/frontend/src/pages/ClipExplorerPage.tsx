@@ -1,12 +1,13 @@
-import { AudioOutlined } from '@ant-design/icons'
+import { AudioOutlined, SoundOutlined } from '@ant-design/icons'
 import { Space, Spin, Tag, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
-import type { ClipOverview, ClipRun, ClipLabelView, TaxonomyNodeDetail } from '../api/types'
+import type { AudioNvhBootstrap, ClipLabelView, ClipOverview, ClipRun, TaxonomyNodeDetail } from '../api/types'
 import { ClipMediaPanel } from '../components/ClipMediaPanel'
 import type { ClipTimelineState } from '../components/ClipTimelinePanel'
 import { MomentDetailPanel } from '../components/MomentDetailPanel'
+import { ClipLabelTreeView } from '../components/ClipLabelTreeView'
 import { RunSelector } from '../components/RunSelector'
 import { SimilarDrawer } from '../components/SimilarDrawer'
 import { BackLink, ContentCard, PageStack } from '../components/ui'
@@ -23,9 +24,11 @@ export function ClipExplorerPage() {
   const [runId, setRunId] = useState(searchParams.get('run_id') ?? '')
   const [loading, setLoading] = useState(true)
   const [timelineState, setTimelineState] = useState<ClipTimelineState | null>(null)
+  const [mediaMode, setMediaMode] = useState<'cabin' | 'audio_nvh' | null>(null)
   const [similarCompositeId, setSimilarCompositeId] = useState<string | null>(null)
   const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
   const [clipLabelMeta, setClipLabelMeta] = useState<ClipLabelView | null>(null)
+  const [audioNvhBootstrap, setAudioNvhBootstrap] = useState<AudioNvhBootstrap | null>(null)
   const [selectedBoxKey, setSelectedBoxKey] = useState<string | null>(null)
   const [bboxRefreshToken, setBboxRefreshToken] = useState(0)
 
@@ -53,6 +56,7 @@ export function ClipExplorerPage() {
   useEffect(() => {
     if (!clipId || !runId) {
       setClipLabelMeta(null)
+      setAudioNvhBootstrap(null)
       return
     }
     void api
@@ -60,6 +64,20 @@ export function ClipExplorerPage() {
       .then((meta) => setClipLabelMeta(meta.clip_label ?? null))
       .catch(() => setClipLabelMeta(null))
   }, [clipId, runId])
+
+  // NVH fallback: when timeline meta doesn't provide labels_json yet,
+  // load bootstrap (nvh_labels.json) for the label tree.
+  useEffect(() => {
+    if (!clipId || !runId) return
+    if (mediaMode !== 'audio_nvh') return
+    const timelineReady = Boolean(clipLabelMeta?.clip_label_ready)
+    const timelineHasLabels = Boolean(clipLabelMeta?.labels_json && Object.keys(clipLabelMeta.labels_json).length > 0)
+    if (timelineReady && timelineHasLabels) return
+    void api
+      .getAudioNvhBootstrap(clipId, runId)
+      .then((boot) => setAudioNvhBootstrap(boot))
+      .catch(() => setAudioNvhBootstrap(null))
+  }, [clipId, runId, mediaMode, clipLabelMeta?.clip_label_ready, clipLabelMeta?.labels_json])
 
   useEffect(() => {
     const versionId = clipLabelMeta?.taxonomy_version_id
@@ -70,6 +88,23 @@ export function ClipExplorerPage() {
         .catch(() => setTaxonomyNodes([]))
       return
     }
+    // Default fallback should avoid accidentally picking OMS published taxonomy.
+    if (mediaMode === 'audio_nvh') {
+      const targetVersionCode = clipLabelMeta?.taxonomy_version_code ?? 'audio_nvh-v2'
+      void api
+        .listTaxonomyVersions()
+        .then((versions) => {
+          const target = versions.find((v) => v.version_code === targetVersionCode)
+          if (!target) {
+            setTaxonomyNodes([])
+            return
+          }
+          return api.getTaxonomyTree(target.id).then((tree) => setTaxonomyNodes(tree.nodes))
+        })
+        .catch(() => setTaxonomyNodes([]))
+      return
+    }
+
     void api
       .listTaxonomyVersions()
       .then((versions) => {
@@ -81,7 +116,7 @@ export function ClipExplorerPage() {
         return api.getTaxonomyTree(published.id).then((tree) => setTaxonomyNodes(tree.nodes))
       })
       .catch(() => setTaxonomyNodes([]))
-  }, [clipLabelMeta?.taxonomy_version_id])
+  }, [clipLabelMeta?.taxonomy_version_id, clipLabelMeta?.taxonomy_version_code, mediaMode])
 
   const sceneDescription = useMemo(() => {
     const clipLabel = timelineState?.meta.clip_label ?? clipLabelMeta
@@ -92,6 +127,10 @@ export function ClipExplorerPage() {
     })
   }, [timelineState?.meta.clip_label, clipLabelMeta, taxonomyNodes])
 
+  const nvhLabelsJsonForTree = useMemo(() => {
+    return (clipLabelMeta?.labels_json ?? audioNvhBootstrap?.labels ?? {}) as Record<string, unknown>
+  }, [clipLabelMeta?.labels_json, audioNvhBootstrap?.labels])
+
   useEffect(() => {
     setSelectedBoxKey(null)
   }, [clipId, runId])
@@ -100,6 +139,16 @@ export function ClipExplorerPage() {
     setTimelineState(state)
   }, [])
 
+  const handleMediaModeChange = useCallback((mode: 'cabin' | 'audio_nvh') => {
+    setMediaMode(mode)
+    if (mode === 'audio_nvh') setTimelineState(null)
+  }, [])
+
+  useEffect(() => {
+    setMediaMode(null)
+    setTimelineState(null)
+  }, [clipId, runId])
+
   if (loading || !clip || !runId) {
     return (
       <div style={{ textAlign: 'center', padding: 80 }}>
@@ -107,6 +156,8 @@ export function ClipExplorerPage() {
       </div>
     )
   }
+
+  const isAudioNvh = mediaMode === 'audio_nvh'
 
   return (
     <PageStack className="clip-explorer">
@@ -129,7 +180,13 @@ export function ClipExplorerPage() {
             <RunSelector runs={runs} value={runId} onChange={setRunId} />
             <Tag color="blue">{clip.clip_label_ready ? 'Clip 已打标' : 'Clip 未打标'}</Tag>
             {timelineState?.meta.sample_sync_mode === 'clip' ? <Tag color="purple">Clip 级</Tag> : null}
-            <Tag icon={<AudioOutlined />}>ASR {clip.asr_segment_count}</Tag>
+            {isAudioNvh ? (
+              <Tag icon={<SoundOutlined />} color="cyan">
+                NVH 频谱时间轴
+              </Tag>
+            ) : (
+              <Tag icon={<AudioOutlined />}>ASR {clip.asr_segment_count}</Tag>
+            )}
             <Tag>{clip.duration_sec.toFixed(1)}s</Tag>
           </Space>
         </div>
@@ -143,12 +200,26 @@ export function ClipExplorerPage() {
         showMetaBelow={false}
         testId="clip-explorer-media"
         onTimelineStateChange={handleTimelineStateChange}
+        onMediaModeChange={handleMediaModeChange}
         selectedBoxKey={selectedBoxKey}
         onSelectedBoxChange={setSelectedBoxKey}
         onOverlaySaved={() => setBboxRefreshToken((n) => n + 1)}
       />
 
-      {timelineState ? (
+      {isAudioNvh ? (
+        <ContentCard title="Clip 详情">
+          <div data-testid="clip-explorer-nvh-detail">
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              纯音频 NVH：按标签树分组展示（客观只读；语义待校核）。
+            </Typography.Paragraph>
+            <div style={{ marginTop: 12 }}>
+              <div data-testid="audio-nvh-label-tree">
+                <ClipLabelTreeView taxonomyNodes={taxonomyNodes} labelsJson={nvhLabelsJsonForTree} />
+              </div>
+            </div>
+          </div>
+        </ContentCard>
+      ) : timelineState ? (
         <MomentDetailPanel
           clip={timelineState.clip}
           runId={runId}

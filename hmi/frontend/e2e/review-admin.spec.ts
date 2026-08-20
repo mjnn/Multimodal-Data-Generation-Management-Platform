@@ -9,7 +9,7 @@ test('admin opens review workbench page', async ({ page }) => {
   await page.getByLabel('密码').fill(ADMIN_PASS)
   await page.getByLabel('密码').press('Enter')
 
-  await expect(page.getByText('数据总览')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('数据类型')).toBeVisible({ timeout: 15_000 })
   await page.getByRole('menuitem', { name: '校核' }).click()
 
   await expect(page.getByTestId('review-workbench-page')).toBeVisible()

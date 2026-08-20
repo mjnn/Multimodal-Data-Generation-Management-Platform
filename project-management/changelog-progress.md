@@ -1,5 +1,107 @@
 # 进度变更日志（倒序）
 
+## 2026-08-20 — UI 信息架构：源湖只入库+OSS；开跑进管线管理
+
+- **诉求**：源湖不要筛源/开跑；执行全在管线管理；OSS 并入源湖
+- **改动**：`LakeManagePage` = 源文件入库 + OSS 浏览 Tab；`PipelineManagePage` 增「源湖开跑」Tab（`LakeRunBindPanel`）；侧栏去掉独立 OSS；`/oss` → `/lake?tab=oss`
+- **验收**：`platform-lake.spec.ts` + `pipeline-datatype-run` **5/5**；`tsc -b` ok
+- **未改**：DataWorks / publish audio_nvh-v2
+
+## 2026-08-20 — DOC-DTYPE-SLOTS + PLAT-LAKE-RUN-BIND + PLAT-PRODUCT-LINEAGE
+
+- **产品拍板**：展示按采集批；绑定按开跑多选；Sample 内部化；DataType 配方 slots；产物血缘可查
+- **规格**：内核 design D9–D11；种子配方写死 slots（`audio_array_spec` / `oms_cabin` / `ivi_ui_stub`）
+- **开跑**：`eligible_for` 筛源；`POST /runs` + `source_ids` → `create_sample`+`create_run`；湖页去掉主路径「组 Sample」
+- **血缘**：`GET /api/platform/lineage`；`platform_product.artifact_path/run_id`；worker `audio_array_spec` 写 product 行
+- **验收**：`DOC-DTYPE-SLOTS` / `PLAT-LAKE-RUN-BIND` / `PLAT-PRODUCT-LINEAGE`；bind **5/5**；lake e2e **3/3**；kernel **15/15**
+- **后置**：UI-DTYPE-EDITOR；勿 publish `audio_nvh-v2`；勿 DataWorks
+
+## 2026-08-20 — PLAT-DTYPE-LAKE-REUSE（跨会话复用已入库 Source）
+
+- **用户问**：Lake Sources 是否仅会话可用？组 Sample 能否用以前上传的数据？
+- **事实**：`put_source` 早已写 SQLite `platform_source` + 本地磁盘；**不是**会话临时数据
+- **缺口**：UI 标题「本次会话」只持 React state；无 `GET /sources`，刷新后看不到历史源
+- **修复**：`list_sources` + `GET /api/platform/sources`；Lake 页表格勾选多选组 Sample；刷新合并防竞态
+- **验收**：`acceptance/PLAT-DTYPE-LAKE-REUSE.md`；`test_platform_datatype_lake.py` **6/6**；`platform-lake.spec.ts` **2/2**
+- **未改**：taxonomy publish / AI-label / DataWorks
+
+## 2026-08-20 — ISOLATE-DTYPE-CLIPS（OMS 总览隔离 hotfix）
+
+- **用户 bug**：切到舱内 OMS/DMS 多模频道后仍能看到两条麦克风阵列 clip
+- **根因**：`GET /api/clips?data_type_id=oms_cabin` 走未过滤的 `list_clips_light()`（全 `dim_clip`）；非 OMS 才走 `list_clips_light_for_data_type`
+- **修复**：本地 light 列表按 active run 的 `pipeline_execution.data_type_id` 过滤——保留 NULL/空/`oms_cabin`/无 pe 行；排除 `audio_array_spec`/`ivi_ui_stub`；前端 cache bump `v3`
+- **验收**：`acceptance/ISOLATE-DTYPE-CLIPS.md`；`test_audio_nvh_view.py` **5/5**
+- **未改**：DataWorks / AI-label / timeline-replay
+
+## 2026-08-20 — HMI-TIMELINE-REPLAY（时间轴重播）
+
+- **问题**：Clip 播完停在末尾，无从头重播
+- **修复**：`utils/playback.ts`（结束再播 → seek start）；舱内 `AudioWaveform`「重播」+ 空格；NVH `AudioNvhTimelinePanel` 同能力 + 空格
+- **验收**：`acceptance/HMI-TIMELINE-REPLAY.md`；`scripts/playback.assert.mts` ok
+- **未改**：deriver / recipe / DataWorks
+
+## 2026-08-20 — PLAT-AUDIO-AI-LABEL（L6 语义 AI + draft 绑定）
+
+- **用户问**：标签树建好了吗？音频也要 AI 打标
+- **树状态**：`audio_nvh-v2` **draft** 78 叶，Taxonomy Hub 可见；**未 publish**（published 仍为 OMS `label_tree_baseline`）
+- **AI**：`nvh_ai_label.fill_nvh_semantic_labels` 在 deriver 之后只写 `nvh.sem.*`；默认 `nvh_sem_heuristic`；可选 `nvh_sem_vl`（mel.png + DashScope，无 key 回退）
+- **绑定**：`fact_clip_label.taxonomy_version_id` → draft v2 UUID（不调 `publish_version`）
+- **配方**：`audio_array_spec.stages.label.enabled=true`
+- **验收**：`acceptance/PLAT-AUDIO-AI-LABEL.md`；`test_nvh_ai_label.py` **5/5**；deriver **3/3**
+- **约束**：勿 publish；勿 H-2；勿 DataWorks；勿 VL bbox
+
+## 2026-08-20 — UI-NVH-OVERVIEW（纯音频 NVH 频谱时间轴 + typed 列表）
+
+- **产品拍板**：总览 = typed clip 表（Leq / mel 缩略图）；探索/校核媒体 = **四通道 mel + SPL + 真实波形 + 共用 playhead**（非舱内四路、非 ASR）
+- **根因修复**：`GET /api/clips?data_type_id=…` 对非 OMS 曾返回 `[]`；改走 `list_clips_light_for_data_type`
+- **后端**：视图 `audio_nvh_timeline`；`GET .../audio-nvh`；配方 `overview_view` 切换（保留 `audio_spec_asr` 模板名）
+- **前端**：`AudioNvhTimelinePanel`；`ClipMediaPanel` 自动探测；Explorer/Review 去 ASR 中心；Overview 隐藏 OMS 检索
+- **前端增强**：NVH Explorer 详情标签轨由 raw `LabelRail` 改为 `ClipLabelTreeView`（舱内多模一致），并加入 `e2e/nvh-label-tree.spec.ts` 覆盖（`data-testid=audio-nvh-label-rail` 断言不存在）
+- **验收**：`acceptance/UI-NVH-OVERVIEW.md`；`test_audio_nvh_view.py` **4/4**；`tsc -b`；`datatype-workspace.spec.ts` **1/1**；`nvh-label-tree.spec.ts` **1/1**
+- **约束**：勿 publish `audio_nvh-v2`；语义写回另开 UI-NVH-REVIEW-SAVE；勿 H-2
+
+## 2026-08-20 — OP-DERIVE-NVH（L2 → labels_json / y_json）
+
+- **范围**：从 `audio_spec` + `head_meta` / `pcm_pa` 推导 audio_nvh-v2 **auto + semi 种子**；human / `ai_hypothesis` / `masking_band` 不写入
+- **产物**：`hmi/backend/hmi/local/nvh_deriver.py`；`_run_audio_array_spec` 镜像成功后写 `fact_clip_label` + `platform_run.y_json`；`nvh_labels.json` + `audio_spec/derived/*`
+- **约束**：`stages.label.enabled` 仍为 false；**不 publish** `audio_nvh-v2`
+- **验收**：`acceptance/OP-DERIVE-NVH.md`；`test_nvh_deriver.py` **3/3**（含 CBK1 Leq∈[93,96]）
+
+## 2026-08-20 — TAX-AUDIO-NVH-v2（声压/噪音真值标签全量 78 叶）
+
+- **范围**：用户确认全量 v2（非 lite）。六维：元数据 / clip 声压·频域·时域 / 通道 / 频域明细 / 时域明细 / 通道间 proxy（非 DOA）/ 语义
+- **产物**：`shared/config/audio_nvh_taxonomy.yaml`；节点定义 `hmi/backend/hmi/platform/audio_nvh_v2.py`
+- **Seed**：启动时写入 draft `audio_nvh-v2`（78 节点）；**不 publish**，以免归档 OMS published
+- **拍板**：分档 70/85/100 dB；语义 13 顶类；json_ref 相对 `runs/{run_id}/`；VL 关闭
+- **验收**：`acceptance/TAX-AUDIO-NVH-v2.md`；`test_audio_nvh_v2.py` **3/3**；kernel 回归通过
+- **下一步**：OP-DERIVE-NVH（L2 → labels_json）
+
+## 2026-08-18 — PLAT-DTYPE-LAKE（源湖入库 UI + platform_run 编译）
+
+- **源湖持久化**：`platform_source` 补 `content_hash` / `local_oss_key` / `local_path`；local 模式 `/api/platform/sources` 改为 persist-only 入湖，不提前建 `pipeline_run`
+- **编译执行**：`local_sdk_worker` 新增 `platform_run` 认领/编译；复用 `platform_run.run_id` 作为 `pipeline_execution.run_id`；rosbag 各成 clip，video/audio/text 合并 raw_media，image 第一切片执行失败
+- **平台状态**：`platform_run.status` 进入 `queued/running/completed/failed/labeled`；完成时从 `fact_clip_label` 最小聚合回写 `platform_run.y_json`
+- **HMI**：新增 `/lake` 独立页面与侧栏入口；支持入湖、组 Sample、选 published DataType 预检并创建 `platform_run`
+- **验收**：`acceptance/PLAT-DTYPE-LAKE.md`；`test_platform_datatype_lake.py` **5/5**；`test_platform_datatype_run.py` 回归通过；`tsc -b` 通过；`e2e/platform-lake.spec.ts` **1/1**
+- **备注**：为跑通 Playwright，本地测试 admin 密码重置为 `admin123`
+
+## 2026-08-18 — PLAT-DTYPE-RUN（管线开跑接到 DataType）
+
+- **预检**：本地 `POST /api/pipeline/executions?data_type_id=` 先 `require_published_preflight`；失败 400 且带 `missing`，不入队
+- **配方**：IVI 关 label/embed、强制 bbox opencv；OMS bbox 仍跟全局设置
+- **持久化**：`pipeline_execution.data_type_id`；源湖 Sample + `platform_run`（y 按类型分文档）
+- **HMI**：上传页必选数据类型；执行参数按配方灰显打标/向量
+- **验收**：`acceptance/PLAT-DTYPE-RUN.md`；`test_platform_datatype_run.py` **8/8**；`tsc -b` 通过
+- **下一步**：PLAT-DTYPE-LAKE；**HMI 在线 H-2 暂停不排期**
+
+## 2026-08-18 — PLAT-DTYPE-KERNEL（平台数据类型内核）
+
+- **内核**：算子目录 + 配方校验 + `oms_cabin` / `ivi_ui_stub` 种子；源/样本/Run SQLite；预检；产物缓存键
+- **检索**：`data_type_id` 工作区隔离；IVI 不走 OMS 索引；缺省兼容 `oms_cabin`
+- **HMI**：`/` 数据类型列表 → `/w/:dataTypeId` 总览
+- **验收**：`acceptance/PLAT-DTYPE-KERNEL.md`；`test_platform_datatype_kernel.py` **15/15**；`tsc -b` 通过；**H-1 用户 2026-08-18 签字**
+- **下一步**：继续平台内核（推荐 PLAT-DTYPE-RUN）；**HMI 在线 H-2 暂停不排期**
+
 ## 2026-08-14 — HMI-BBOX-OVERLAY（可编辑 jsonl 叠加）
 
 - **后端**：`upsert_frame_boxes` 原子写 `bboxes.jsonl`；`PUT /api/clips/{id}/bboxes` + audit `clip.bboxes_upsert`（仅 local）

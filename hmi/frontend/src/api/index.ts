@@ -52,6 +52,11 @@ import type {
   OssListResponse,
   OssFilePreview,
   OssSyncPollerStatus,
+  DataTypeRecipe,
+  PlatformRunPreflight,
+  PlatformRunRecord,
+  PlatformSampleRecord,
+  PlatformSourceRecord,
 } from './types'
 
 /** Query `mode` for review v2 APIs (legacy servers only accept `ai_dispute` for open queue). */
@@ -112,15 +117,16 @@ export const api = {
       body: JSON.stringify({ data_source: mode }),
     }),
 
-  getClips: (opts?: { light?: boolean; refresh?: boolean }): Promise<ClipOverview[]> => {
+  getClips: (opts?: { light?: boolean; refresh?: boolean; dataTypeId?: string }): Promise<ClipOverview[]> => {
     const params = new URLSearchParams()
     if (opts?.light) params.set('light', '1')
     if (opts?.refresh) params.set('refresh', '1')
-    const q = params.toString()
-    return fetchJson(`/clips${q ? `?${q}` : ''}`)
+    params.set('data_type_id', opts?.dataTypeId || 'oms_cabin')
+    return fetchJson(`/clips?${params.toString()}`)
   },
 
-  getDemoClips: (): Promise<ClipOverview[]> => fetchJson('/clips/demo'),
+  getDemoClips: (dataTypeId = 'oms_cabin'): Promise<ClipOverview[]> =>
+    fetchJson(`/clips/demo?` + new URLSearchParams({ data_type_id: dataTypeId })),
 
   resetHmiArtifacts: (): Promise<{
     ok: boolean
@@ -200,6 +206,12 @@ export const api = {
         (runId ? `?run_id=${encodeURIComponent(runId)}` : ''),
     ),
 
+  getAudioNvhBootstrap: (
+    clipId: string,
+    runId: string,
+  ): Promise<import('./types').AudioNvhBootstrap> =>
+    fetchJson(`/clips/${encodeURIComponent(clipId)}/runs/${encodeURIComponent(runId)}/audio-nvh`),
+
   getFrames: (
     clipId: string,
     opts?: { sampled_only?: boolean; camera?: string; page?: number; page_size?: number },
@@ -264,6 +276,7 @@ export const api = {
     semanticQuery?: string
     topK?: number
     minScore?: number
+    dataTypeId?: string
   }): Promise<{
     total: number
     items: Array<{
@@ -287,6 +300,7 @@ export const api = {
         semantic_query: opts.semanticQuery ?? '',
         top_k: opts.topK ?? 200,
         min_score: opts.minScore ?? 0.25,
+        data_type_id: opts.dataTypeId || 'oms_cabin',
       }),
     }),
 
@@ -880,6 +894,8 @@ export const api = {
     opts?: {
       /** Cloud: false = OSS upload only (no DataWorks OpenAPI). Default true. */
       trigger?: boolean
+      /** Published DataType id; required for local enqueue preflight. */
+      dataTypeId?: string
       onUploadProgress?: (ev: { loaded: number; total: number; percent: number }) => void
     },
   ): Promise<{
@@ -890,14 +906,18 @@ export const api = {
     dag_id?: string | null
     trigger?: boolean
     await_schedule?: boolean
+    data_type_id?: string | null
     clips: { clip_id: string; oss_key: string }[]
   }> => {
     const form = new FormData()
     for (const file of files) {
       form.append('files', file)
     }
-    // Use query for trigger — more reliable than multipart Form bool with axios FormData.
-    const qs = opts?.trigger === false ? '?trigger=false' : ''
+    // Use query for trigger / data_type_id — more reliable than multipart Form bool with axios FormData.
+    const params = new URLSearchParams()
+    if (opts?.trigger === false) params.set('trigger', 'false')
+    if (opts?.dataTypeId) params.set('data_type_id', opts.dataTypeId)
+    const qs = params.toString() ? `?${params.toString()}` : ''
     const res = await http.post(`/pipeline/executions${qs}`, form, {
       // Let the browser set multipart boundary; do not force Content-Type.
       headers: { 'Content-Type': undefined },
@@ -926,4 +946,59 @@ export const api = {
     display_name?: string
   }): Promise<RegisterResponse> =>
     fetchJson('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+
+  listDataTypes: (): Promise<{ items: DataTypeRecipe[] }> => fetchJson('/platform/data-types'),
+
+  getDataType: (id: string): Promise<DataTypeRecipe> =>
+    fetchJson(`/platform/data-types/${encodeURIComponent(id)}`),
+
+  listPlatformSources: (
+    limit = 100,
+    opts?: { eligibleFor?: string },
+  ): Promise<{ items: PlatformSourceRecord[] }> => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (opts?.eligibleFor) params.set('eligible_for', opts.eligibleFor)
+    return fetchJson(`/platform/sources?${params}`)
+  },
+
+  createPlatformSource: (body: {
+    kind: string
+    filename?: string
+    text_schema_id?: string
+    text?: string
+    content_b64?: string
+    collection_id?: string
+  }): Promise<PlatformSourceRecord> =>
+    fetchJson('/platform/sources', { method: 'POST', body: JSON.stringify(body) }),
+
+  createPlatformSample: (body: {
+    source_ids: string[]
+    sample_id?: string
+  }): Promise<PlatformSampleRecord> =>
+    fetchJson('/platform/samples', { method: 'POST', body: JSON.stringify(body) }),
+
+  preflightPlatformRun: (body: {
+    data_type_id: string
+    sample_id?: string
+    source_kinds?: string[]
+    source_ids?: string[]
+  }): Promise<PlatformRunPreflight> =>
+    fetchJson('/platform/runs/preflight', { method: 'POST', body: JSON.stringify(body) }),
+
+  createPlatformRun: (body: {
+    data_type_id: string
+    sample_id?: string
+    source_ids?: string[]
+  }): Promise<PlatformRunRecord> =>
+    fetchJson('/platform/runs', { method: 'POST', body: JSON.stringify(body) }),
+
+  getPlatformLineage: (opts: {
+    sourceId?: string
+    productKey?: string
+  }): Promise<Record<string, unknown>> => {
+    const params = new URLSearchParams()
+    if (opts.sourceId) params.set('source_id', opts.sourceId)
+    if (opts.productKey) params.set('product_key', opts.productKey)
+    return fetchJson(`/platform/lineage?${params}`)
+  },
 }

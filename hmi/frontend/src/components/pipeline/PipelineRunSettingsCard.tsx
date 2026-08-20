@@ -1,23 +1,12 @@
 import { SaveOutlined, SettingOutlined } from '@ant-design/icons'
-import {
-  Alert,
-  Button,
-  Form,
-  Input,
-  InputNumber,
-  Select,
-  Space,
-  Switch,
-  Tabs,
-  Typography,
-  message,
-} from 'antd'
+import { Alert, Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Typography, message } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api'
 import type {
   BBoxDetectorOption,
   BBoxYoloClassOption,
   BBoxYoloClassPreset,
+  DataTypeRecipe,
   OmniLabelPromptFieldMeta,
   PipelineRunSettings,
   TaxonomyArchiveReason,
@@ -28,12 +17,13 @@ import { formatTaxonomyVersionLabel } from '../../utils/taxonomyDisplay'
 import { BBoxYoloClassesModal } from './BBoxYoloClassesModal'
 import { OmniLabelPromptSettingsModal } from './OmniLabelPromptSettingsModal'
 
-export function PipelineRunSettingsCard() {
+export function PipelineRunSettingsCard({ dataTypeId }: { dataTypeId?: string }) {
   const { dataSource } = useDataSourceMode()
   const cloud = dataSource === 'cloud'
   const [form] = Form.useForm<PipelineRunSettings>()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [recipe, setRecipe] = useState<DataTypeRecipe | null>(null)
   const [omniModels, setOmniModels] = useState<string[]>(['default'])
   const [embeddingModels, setEmbeddingModels] = useState<string[]>(['default'])
   const [bboxDetectors, setBboxDetectors] = useState<BBoxDetectorOption[]>([])
@@ -94,6 +84,25 @@ export function PipelineRunSettingsCard() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    if (!dataTypeId) {
+      setRecipe(null)
+      return
+    }
+    let cancelled = false
+    void api
+      .getDataType(dataTypeId)
+      .then((r) => {
+        if (!cancelled) setRecipe(r)
+      })
+      .catch(() => {
+        if (!cancelled) setRecipe(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [dataTypeId])
+
   const save = async () => {
     const values = await form.validateFields()
     setSaving(true)
@@ -114,6 +123,9 @@ export function PipelineRunSettingsCard() {
   const omniModel = Form.useWatch('omni_model', form)
   const bboxEnabled = Form.useWatch('bbox_enabled', form)
   const bboxDetector = Form.useWatch('bbox_detector', form)
+  const labelEnabled = recipe?.stages?.label?.enabled !== false
+  const embedEnabled = recipe?.stages?.embed?.enabled !== false
+  const bboxForced = Boolean(recipe?.bbox?.enabled)
 
   if (cloud) {
     return (
@@ -128,6 +140,24 @@ export function PipelineRunSettingsCard() {
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      {recipe ? (
+        <Alert
+          type="info"
+          showIcon
+          message={`当前开跑数据类型：${recipe.title}`}
+          description={
+            [
+              labelEnabled ? null : '配方关闭打标阶段，本次执行不会调用 Omni。',
+              embedEnabled ? null : '配方关闭向量阶段。',
+              bboxForced
+                ? `配方强制开启 BBox（${recipe.bbox?.detector || 'opencv'}）；下列全局开关仍可保存，执行时以配方为准。`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' ') || '设置项按该配方开放的阶段生效；保存的是全局默认参数。'
+          }
+        />
+      ) : null}
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         本地 SDK 轮询处理 rosbag 时使用；模型下拉「default」表示跟随环境变量。
       </Typography.Text>
@@ -142,12 +172,15 @@ export function PipelineRunSettingsCard() {
               children: (
                 <>
                   <Form.Item name="omni_model" label="打标模型 (Omni)">
-                    <Select options={omniModels.map((m) => ({ value: m, label: m }))} />
+                    <Select
+                      disabled={!labelEnabled}
+                      options={omniModels.map((m) => ({ value: m, label: m }))}
+                    />
                   </Form.Item>
                   <Form.Item label=" " colon={false}>
                     <Button
                       icon={<SettingOutlined />}
-                      disabled={loading || omniModel === undefined}
+                      disabled={loading || omniModel === undefined || !labelEnabled}
                       onClick={() => setPromptModalOpen(true)}
                     >
                       结构化提示词设置
@@ -157,7 +190,10 @@ export function PipelineRunSettingsCard() {
                     </Typography.Text>
                   </Form.Item>
                   <Form.Item name="embedding_model" label="向量化模型">
-                    <Select options={embeddingModels.map((m) => ({ value: m, label: m }))} />
+                    <Select
+                      disabled={!embedEnabled}
+                      options={embeddingModels.map((m) => ({ value: m, label: m }))}
+                    />
                   </Form.Item>
                   <Form.Item name="taxonomy_version_id" label="标签树版本">
                     <Select

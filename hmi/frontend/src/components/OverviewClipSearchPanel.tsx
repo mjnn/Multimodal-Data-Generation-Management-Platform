@@ -16,6 +16,7 @@ export type OverviewQueryHit = {
 }
 
 type Props = {
+  dataTypeId: string
   onApplied: (result: {
     active: boolean
     clipIds: string[] | null
@@ -26,7 +27,7 @@ type Props = {
   }) => void
 }
 
-export function OverviewClipSearchPanel({ onApplied }: Props) {
+export function OverviewClipSearchPanel({ dataTypeId, onApplied }: Props) {
   const [nodes, setNodes] = useState<TaxonomyNodeDetail[]>([])
   const [labelFilters, setLabelFilters] = useState<LabelFilters>({})
   const [semanticQuery, setSemanticQuery] = useState('')
@@ -77,6 +78,7 @@ export function OverviewClipSearchPanel({ onApplied }: Props) {
       const res = await api.queryOverviewClips({
         labelFilters: hasFilters ? labelFilters : undefined,
         semanticQuery: hasSemantic ? semanticQuery.trim() : undefined,
+        dataTypeId,
       })
       const hits = (res.items ?? []) as OverviewQueryHit[]
       const clipIds = hits.map((h) => h.clip_id)

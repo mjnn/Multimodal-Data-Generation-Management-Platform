@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import type { SystemEnvVariable } from '../api/types'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
+import { PipelineSyncControls } from '../components/pipeline/PipelineSyncControls'
 
 type Row = SystemEnvVariable & { rowKey: string }
 
@@ -190,6 +191,10 @@ export function SystemEnvPage() {
           style={{ marginBottom: 0 }}
         />
       ) : null}
+
+      <ContentCard title="OSS 产物同步">
+        <PipelineSyncControls />
+      </ContentCard>
 
       <ContentCard title="环境变量" noPadding>
         <Table<Row>

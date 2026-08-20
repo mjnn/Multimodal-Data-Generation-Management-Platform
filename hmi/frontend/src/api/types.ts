@@ -71,6 +71,12 @@ export interface ClipOverview {
   /** Label taxonomy version used at infer (or pipeline settings when not labeled yet). */
   taxonomy_version_id?: string | null
   taxonomy_version_code?: string | null
+  /** Non-OMS workspace DataType id when listed via typed overview. */
+  data_type_id?: string | null
+  overview_view?: string | null
+  nvh_leq_db_mean?: number | null
+  nvh_thumb_url?: string | null
+  nvh_channel_count?: number | null
 }
 
 export interface UploadPipelineStep {
@@ -1088,6 +1094,7 @@ export interface PipelineExecution {
   clips: PipelineExecutionClip[]
   /** DataWorks DagId when triggered from cloud mode */
   dag_id?: string
+  data_type_id?: string | null
 }
 
 export interface PipelineExecutionListResponse {
@@ -1104,4 +1111,87 @@ export interface RegisterResponse {
   token_type: string
   expires_in: number
   user: import('../auth/types').AuthUser
+}
+
+export interface DataTypeRecipe {
+  id: string
+  title: string
+  purpose: string
+  owner: string
+  taxonomy_id: string
+  overview_view: string
+  status: 'draft' | 'published'
+  require_any_kinds?: string[][]
+  slots?: Array<{
+    id: string
+    kinds: string[]
+    cardinality_min?: number
+    cardinality_max?: number
+    role?: string
+    required?: boolean
+  }>
+  preprocess?: Array<Record<string, unknown>>
+  products?: Array<{ id: string; from_op?: string | null; reusable?: boolean }>
+  bbox?: { enabled: boolean; detector: string; yolo_classes?: string }
+  stages?: { label?: { enabled: boolean }; embed?: { enabled: boolean } }
+}
+
+export interface AudioNvhChannel {
+  name: string
+  leq_db?: number | null
+  rms_pa?: number | null
+  mel_url?: string | null
+  stft_url?: string | null
+  waveform_url?: string | null
+  spl_timeline_url?: string | null
+  third_octave_url?: string | null
+}
+
+export interface AudioNvhBootstrap {
+  clip_id: string
+  run_id: string
+  view: string
+  fs_hz?: number | null
+  duration_s: number
+  unit?: string
+  channels: AudioNvhChannel[]
+  audio_url?: string | null
+  summary?: Record<string, unknown>
+  labels?: Record<string, unknown>
+  thumb_url?: string | null
+  leq_db_mean?: number | null
+}
+
+export interface PlatformSourceRecord {
+  source_id: string
+  kind: string
+  filename?: string | null
+  text_schema_id?: string | null
+  content_hash?: string | null
+  local_oss_key?: string | null
+  local_path?: string | null
+  collection_id?: string | null
+  created_at?: string | null
+}
+
+export interface PlatformSampleRecord {
+  sample_id: string
+  source_ids: string[]
+}
+
+export interface PlatformRunPreflight {
+  ok: boolean
+  missing: string[]
+  ops: string[]
+  sample_id?: string
+  source_kinds?: string[]
+}
+
+export interface PlatformRunRecord {
+  run_id: string
+  sample_id: string
+  data_type_id: string
+  preflight: PlatformRunPreflight
+  pipeline_run_id?: string | null
+  source_ids?: string[]
 }

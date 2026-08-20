@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS pipeline_execution (
   run_id TEXT PRIMARY KEY,
   label TEXT NOT NULL,
   started_at TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  data_type_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS clip_parse_summary (

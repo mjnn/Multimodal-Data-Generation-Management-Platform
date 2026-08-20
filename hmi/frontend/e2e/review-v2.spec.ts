@@ -9,7 +9,7 @@ test('reviewer opens workbench v2', async ({ page }) => {
   await page.getByLabel('密码').fill(REVIEWER_PASS)
   await page.getByLabel('密码').press('Enter')
 
-  await expect(page.getByText('数据总览')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('数据类型')).toBeVisible({ timeout: 15_000 })
   await page.goto('/review/workbench')
   await expect(page.getByTestId('review-workbench-page')).toBeVisible({ timeout: 15_000 })
 })

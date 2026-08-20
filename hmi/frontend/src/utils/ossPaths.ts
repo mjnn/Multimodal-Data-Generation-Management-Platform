@@ -5,6 +5,7 @@ export function clipRunOssPrefix(clipId: string, runId: string): string {
 }
 
 export function ossManageHref(prefix: string): string {
-  const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''
-  return `/oss${q}`
+  const q = new URLSearchParams({ tab: 'oss' })
+  if (prefix) q.set('prefix', prefix)
+  return `/lake?${q.toString()}`
 }

@@ -1,7 +1,8 @@
-import { PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { PauseCircleOutlined, PlayCircleOutlined, RedoOutlined } from '@ant-design/icons'
 import { Button, Space, Typography } from 'antd'
 import { useEffect, useMemo, useRef } from 'react'
 import { api } from '../api'
+import { replayFromStart, togglePlayWithReplay } from '../utils/playback'
 
 interface Props {
   startNs: number
@@ -107,12 +108,38 @@ export function AudioWaveform({
         <Button
           type="text"
           icon={playing ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-          onClick={() => onPlayingChange(!playing)}
+          data-testid="clip-timeline-play"
+          onClick={() =>
+            togglePlayWithReplay({
+              playing,
+              cursorNs,
+              startNs,
+              endNs,
+              onCursorChange,
+              onPlayingChange,
+            })
+          }
         >
           {playing ? '暂停' : '播放'}
         </Button>
+        <Button
+          type="text"
+          icon={<RedoOutlined />}
+          data-testid="clip-timeline-replay"
+          title="从头播放"
+          onClick={() =>
+            replayFromStart({
+              startNs,
+              onCursorChange,
+              onPlayingChange,
+            })
+          }
+        >
+          重播
+        </Button>
         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-          空格键播放/暂停 · 点击波形跳转{externalPlayback ? ' · 同步播放 Clip 音频' : ''}
+          空格播放/暂停（结束时再按从头）· 点击波形跳转
+          {externalPlayback ? ' · 同步播放 Clip 音频' : ''}
         </Typography.Text>
       </Space>
       <canvas

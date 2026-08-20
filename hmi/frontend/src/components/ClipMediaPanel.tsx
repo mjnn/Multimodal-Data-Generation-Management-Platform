@@ -1,9 +1,11 @@
 import { ClockCircleOutlined, TagOutlined, VideoCameraOutlined } from '@ant-design/icons'
-import { Space, Typography } from 'antd'
+import { Space, Spin, Typography } from 'antd'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import type { ClipOverview } from '../api/types'
+import { api } from '../api'
+import type { AudioNvhBootstrap, ClipOverview } from '../api/types'
 import { formatCollectionPeriod } from '../utils/format'
+import { AudioNvhTimelinePanel } from './AudioNvhTimelinePanel'
 import { ClipTimelinePanel, type ClipTimelineState } from './ClipTimelinePanel'
 import type { PreviewContext } from './ClipPreviewVideo'
 
@@ -24,6 +26,10 @@ export type ClipMediaPanelProps = {
   selectedBoxKey?: string | null
   onSelectedBoxChange?: (key: string | null) => void
   onOverlaySaved?: () => void
+  /** Force media mode; default auto-detects audio_nvh via bootstrap API. */
+  mediaMode?: 'auto' | 'cabin' | 'audio_nvh'
+  /** Fires when resolved media mode is known (after auto-detect). */
+  onMediaModeChange?: (mode: 'cabin' | 'audio_nvh') => void
 }
 
 export function ClipMediaPanel({
@@ -41,8 +47,13 @@ export function ClipMediaPanel({
   selectedBoxKey,
   onSelectedBoxChange,
   onOverlaySaved,
+  mediaMode = 'auto',
+  onMediaModeChange,
 }: ClipMediaPanelProps) {
   const [clipOverview, setClipOverview] = useState<ClipOverview | null>(null)
+  const [mode, setMode] = useState<'pending' | 'cabin' | 'audio_nvh'>(
+    mediaMode === 'auto' ? 'pending' : mediaMode,
+  )
 
   const handleClipReady = useCallback((clip: ClipOverview) => {
     setClipOverview(clip)
@@ -50,7 +61,35 @@ export function ClipMediaPanel({
 
   useEffect(() => {
     setClipOverview(null)
-  }, [clipId, runId])
+    if (mediaMode !== 'auto') {
+      setMode(mediaMode)
+      onMediaModeChange?.(mediaMode)
+      return
+    }
+    let cancelled = false
+    setMode('pending')
+    void api
+      .getAudioNvhBootstrap(clipId, runId)
+      .then(() => {
+        if (!cancelled) {
+          setMode('audio_nvh')
+          onMediaModeChange?.('audio_nvh')
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMode('cabin')
+          onMediaModeChange?.('cabin')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [clipId, runId, mediaMode, onMediaModeChange])
+
+  const onAudioReady = useCallback((_boot: AudioNvhBootstrap) => {
+    /* reserved for explorer scene text */
+  }, [])
 
   const collectionPeriod =
     clipOverview != null
@@ -64,47 +103,66 @@ export function ClipMediaPanel({
   return (
     <div className={`clip-media-panel ${className ?? ''}`.trim()} data-testid={testId}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <div className="review-clip-card__media review-clip-card__media--cameras-top">
-          <ClipTimelinePanel
-            key={`${clipId}:${runId}:${initialTimestampNs ?? ''}`}
-            clipId={clipId}
-            runId={runId}
-            initialTimestampNs={initialTimestampNs}
-            camerasFirst
-            previewContext={previewContext}
-            onClipReady={handleClipReady}
-            onTimelineStateChange={onTimelineStateChange}
-            selectedBoxKey={selectedBoxKey}
-            onSelectedBoxChange={onSelectedBoxChange}
-            onOverlaySaved={onOverlaySaved}
-          />
-          <Typography.Text type="secondary" className="review-clip-card__media-hint">
-            <VideoCameraOutlined /> Clip 级 MP4 预览 · 空格播放（含音频）
-          </Typography.Text>
-        </div>
+        {mode === 'pending' ? (
+          <div style={{ textAlign: 'center', padding: 48 }}>
+            <Spin />
+          </div>
+        ) : mode === 'audio_nvh' ? (
+          <div className="review-clip-card__media">
+            <AudioNvhTimelinePanel
+              clipId={clipId}
+              runId={runId}
+              previewContext={previewContext}
+              testId="audio-nvh-timeline"
+              onReady={onAudioReady}
+            />
+            <Typography.Text type="secondary" className="review-clip-card__media-hint">
+              四通道梅尔频谱 + SPL + 波形共用时间轴 · 点击谱图/曲线跳转
+            </Typography.Text>
+          </div>
+        ) : (
+          <div className="review-clip-card__media review-clip-card__media--cameras-top">
+            <ClipTimelinePanel
+              key={`${clipId}:${runId}:${initialTimestampNs ?? ''}`}
+              clipId={clipId}
+              runId={runId}
+              initialTimestampNs={initialTimestampNs}
+              camerasFirst
+              previewContext={previewContext}
+              onClipReady={handleClipReady}
+              onTimelineStateChange={onTimelineStateChange}
+              selectedBoxKey={selectedBoxKey}
+              onSelectedBoxChange={onSelectedBoxChange}
+              onOverlaySaved={onOverlaySaved}
+            />
+            <Typography.Text type="secondary" className="review-clip-card__media-hint">
+              <VideoCameraOutlined /> Clip 级 MP4 预览 · 空格播放（含音频）
+            </Typography.Text>
+          </div>
+        )}
 
         {showMetaBelow ? (
-        <div className="review-clip-card__meta review-clip-card__meta--below">
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              {title}
-            </Typography.Title>
-            <Typography.Text type="secondary" className="mono" style={{ fontSize: 12, wordBreak: 'break-all' }}>
-              {clipId}
-            </Typography.Text>
-            {collectionPeriod ? (
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                <ClockCircleOutlined /> 采集时间：{collectionPeriod}
+          <div className="review-clip-card__meta review-clip-card__meta--below">
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                {title}
+              </Typography.Title>
+              <Typography.Text type="secondary" className="mono" style={{ fontSize: 12, wordBreak: 'break-all' }}>
+                {clipId}
               </Typography.Text>
-            ) : null}
-            {labelPreview ? (
-              <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }} ellipsis={{ rows: 2 }}>
-                <TagOutlined /> {labelPreview}
-              </Typography.Paragraph>
-            ) : null}
-            {metaTags ? <Space size={6} wrap>{metaTags}</Space> : null}
-          </Space>
-        </div>
+              {collectionPeriod ? (
+                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                  <ClockCircleOutlined /> 采集时间：{collectionPeriod}
+                </Typography.Text>
+              ) : null}
+              {labelPreview ? (
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }} ellipsis={{ rows: 2 }}>
+                  <TagOutlined /> {labelPreview}
+                </Typography.Paragraph>
+              ) : null}
+              {metaTags ? <Space size={6} wrap>{metaTags}</Space> : null}
+            </Space>
+          </div>
         ) : null}
       </Space>
     </div>

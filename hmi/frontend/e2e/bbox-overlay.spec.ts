@@ -7,14 +7,14 @@ import { loginAsAdmin } from './helpers/auth'
 test('explorer shows readonly jsonl overlay on boxed preview tab', async ({ page }) => {
   await loginAsAdmin(page)
 
-  await page.goto('/')
+  await page.goto('/w/oms_cabin')
   const modeSwitch = page.getByRole('switch', { name: /本地|local|数据源/i }).first()
   if (await modeSwitch.isVisible().catch(() => false)) {
     const checked = await modeSwitch.isChecked().catch(() => false)
     if (!checked) await modeSwitch.click()
   }
 
-  await page.goto('/')
+  await page.goto('/w/oms_cabin')
   const clipLink = page.locator('a[href*="/clips/"]').first()
   const hasClip = await clipLink.isVisible({ timeout: 15_000 }).catch(() => false)
   test.skip(!hasClip, 'no local clips to open in Explorer')

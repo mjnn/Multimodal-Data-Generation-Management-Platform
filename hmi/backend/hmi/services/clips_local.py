@@ -195,23 +195,205 @@ def _light_label_row(lab: dict[str, Any] | None) -> tuple[bool, str, str, str | 
 
 
 def list_clips_light(*, refresh: bool = False) -> list[dict[str, Any]]:
+    """Local OMS overview (legacy-compatible): excludes audio/IVI-only executions."""
     from hmi.services.overview_cache import cached_overview_list
 
-    return cached_overview_list("local", refresh=refresh, build=_list_clips_light_impl)
+    return cached_overview_list("local:oms_cabin", refresh=refresh, build=_list_clips_light_impl)
+
+
+def list_clips_light_for_data_type(data_type_id: str, *, refresh: bool = False) -> list[dict[str, Any]]:
+    """Overview rows filtered by pipeline_execution.data_type_id (OMS = legacy-compatible)."""
+    from hmi.platform.search_scope import OMS_DATA_TYPE_ID
+    from hmi.services.overview_cache import cached_overview_list
+
+    tid = str(data_type_id or "").strip()
+    if not tid:
+        return []
+    if tid == OMS_DATA_TYPE_ID:
+        return list_clips_light(refresh=refresh)
+    return cached_overview_list(
+        f"local:{tid}",
+        refresh=refresh,
+        build=lambda: _list_clips_light_for_data_type_impl(tid),
+    )
+
+
+def _oms_eligible_run_ids(run_ids: list[str]) -> set[str]:
+    """Runs allowed on oms_cabin: no pe row, null/empty data_type_id, or oms_cabin."""
+    ids = [r for r in run_ids if r]
+    if not ids:
+        return set()
+    placeholders = ",".join("?" for _ in ids)
+    rows = store.query(
+        f"SELECT run_id, data_type_id FROM pipeline_execution WHERE run_id IN ({placeholders})",
+        tuple(ids),
+    )
+    by_run = {str(r["run_id"]): r for r in rows}
+    eligible: set[str] = set()
+    for rid in ids:
+        pe = by_run.get(rid)
+        if pe is None:
+            eligible.add(rid)
+            continue
+        tid = str(pe.get("data_type_id") or "").strip()
+        if not tid or tid == "oms_cabin":
+            eligible.add(rid)
+        # else: audio_array_spec / ivi_ui_stub / other typed → exclude
+    return eligible
+
+
+def _clip_run_pairs_for_data_type(data_type_id: str) -> list[tuple[str, str]]:
+    rows = store.query(
+        """
+        SELECT DISTINCT pr.clip_id AS clip_id, pr.run_id AS run_id
+        FROM pipeline_execution pe
+        JOIN pipeline_run pr ON pr.run_id = pe.run_id
+        WHERE pe.data_type_id = ?
+        ORDER BY pr.updated_at DESC
+        """,
+        (data_type_id,),
+    )
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for row in rows:
+        clip_id = str(row.get("clip_id") or "").strip()
+        run_id = str(row.get("run_id") or "").strip()
+        if not clip_id or not run_id or clip_id in seen:
+            continue
+        seen.add(clip_id)
+        pairs.append((clip_id, run_id))
+    return pairs
+
+
+def _list_clips_light_for_data_type_impl(data_type_id: str) -> list[dict[str, Any]]:
+    from hmi.local.audio_nvh_view import audio_nvh_overview_extras
+
+    pairs = _clip_run_pairs_for_data_type(data_type_id)
+    if not pairs:
+        return []
+
+    dim_rows = {
+        str(r["clip_id"]): r
+        for r in store.query(
+            f"SELECT clip_id, clip_dir_name, bag_oss_key, active_run_id, created_at, updated_at "
+            f"FROM dim_clip WHERE clip_id IN ({','.join('?' for _ in pairs)})",
+            tuple(c for c, _ in pairs),
+        )
+    }
+    ds_map = _latest_run_ds_map(pairs)
+    step_map = _batch_steps_by_run_clip(pairs)
+
+    out: list[dict[str, Any]] = []
+    for clip_id, run_id in pairs:
+        dim = dim_rows.get(clip_id) or {}
+        ds = ds_map.get((clip_id, run_id)) or ""
+        item: dict[str, Any] = {
+            "clip_id": clip_id,
+            "clip_dir_name": str(dim.get("clip_dir_name") or clip_id[:24]),
+            "bag_oss_key": str(dim.get("bag_oss_key") or ""),
+            "active_run_id": run_id,
+            "duration_sec": 0.0,
+            "start_time_ns": 0,
+            "end_time_ns": 0,
+            "pipeline_status": "pending",
+            "steps": _pending_steps(),
+            "frame_count": 0,
+            "sampled_count": 1,
+            "labeled_count": 0,
+            "asr_segment_count": 0,
+            "event_count": 0,
+            "label_granularity": "clip",
+            "clip_label_ready": False,
+            "clip_label_preview": "",
+            "pipeline_created_at": None,
+            "pipeline_updated_at": str(dim.get("updated_at") or "") or None,
+            "taxonomy_version_id": None,
+            "taxonomy_version_code": None,
+            "data_type_id": data_type_id,
+        }
+        if ds:
+            run_row = store.query_one(
+                "SELECT status, started_at, updated_at FROM pipeline_run "
+                "WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
+                (clip_id, run_id, ds),
+            )
+            if run_row:
+                item["pipeline_status"] = str(run_row.get("status") or "pending")
+                if run_row.get("started_at"):
+                    item["pipeline_created_at"] = str(run_row["started_at"])
+                if run_row.get("updated_at"):
+                    item["pipeline_updated_at"] = str(run_row["updated_at"])
+            steps_for_run = step_map.get((run_id, clip_id), {})
+            step_order = _step_order_for_ids(set(steps_for_run.keys()))
+            item["steps"] = [
+                {
+                    "step_id": sid,
+                    "label": pipeline_step_label(sid, local=True),
+                    "status": (steps_for_run.get(sid) or {}).get("status", "pending"),
+                    "error_message": (steps_for_run.get(sid) or {}).get("error_message"),
+                }
+                for sid in step_order
+                if sid not in ("job0_discover", "sdk_discover")
+            ]
+            summary = store.query_one(
+                "SELECT start_time_ns, end_time_ns, duration_sec FROM clip_parse_summary "
+                "WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
+                (clip_id, run_id, ds),
+            )
+            if summary:
+                item["start_time_ns"] = int(summary.get("start_time_ns") or 0)
+                item["end_time_ns"] = int(summary.get("end_time_ns") or 0)
+                item["duration_sec"] = float(summary.get("duration_sec") or 0.0)
+            lab = store.query_one(
+                "SELECT labels_json, taxonomy_version_id FROM fact_clip_label "
+                "WHERE clip_id=? AND run_id=? AND ds=? LIMIT 1",
+                (clip_id, run_id, ds),
+            )
+            ready, preview, gran, taxonomy_version_id = _light_label_row(dict(lab) if lab else None)
+            item["clip_label_ready"] = ready
+            item["clip_label_preview"] = preview
+            item["label_granularity"] = gran or "clip"
+            item["labeled_count"] = 1 if ready else 0
+            if taxonomy_version_id:
+                item["taxonomy_version_id"] = taxonomy_version_id
+
+        extras = audio_nvh_overview_extras(clip_id, run_id)
+        if extras.get("duration_sec") and not item["duration_sec"]:
+            item["duration_sec"] = float(extras["duration_sec"])
+            item["end_time_ns"] = int(float(extras["duration_sec"]) * 1e9)
+        item.update({k: v for k, v in extras.items() if k != "duration_sec" or not item["duration_sec"]})
+        if extras.get("nvh_leq_db_mean") is not None and not item["clip_label_preview"]:
+            item["clip_label_preview"] = f"Leq {float(extras['nvh_leq_db_mean']):.1f} dB"
+        out.append(item)
+    return out
 
 
 def _list_clips_light_impl() -> list[dict[str, Any]]:
+    """OMS cabin light list: all dim_clip except active runs typed as non-OMS."""
     rows = store.query(
         "SELECT clip_id, clip_dir_name, bag_oss_key, active_run_id, created_at, updated_at "
         "FROM dim_clip "
         "ORDER BY CASE WHEN clip_dir_name LIKE 'demo_%' OR clip_dir_name LIKE '[演示]%' "
         "OR clip_dir_name LIKE '[真实]%' THEN 0 ELSE 1 END, clip_dir_name ASC"
     )
-    pairs: list[tuple[str, str]] = []
+    candidate_pairs: list[tuple[str, str]] = []
     for row in rows:
         rid = str(row.get("active_run_id") or "")
         if rid:
-            pairs.append((str(row["clip_id"]), rid))
+            candidate_pairs.append((str(row["clip_id"]), rid))
+    eligible_runs = _oms_eligible_run_ids([r for _, r in candidate_pairs])
+    # Keep clips with no active_run_id (legacy placeholders); drop typed non-OMS actives.
+    rows = [
+        row
+        for row in rows
+        if not str(row.get("active_run_id") or "")
+        or str(row.get("active_run_id") or "") in eligible_runs
+    ]
+    pairs: list[tuple[str, str]] = [
+        (str(row["clip_id"]), str(row["active_run_id"]))
+        for row in rows
+        if str(row.get("active_run_id") or "")
+    ]
 
     ds_map = _latest_run_ds_map(pairs)
     step_map = _batch_steps_by_run_clip(pairs)
@@ -381,9 +563,17 @@ def _list_clips_light_impl() -> list[dict[str, Any]]:
 
 
 def list_clips() -> list[dict[str, Any]]:
+    """Full OMS overview; same non-OMS exclusion as list_clips_light."""
+    dim_rows = store.query("SELECT clip_id, active_run_id FROM dim_clip")
+    eligible_runs = _oms_eligible_run_ids(
+        [str(r.get("active_run_id") or "") for r in dim_rows if r.get("active_run_id")]
+    )
     out: list[dict[str, Any]] = []
-    for row in store.query("SELECT clip_id FROM dim_clip"):
+    for row in dim_rows:
         clip_id = str(row["clip_id"])
+        rid = str(row.get("active_run_id") or "")
+        if rid and rid not in eligible_runs:
+            continue
         try:
             out.append(get_clip_overview(clip_id))
         except Exception:

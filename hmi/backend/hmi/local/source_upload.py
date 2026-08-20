@@ -25,12 +25,13 @@ from hmi.local import pipeline_run as pr
 from hmi.local.bag_upload import collection_dir_from_filename
 
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
-AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
+AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".dat"}
 TEXT_EXTS = {".txt", ".json", ".md", ".csv"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
 def classify_source_filename(filename: str) -> str | None:
-    """Return modality kind: video | audio | text | bag | None."""
+    """Return modality kind: video | audio | text | image | bag | None."""
     name = Path(filename.replace("\\", "/")).name.lower()
     if name.endswith(".bag"):
         return "bag"
@@ -41,6 +42,8 @@ def classify_source_filename(filename: str) -> str | None:
         return "audio"
     if suffix in TEXT_EXTS:
         return "text"
+    if suffix in IMAGE_EXTS:
+        return "image"
     return None
 
 
@@ -160,11 +163,102 @@ def save_uploaded_sources(
 
 
 def resolve_local_source_manifest(bag_oss_key: str) -> Path | None:
-    """Map ``local://sources/.../source_manifest.json`` to an absolute path."""
+    """Map ``local://sources/...`` or ``local://platform_runs/...`` to a manifest path."""
     if not bag_oss_key.startswith("local://"):
         return None
     rel = bag_oss_key[len("local://") :]
-    if not rel.startswith("sources/"):
+    if not (rel.startswith("sources/") or rel.startswith("platform_runs/")):
         return None
     path = oss_key_path(rel)
     return path if path.is_file() else None
+
+
+def persist_local_media_source(
+    *,
+    filename: str,
+    data: bytes,
+    text_schema_id: str | None = None,
+) -> dict[str, Any]:
+    """Write one local lake source without creating any pipeline rows."""
+    kind = classify_source_filename(filename)
+    if kind is None or kind == "bag":
+        raise ValueError(f"unsupported source file: {filename}")
+    if kind == "text" and not (text_schema_id or "").strip():
+        raise ValueError("text source requires text_schema_id")
+
+    digest = hashlib.sha256(data).hexdigest()
+    source_id = f"sha256:{digest}"
+    coll = collection_dir_from_filename(filename)
+    storage_dir = _storage_dir_name(coll, digest)
+    ext = Path(filename).suffix.lower() or {
+        "video": ".mp4",
+        "audio": ".wav",
+        "text": ".txt",
+        "image": ".jpg",
+    }.get(kind, "")
+
+    if kind in {"video", "audio", "text"}:
+        dest_dir = LOCAL_OSS_ROOT / "sources" / storage_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_name = f"{kind}{ext}"
+        dest_path = dest_dir / dest_name
+        extra_manifest: dict[str, Any] = {}
+        if kind == "audio" and ext == ".dat":
+            from hmi.local.head_dat import is_head_dat, persist_head_dat_package
+
+            if is_head_dat(data):
+                meta = persist_head_dat_package(dest_dir, filename, data)
+                dest_name = "audio.wav"
+                extra_manifest = {
+                    "audio_format": "head_acoustics_hdf_v4",
+                    "head_meta": "head_meta.json",
+                    "pcm_pa": meta.get("pcm_pa"),
+                    "channels": meta.get("channels"),
+                }
+            else:
+                dest_path.write_bytes(data)
+        else:
+            dest_path.write_bytes(data)
+        manifest = {
+            "clip_id": source_id,
+            "source_name": coll,
+            "modalities": [kind],
+            "has_preencoded_video": kind == "video",
+            "video": dest_name if kind == "video" else None,
+            "audio": dest_name if kind == "audio" else None,
+            "text": dest_name if kind == "text" else None,
+            "video_path": dest_name if kind == "video" else None,
+            "audio_path": dest_name if kind == "audio" else None,
+            "text_path": dest_name if kind == "text" else None,
+            **extra_manifest,
+        }
+        manifest_path = dest_dir / "source_manifest.json"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        oss_key = f"sources/{storage_dir}/source_manifest.json"
+        return {
+            "source_id": source_id,
+            "kind": kind,
+            "filename": filename,
+            "text_schema_id": text_schema_id,
+            "content_hash": digest,
+            "local_oss_key": f"local://{oss_key}",
+            "local_path": str(manifest_path),
+            "size_bytes": len(data),
+        }
+
+    dest_dir = LOCAL_OSS_ROOT / "lake_images" / storage_dir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_name = f"image{ext}"
+    dest_path = dest_dir / dest_name
+    dest_path.write_bytes(data)
+    oss_key = f"lake_images/{storage_dir}/{dest_name}"
+    return {
+        "source_id": source_id,
+        "kind": kind,
+        "filename": filename,
+        "text_schema_id": text_schema_id,
+        "content_hash": digest,
+        "local_oss_key": f"local://{oss_key}",
+        "local_path": str(dest_path),
+        "size_bytes": len(data),
+    }

@@ -1,6 +1,7 @@
 import type { ClipOverview } from '../api/types'
 
-const STORAGE_KEY = 'hmi-overview-cache-v2'
+/** Bump when overview row semantics change (e.g. data_type isolation). */
+const STORAGE_KEY = 'hmi-overview-cache-v3'
 /** Client-side overview cache TTL: 6 hours. */
 export const OVERVIEW_CACHE_TTL_MS = 6 * 60 * 60 * 1000
 
@@ -50,6 +51,11 @@ export function getOverviewSnapshotStale(cacheKey: string): OverviewSnapshot | n
 }
 
 export function setOverviewSnapshot(cacheKey: string, clips: ClipOverview[]): void {
+  // Do not persist empty lists — avoids locking a stale [] for 6h after API/type fixes.
+  if (!clips.length) {
+    clearOverviewSnapshot()
+    return
+  }
   const payload: OverviewSnapshot = { clips, cacheKey, savedAt: Date.now() }
   const text = JSON.stringify(payload)
   try {
@@ -59,8 +65,10 @@ export function setOverviewSnapshot(cacheKey: string, clips: ClipOverview[]): vo
   }
   try {
     sessionStorage.removeItem(STORAGE_KEY)
-    // drop legacy key
+    // drop legacy keys
     sessionStorage.removeItem('hmi-overview-cache')
+    sessionStorage.removeItem('hmi-overview-cache-v2')
+    localStorage.removeItem('hmi-overview-cache-v2')
   } catch {
     /* ignore */
   }
@@ -75,6 +83,8 @@ export function clearOverviewSnapshot(): void {
   try {
     sessionStorage.removeItem(STORAGE_KEY)
     sessionStorage.removeItem('hmi-overview-cache')
+    sessionStorage.removeItem('hmi-overview-cache-v2')
+    localStorage.removeItem('hmi-overview-cache-v2')
   } catch {
     /* ignore */
   }

@@ -13,7 +13,7 @@
 export type SourceModality = 'bag' | 'video' | 'audio' | 'text'
 
 const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.mkv', '.avi']
-const AUDIO_EXTS = ['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac']
+const AUDIO_EXTS = ['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac', '.dat']
 const TEXT_EXTS = ['.txt', '.json', '.md', '.csv']
 
 export function isBagFileName(name: string): boolean {

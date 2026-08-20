@@ -12,6 +12,7 @@ SDK_ROOT = REPO_ROOT / "piplinesdk"
 
 CONFIG_PATH = SHARED_ROOT / "config.yaml"
 TAXONOMY_PATH = SHARED_ROOT / "config" / "oms_label_taxonomy.yaml"
+AUDIO_NVH_TAXONOMY_PATH = SHARED_ROOT / "config" / "audio_nvh_taxonomy.yaml"
 ENV_PATH = REPO_ROOT / ".env"
 
 HMI_BACKEND_ROOT = HMI_ROOT / "backend"

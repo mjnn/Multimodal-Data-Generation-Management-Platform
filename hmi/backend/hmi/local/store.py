@@ -84,10 +84,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
           run_id TEXT PRIMARY KEY,
           label TEXT NOT NULL,
           started_at TEXT NOT NULL,
-          created_at TEXT NOT NULL
+          created_at TEXT NOT NULL,
+          data_type_id TEXT
         );
         """
     )
+    exec_cols = {row[1] for row in conn.execute("PRAGMA table_info(pipeline_execution)")}
+    if exec_cols and "data_type_id" not in exec_cols:
+        conn.execute("ALTER TABLE pipeline_execution ADD COLUMN data_type_id TEXT")
     from hmi.local.pipeline_execution import backfill_executions_from_runs
 
     backfill_executions_from_runs(conn)

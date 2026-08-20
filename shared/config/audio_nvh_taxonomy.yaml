@@ -1,0 +1,1458 @@
+version: audio_nvh-v2
+taxonomy_id: audio_nvh
+source: TAX-AUDIO-NVH-v2 HEAD 4ch SPL/noise ground truth
+label_count: 78
+excluded_labels: []
+notes:
+  spatial: inter-channel proxy only; no DOA / beamforming
+  json_ref_root: relative to runs/{run_id}/
+  level_class_thresholds_db:
+  - 70
+  - 85
+  - 100
+  label_stage: derive_nvh_labels; VL off by default
+labels:
+- 'no': 1
+  level_code: L0
+  level_name: 元数据
+  id: nvh.meta.format
+  name: 文件格式
+  definition: HEAD 采集文件格式标识
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - head_acoustics_hdf_v4
+    - wav
+    - other
+    derivation: auto
+    l2_source: head_meta.json.format
+  values_hint: auto
+  selection_reason: HEAD 采集文件格式标识
+- 'no': 2
+  level_code: L0
+  level_name: 元数据
+  id: nvh.meta.fs_hz
+  name: 采样率
+  definition: HEAD .dat 解析后的采样频率
+  dtype: float
+  value_schema:
+    type: float
+    unit: Hz
+    range_hint: 8000 ~ 192000
+    derivation: auto
+    l2_source: head_meta.json.fs_hz
+  values_hint: auto
+  selection_reason: HEAD .dat 解析后的采样频率
+- 'no': 3
+  level_code: L0
+  level_name: 元数据
+  id: nvh.meta.duration_s
+  name: 时长
+  definition: 有效 PCM 时长
+  dtype: float
+  value_schema:
+    type: float
+    unit: s
+    range_hint: '>0'
+    derivation: auto
+    l2_source: head_meta.json.duration_s
+  values_hint: auto
+  selection_reason: 有效 PCM 时长
+- 'no': 4
+  level_code: L0
+  level_name: 元数据
+  id: nvh.meta.n_channels
+  name: 通道数
+  definition: 同步声压通道数（HEAD 阵列通常为 4）
+  dtype: int
+  value_schema:
+    type: int
+    range_hint: 1 ~ 8
+    derivation: auto
+    l2_source: head_meta.json.n_channels
+  values_hint: auto
+  selection_reason: 同步声压通道数（HEAD 阵列通常为 4）
+- 'no': 5
+  level_code: L0
+  level_name: 元数据
+  id: nvh.meta.unit
+  name: 物理单位
+  definition: 时域样本物理单位；本切片固定 Pa
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - Pa
+    derivation: auto
+    l2_source: head_meta.json.unit
+  values_hint: auto
+  selection_reason: 时域样本物理单位；本切片固定 Pa
+- 'no': 6
+  level_code: L0
+  level_name: 元数据
+  id: nvh.meta.channel_layout
+  name: 通道布局
+  definition: 通道名序列；HEAD 默认 VL_VR_HL_HR
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - VL_VR_HL_HR
+    - other
+    derivation: auto
+    l2_source: head_meta.json.channels[].name
+  values_hint: auto
+  selection_reason: 通道名序列；HEAD 默认 VL_VR_HL_HR
+- 'no': 7
+  level_code: L0
+  level_name: 元数据
+  id: nvh.meta.channels
+  name: 通道校准信息
+  definition: 每通道名称、map factor、校准说明
+  dtype: composite
+  value_schema:
+    type: composite
+    fields:
+    - name: name
+      type: string
+    - name: map_factor
+      type: float
+    - name: calibration
+      type: string
+      optional: true
+    derivation: auto
+    l2_source: head_meta.json.channels
+  values_hint: auto
+  selection_reason: 每通道名称、map factor、校准说明
+- 'no': 8
+  level_code: L0
+  level_name: 元数据
+  id: nvh.meta.record_context
+  name: 录制场景说明
+  definition: 试验工况、车速、部位、测点文字描述
+  dtype: text
+  value_schema:
+    type: string
+    derivation: human
+  values_hint: human
+  selection_reason: 试验工况、车速、部位、测点文字描述
+- 'no': 9
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.leq_db_mean
+  name: 四通道 Leq 均值
+  definition: mean(ch.leq_db)，参考 2e-05 Pa
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/summary.json.channels[].leq_db
+  values_hint: auto
+  selection_reason: mean(ch.leq_db)，参考 2e-05 Pa
+- 'no': 10
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.leq_db_max
+  name: 四通道 Leq 最大
+  definition: max(ch.leq_db)
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/summary.json
+  values_hint: auto
+  selection_reason: max(ch.leq_db)
+- 'no': 11
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.leq_db_min
+  name: 四通道 Leq 最小
+  definition: min(ch.leq_db)
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/summary.json
+  values_hint: auto
+  selection_reason: min(ch.leq_db)
+- 'no': 12
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.leq_db_spread
+  name: 通道 Leq 极差
+  definition: max(ch.leq_db) − min(ch.leq_db)
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB
+    derivation: auto
+    l2_source: audio_spec/summary.json
+  values_hint: auto
+  selection_reason: max(ch.leq_db) − min(ch.leq_db)
+- 'no': 13
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.leq_db_std
+  name: 通道 Leq 标准差
+  definition: std(ch.leq_db)
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB
+    derivation: auto
+    l2_source: audio_spec/summary.json
+  values_hint: auto
+  selection_reason: std(ch.leq_db)
+- 'no': 14
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.rms_pa_mean
+  name: 四通道 RMS 均值
+  definition: mean(ch.rms_pa)
+  dtype: float
+  value_schema:
+    type: float
+    unit: Pa
+    derivation: auto
+    l2_source: audio_spec/summary.json.channels[].rms_pa
+  values_hint: auto
+  selection_reason: mean(ch.rms_pa)
+- 'no': 15
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.peak_pa_max
+  name: 全 clip 峰值声压
+  definition: max(|pcm_pa|) 全矩阵
+  dtype: float
+  value_schema:
+    type: float
+    unit: Pa
+    derivation: auto
+    l2_source: pcm_pa.npy
+  values_hint: auto
+  selection_reason: max(|pcm_pa|) 全矩阵
+- 'no': 16
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.peak_db_max
+  name: 全 clip 峰值 SPL
+  definition: 20*log10(peak_pa / 20µPa)
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: pcm_pa.npy
+  values_hint: auto
+  selection_reason: 20*log10(peak_pa / 20µPa)
+- 'no': 17
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.dynamic_range_db
+  name: 动态范围
+  definition: 全通道 spl_timeline Lmax − Lmin
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 全通道 spl_timeline Lmax − Lmin
+- 'no': 18
+  level_code: L1.1
+  level_name: 片段级声压
+  id: nvh.clip.spl.level_class
+  name: 声压等级分档
+  definition: 由 leq_db_mean 映射：<70 low / 70–85 medium / 85–100 high / >100 very_high（固定阈值，可后续改配置表）
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - low
+    - medium
+    - high
+    - very_high
+    derivation: semi
+    l2_source: nvh.clip.spl.leq_db_mean
+  values_hint: semi
+  selection_reason: 由 leq_db_mean 映射：<70 low / 70–85 medium / 85–100 high / >100 very_high（固定阈值，可后续改配置表）
+- 'no': 19
+  level_code: L1.2
+  level_name: 片段级频域摘要
+  id: nvh.clip.spec.centroid_hz_mean
+  name: 平均谱质心
+  definition: 四通道 STFT 能量加权频率均值
+  dtype: float
+  value_schema:
+    type: float
+    unit: Hz
+    derivation: auto
+    l2_source: audio_spec/{ch}/stft_*.npy
+  values_hint: auto
+  selection_reason: 四通道 STFT 能量加权频率均值
+- 'no': 20
+  level_code: L1.2
+  level_name: 片段级频域摘要
+  id: nvh.clip.spec.dominant_fc_hz
+  name: 主导 1/3 倍频程中心频率
+  definition: 四通道 third_octave 能量最大 band 的 fc（能量加权）
+  dtype: float
+  value_schema:
+    type: float
+    unit: Hz
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: 四通道 third_octave 能量最大 band 的 fc（能量加权）
+- 'no': 21
+  level_code: L1.2
+  level_name: 片段级频域摘要
+  id: nvh.clip.spec.low_mid_high_ratio
+  name: 低/中/高频能量比
+  definition: 20–500 / 500–2000 / 2–20k Hz 功率比（dB）
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB
+    fields:
+    - name: low_db
+      type: float
+      unit: dB_SPL
+    - name: mid_db
+      type: float
+      unit: dB_SPL
+    - name: high_db
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: 20–500 / 500–2000 / 2–20k Hz 功率比（dB）
+- 'no': 22
+  level_code: L1.2
+  level_name: 片段级频域摘要
+  id: nvh.clip.spec.tonality_index
+  name: 纯音感指数
+  definition: max(spl)−median(spl) 相对 15 dB 归一化到 0–1，四通道均值
+  dtype: float
+  value_schema:
+    type: float
+    range_hint: 0 ~ 1
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: max(spl)−median(spl) 相对 15 dB 归一化到 0–1，四通道均值
+- 'no': 23
+  level_code: L1.2
+  level_name: 片段级频域摘要
+  id: nvh.clip.spec.broadband_flatness
+  name: 宽带平坦度
+  definition: 1/3 oct 谱几何均值 / 算术均值，1=完全平坦
+  dtype: float
+  value_schema:
+    type: float
+    range_hint: 0 ~ 1
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: 1/3 oct 谱几何均值 / 算术均值，1=完全平坦
+- 'no': 24
+  level_code: L1.2
+  level_name: 片段级频域摘要
+  id: nvh.clip.spec.spectral_slope_db_oct
+  name: 谱斜率
+  definition: 100 Hz–8 kHz 线性回归斜率
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB/oct
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: 100 Hz–8 kHz 线性回归斜率
+- 'no': 25
+  level_code: L1.3
+  level_name: 片段级时域统计
+  id: nvh.clip.time.lmax_db
+  name: Lmax
+  definition: 全通道 spl_timeline 最大值
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 全通道 spl_timeline 最大值
+- 'no': 26
+  level_code: L1.3
+  level_name: 片段级时域统计
+  id: nvh.clip.time.lmin_db
+  name: Lmin
+  definition: 全通道 spl_timeline 最小值
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 全通道 spl_timeline 最小值
+- 'no': 27
+  level_code: L1.3
+  level_name: 片段级时域统计
+  id: nvh.clip.time.l10_db
+  name: L10
+  definition: 合并 timeline 10% 超越级
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 合并 timeline 10% 超越级
+- 'no': 28
+  level_code: L1.3
+  level_name: 片段级时域统计
+  id: nvh.clip.time.l50_db
+  name: L50
+  definition: 50% 超越级
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 50% 超越级
+- 'no': 29
+  level_code: L1.3
+  level_name: 片段级时域统计
+  id: nvh.clip.time.l90_db
+  name: L90
+  definition: 90% 超越级（背景噪声近似）
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 90% 超越级（背景噪声近似）
+- 'no': 30
+  level_code: L1.3
+  level_name: 片段级时域统计
+  id: nvh.clip.time.crest_factor_db
+  name: 峰值因子
+  definition: Lmax − Leq_mean
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB
+    derivation: auto
+    l2_source: nvh.clip.time.lmax_db,nvh.clip.spl.leq_db_mean
+  values_hint: auto
+  selection_reason: Lmax − Leq_mean
+- 'no': 31
+  level_code: L1.3
+  level_name: 片段级时域统计
+  id: nvh.clip.time.steady_state
+  name: 稳态段判定
+  definition: 中间 80% 时长 spl_db 标准差 < 3 dB
+  dtype: bool
+  value_schema:
+    type: bool
+    values:
+    - 'true'
+    - 'false'
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 中间 80% 时长 spl_db 标准差 < 3 dB
+- 'no': 32
+  level_code: L1.3
+  level_name: 片段级时域统计
+  id: nvh.clip.time.active_ratio
+  name: 有效声压占比
+  definition: SPL > (Leq−10 dB) 的时间占比
+  dtype: float
+  value_schema:
+    type: float
+    range_hint: 0 ~ 1
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: SPL > (Leq−10 dB) 的时间占比
+- 'no': 33
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.leq_db
+  name: 各通道 Leq
+  definition: 全 clip 等效连续声压级
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB_SPL
+    fields:
+    - name: VL
+      type: float
+      unit: dB_SPL
+    - name: VR
+      type: float
+      unit: dB_SPL
+    - name: HL
+      type: float
+      unit: dB_SPL
+    - name: HR
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/summary.json
+  values_hint: auto
+  selection_reason: 全 clip 等效连续声压级
+- 'no': 34
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.lmax_db
+  name: 各通道 Lmax
+  definition: spl_timeline 最大值
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB_SPL
+    fields:
+    - name: VL
+      type: float
+      unit: dB_SPL
+    - name: VR
+      type: float
+      unit: dB_SPL
+    - name: HL
+      type: float
+      unit: dB_SPL
+    - name: HR
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: spl_timeline 最大值
+- 'no': 35
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.lmin_db
+  name: 各通道 Lmin
+  definition: spl_timeline 最小值
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB_SPL
+    fields:
+    - name: VL
+      type: float
+      unit: dB_SPL
+    - name: VR
+      type: float
+      unit: dB_SPL
+    - name: HL
+      type: float
+      unit: dB_SPL
+    - name: HR
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: spl_timeline 最小值
+- 'no': 36
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.l10_db
+  name: 各通道 L10
+  definition: 10% 超越级
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB_SPL
+    fields:
+    - name: VL
+      type: float
+      unit: dB_SPL
+    - name: VR
+      type: float
+      unit: dB_SPL
+    - name: HL
+      type: float
+      unit: dB_SPL
+    - name: HR
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 10% 超越级
+- 'no': 37
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.l90_db
+  name: 各通道 L90
+  definition: 90% 超越级
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB_SPL
+    fields:
+    - name: VL
+      type: float
+      unit: dB_SPL
+    - name: VR
+      type: float
+      unit: dB_SPL
+    - name: HL
+      type: float
+      unit: dB_SPL
+    - name: HR
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 90% 超越级
+- 'no': 38
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.peak_pa
+  name: 各通道峰值 Pa
+  definition: max |waveform|
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: Pa
+    fields:
+    - name: VL
+      type: float
+      unit: Pa
+    - name: VR
+      type: float
+      unit: Pa
+    - name: HL
+      type: float
+      unit: Pa
+    - name: HR
+      type: float
+      unit: Pa
+    derivation: auto
+    l2_source: pcm_pa.npy
+  values_hint: auto
+  selection_reason: max |waveform|
+- 'no': 39
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.rms_pa
+  name: 各通道 RMS Pa
+  definition: summary rms_pa
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: Pa
+    fields:
+    - name: VL
+      type: float
+      unit: Pa
+    - name: VR
+      type: float
+      unit: Pa
+    - name: HL
+      type: float
+      unit: Pa
+    - name: HR
+      type: float
+      unit: Pa
+    derivation: auto
+    l2_source: audio_spec/summary.json
+  values_hint: auto
+  selection_reason: summary rms_pa
+- 'no': 40
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.crest_factor_db
+  name: 各通道峰值因子
+  definition: Lmax − Leq
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB
+    fields:
+    - name: VL
+      type: float
+      unit: dB
+    - name: VR
+      type: float
+      unit: dB
+    - name: HL
+      type: float
+      unit: dB
+    - name: HR
+      type: float
+      unit: dB
+    derivation: auto
+    l2_source: derived
+  values_hint: auto
+  selection_reason: Lmax − Leq
+- 'no': 41
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.low_band_db
+  name: 低频带 Leq
+  definition: 20–500 Hz 1/3 oct 功率和
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB_SPL
+    fields:
+    - name: VL
+      type: float
+      unit: dB_SPL
+    - name: VR
+      type: float
+      unit: dB_SPL
+    - name: HL
+      type: float
+      unit: dB_SPL
+    - name: HR
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: 20–500 Hz 1/3 oct 功率和
+- 'no': 42
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.mid_band_db
+  name: 中频带 Leq
+  definition: 500–2000 Hz
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB_SPL
+    fields:
+    - name: VL
+      type: float
+      unit: dB_SPL
+    - name: VR
+      type: float
+      unit: dB_SPL
+    - name: HL
+      type: float
+      unit: dB_SPL
+    - name: HR
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: 500–2000 Hz
+- 'no': 43
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.high_band_db
+  name: 高频带 Leq
+  definition: 2–20 kHz
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB_SPL
+    fields:
+    - name: VL
+      type: float
+      unit: dB_SPL
+    - name: VR
+      type: float
+      unit: dB_SPL
+    - name: HL
+      type: float
+      unit: dB_SPL
+    - name: HR
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: 2–20 kHz
+- 'no': 44
+  level_code: L2
+  level_name: 通道级
+  id: nvh.ch.dominant_fc_hz
+  name: 各通道主导频率
+  definition: third_octave 峰值 fc
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: Hz
+    fields:
+    - name: VL
+      type: float
+      unit: Hz
+    - name: VR
+      type: float
+      unit: Hz
+    - name: HL
+      type: float
+      unit: Hz
+    - name: HR
+      type: float
+      unit: Hz
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: third_octave 峰值 fc
+- 'no': 45
+  level_code: L3
+  level_name: 频域明细
+  id: nvh.band.third_octave
+  name: 1/3 倍频程谱索引
+  definition: 各通道 third_octave.json 路径索引
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: per-channel [{fc_hz, spl_db}, ...]
+    derivation: auto
+    l2_source: audio_spec/{ch}/third_octave.json
+  values_hint: auto
+  selection_reason: 各通道 third_octave.json 路径索引
+- 'no': 46
+  level_code: L3
+  level_name: 频域明细
+  id: nvh.band.third_octave_matrix
+  name: 四通道 1/3 倍频程矩阵
+  definition: 聚合 {VL,VR,HL,HR} → [{fc_hz, spl_db}]
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: '{VL:[...], VR:[...], HL:[...], HR:[...]}'
+    derivation: auto
+    l2_source: audio_spec/third_octave_matrix.json
+  values_hint: auto
+  selection_reason: 聚合 {VL,VR,HL,HR} → [{fc_hz, spl_db}]
+- 'no': 47
+  level_code: L3
+  level_name: 频域明细
+  id: nvh.band.peak_list
+  name: 显著谱峰列表
+  definition: STFT 局部峰值 top-N：{fc_hz, spl_db, ch, bw_hz}
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: '[{fc_hz, spl_db, ch, bw_hz}]'
+    derivation: auto
+    l2_source: audio_spec/{ch}/stft_*.npy
+  values_hint: auto
+  selection_reason: STFT 局部峰值 top-N：{fc_hz, spl_db, ch, bw_hz}
+- 'no': 48
+  level_code: L3
+  level_name: 频域明细
+  id: nvh.band.masking_band
+  name: 掩蔽频带
+  definition: 人工标注主听频段 {f_lo, f_hi}
+  dtype: composite
+  value_schema:
+    type: composite
+    fields:
+    - name: f_lo_hz
+      type: float
+      unit: Hz
+    - name: f_hi_hz
+      type: float
+      unit: Hz
+    derivation: semi
+  values_hint: semi
+  selection_reason: 人工标注主听频段 {f_lo, f_hi}
+- 'no': 49
+  level_code: L3
+  level_name: 频域明细
+  id: nvh.band.tonal_components
+  name: 纯音成分
+  definition: 自动检测 + 人工确认的 tonal peaks
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: '[{fc_hz, spl_db, prominence_db, confirmed}]'
+    derivation: semi
+    l2_source: audio_spec/{ch}/stft_*.npy
+  values_hint: semi
+  selection_reason: 自动检测 + 人工确认的 tonal peaks
+- 'no': 50
+  level_code: L3
+  level_name: 频域明细
+  id: nvh.band.stft_ref
+  name: STFT 产物引用
+  definition: '{ch: audio_spec/{ch}/stft_mag.npy}'
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: per-channel npy path map
+    derivation: auto
+    l2_source: audio_spec/{ch}/stft_*.npy
+  values_hint: auto
+  selection_reason: '{ch: audio_spec/{ch}/stft_mag.npy}'
+- 'no': 51
+  level_code: L3
+  level_name: 频域明细
+  id: nvh.band.mel_ref
+  name: Mel 谱引用
+  definition: mel_matrix.npy 路径
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: per-channel npy path map
+    derivation: auto
+    l2_source: audio_spec/{ch}/mel_matrix.npy
+  values_hint: auto
+  selection_reason: mel_matrix.npy 路径
+- 'no': 52
+  level_code: L3
+  level_name: 频域明细
+  id: nvh.band.a_weighted_leq_db
+  name: A 计权 Leq
+  definition: 对 PCM 应用 A-weighting 后算 Leq（扩展算子）
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: dB(A)
+    fields:
+    - name: VL
+      type: float
+      unit: dB(A)
+    - name: VR
+      type: float
+      unit: dB(A)
+    - name: HL
+      type: float
+      unit: dB(A)
+    - name: HR
+      type: float
+      unit: dB(A)
+    derivation: auto
+    l2_source: pcm_pa.npy
+  values_hint: 对标 dB(A) 规范
+  selection_reason: 对标 dB(A) 规范
+- 'no': 53
+  level_code: L4
+  level_name: 时域明细
+  id: nvh.time.spl_timeline_ref
+  name: SPL 时间曲线引用
+  definition: '{VL,VR,HL,HR} → spl_timeline.jsonl'
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: per-channel jsonl [{t_s, spl_db}]
+    path_map_keys:
+    - VL
+    - VR
+    - HL
+    - HR
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: '{VL,VR,HL,HR} → spl_timeline.jsonl'
+- 'no': 54
+  level_code: L4
+  level_name: 时域明细
+  id: nvh.time.steady_window
+  name: 稳态分析窗
+  definition: 中间稳态窗 {t_start_s, t_end_s, leq_db}
+  dtype: composite
+  value_schema:
+    type: composite
+    fields:
+    - name: t_start_s
+      type: float
+      unit: s
+    - name: t_end_s
+      type: float
+      unit: s
+    - name: leq_db
+      type: float
+      unit: dB_SPL
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 中间稳态窗 {t_start_s, t_end_s, leq_db}
+- 'no': 55
+  level_code: L4
+  level_name: 时域明细
+  id: nvh.time.transient_events
+  name: 瞬态事件列表
+  definition: 超 Leq+6 dB 且 <200 ms 的脉冲 [{t_s, ch, peak_db, dur_ms}]
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: '[{t_s, ch, peak_db, dur_ms}]'
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 超 Leq+6 dB 且 <200 ms 的脉冲 [{t_s, ch, peak_db, dur_ms}]
+- 'no': 56
+  level_code: L4
+  level_name: 时域明细
+  id: nvh.time.modulation_index
+  name: 调制/波动指数
+  definition: spl_timeline 一阶差分 RMS / 均值
+  dtype: float
+  value_schema:
+    type: float
+    range_hint: 0 ~ 1
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: spl_timeline 一阶差分 RMS / 均值
+- 'no': 57
+  level_code: L4
+  level_name: 时域明细
+  id: nvh.time.onset_count
+  name: 起振次数
+  definition: 能量上升沿检测计数
+  dtype: int
+  value_schema:
+    type: int
+    range_hint: '>=0'
+    derivation: auto
+    l2_source: audio_spec/{ch}/spl_timeline.jsonl
+  values_hint: auto
+  selection_reason: 能量上升沿检测计数
+- 'no': 58
+  level_code: L4
+  level_name: 时域明细
+  id: nvh.time.waveform_ref
+  name: 波形预览引用
+  definition: waveform.json 路径
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: per-channel waveform.json
+    derivation: auto
+    l2_source: audio_spec/{ch}/waveform.json
+  values_hint: auto
+  selection_reason: waveform.json 路径
+- 'no': 59
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.lr_imbalance_db
+  name: 左右不平衡
+  definition: 20*log10(mean(VL,HL)/mean(VR,HR)) 基于线性功率。通道间 proxy，非 DOA / 无波束成形
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB
+    derivation: auto
+    l2_source: nvh.ch.leq_db
+  values_hint: 通道间 proxy，非 DOA / 无波束成形
+  selection_reason: 通道间 proxy，非 DOA / 无波束成形
+- 'no': 60
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.fb_imbalance_db
+  name: 前后不平衡
+  definition: 20*log10(mean(VL,VR)/mean(HL,HR))。通道间 proxy，非 DOA / 无波束成形
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB
+    derivation: auto
+    l2_source: nvh.ch.leq_db
+  values_hint: 通道间 proxy，非 DOA / 无波束成形
+  selection_reason: 通道间 proxy，非 DOA / 无波束成形
+- 'no': 61
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.max_interchannel_delta_db
+  name: 最大通道间 Leq 差
+  definition: max |Li−Lj|
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB
+    derivation: auto
+    l2_source: nvh.ch.leq_db
+  values_hint: auto
+  selection_reason: max |Li−Lj|
+- 'no': 62
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.energy_centroid_lr
+  name: 左右能量重心
+  definition: (E_left−E_right)/(E_left+E_right)，E=Leq 线性功率，范围 −1~1
+  dtype: float
+  value_schema:
+    type: float
+    range_hint: -1 ~ 1
+    derivation: auto
+    l2_source: nvh.ch.leq_db
+  values_hint: auto
+  selection_reason: (E_left−E_right)/(E_left+E_right)，E=Leq 线性功率，范围 −1~1
+- 'no': 63
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.energy_centroid_fb
+  name: 前后能量重心
+  definition: 前 vs 后能量重心，范围 −1~1
+  dtype: float
+  value_schema:
+    type: float
+    range_hint: -1 ~ 1
+    derivation: auto
+    l2_source: nvh.ch.leq_db
+  values_hint: auto
+  selection_reason: 前 vs 后能量重心，范围 −1~1
+- 'no': 64
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.correlation_matrix
+  name: 通道互相关系数
+  definition: 4×4 Pearson r，由 pcm_pa 计算。通道间 proxy，非 DOA / 无波束成形
+  dtype: json_ref
+  value_schema:
+    type: json_ref
+    fields:
+    - name: _ref
+      type: string
+      description: 相对 runs/{run_id}/ 的路径
+    - name: _sha256
+      type: string
+      optional: true
+    content: 4x4 float matrix, channel order VL VR HL HR
+    derivation: auto
+    l2_source: pcm_pa.npy
+  values_hint: 通道间 proxy，非 DOA / 无波束成形
+  selection_reason: 通道间 proxy，非 DOA / 无波束成形
+- 'no': 65
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.coherence_1khz
+  name: 1kHz 相干系数
+  definition: STFT 1 kHz bin 跨通道 coherence。无几何时不解读 DOA。
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: coherence
+    fields:
+    - name: VL
+      type: float
+      unit: coherence
+    - name: VR
+      type: float
+      unit: coherence
+    - name: HL
+      type: float
+      unit: coherence
+    - name: HR
+      type: float
+      unit: coherence
+    range_hint: 0 ~ 1
+    derivation: auto
+    l2_source: audio_spec/{ch}/stft_*.npy
+  values_hint: 通道间 proxy，非 DOA / 无波束成形
+  selection_reason: 通道间 proxy，非 DOA / 无波束成形
+- 'no': 66
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.phase_diff_deg_1khz
+  name: 1kHz 相位差
+  definition: 仅供参考，无阵列几何时不解读 DOA。
+  dtype: composite
+  value_schema:
+    type: composite
+    unit: deg
+    fields:
+    - name: VL
+      type: float
+      unit: deg
+    - name: VR
+      type: float
+      unit: deg
+    - name: HL
+      type: float
+      unit: deg
+    - name: HR
+      type: float
+      unit: deg
+    derivation: auto
+    l2_source: audio_spec/{ch}/stft_*.npy
+  values_hint: 通道间 proxy，非 DOA / 无波束成形
+  selection_reason: 通道间 proxy，非 DOA / 无波束成形
+- 'no': 67
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.channel_balance_grade
+  name: 通道平衡等级
+  definition: spread=max−min Leq：<1 excellent / <3 good / <6 fair / else poor
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - excellent
+    - good
+    - fair
+    - poor
+    derivation: semi
+    l2_source: nvh.clip.spl.leq_db_spread
+  values_hint: semi
+  selection_reason: spread=max−min Leq：<1 excellent / <3 good / <6 fair / else poor
+- 'no': 68
+  level_code: L5
+  level_name: 通道间空间proxy
+  id: nvh.spatial.symmetry_flag
+  name: 左右对称性
+  definition: '|lr_imbalance_db| < 2 dB'
+  dtype: bool
+  value_schema:
+    type: bool
+    values:
+    - 'true'
+    - 'false'
+    derivation: auto
+    l2_source: nvh.spatial.lr_imbalance_db
+  values_hint: auto
+  selection_reason: '|lr_imbalance_db| < 2 dB'
+- 'no': 69
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.noise_category
+  name: 主导噪音类别
+  definition: 单一主导类别（enum_tree，含动力总成子类）
+  dtype: enum_tree
+  value_schema:
+    type: enum_tree
+    values:
+    - id: powertrain
+      children:
+      - id: engine
+      - id: motor
+      - id: transmission
+    - id: road
+    - id: wind
+    - id: brake
+    - id: hvac
+    - id: electrical
+    - id: structure
+    - id: impulse
+    - id: tonal
+    - id: broadband
+    - id: speech
+    - id: media
+    - id: unknown
+    derivation: human
+  values_hint: human
+  selection_reason: 单一主导类别（enum_tree，含动力总成子类）
+- 'no': 70
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.noise_sources
+  name: 噪音来源
+  definition: 多选来源列表
+  dtype: composite
+  value_schema:
+    type: enum
+    multi: true
+    values:
+    - engine
+    - tire
+    - aero
+    - fan
+    - compressor
+    - bearing
+    - panel_rattle
+    - road_texture
+    - exhaust
+    - inverter
+    - other
+    derivation: human
+  values_hint: human
+  selection_reason: 多选来源列表
+- 'no': 71
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.tonal_annoyance
+  name: 纯音烦扰度
+  definition: 主观纯音烦扰
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - none
+    - low
+    - medium
+    - high
+    derivation: human
+  values_hint: human
+  selection_reason: 主观纯音烦扰
+- 'no': 72
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.broadband_annoyance
+  name: 宽带烦扰度
+  definition: 主观宽带烦扰
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - none
+    - low
+    - medium
+    - high
+    derivation: human
+  values_hint: human
+  selection_reason: 主观宽带烦扰
+- 'no': 73
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.quality_grade
+  name: 主观品质等级
+  definition: NVH 主观打分档
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - A
+    - B
+    - C
+    - D
+    derivation: human
+  values_hint: human
+  selection_reason: NVH 主观打分档
+- 'no': 74
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.spec_compliance
+  name: 规范符合性
+  definition: 相对试验规范的符合性判定
+  dtype: enum
+  value_schema:
+    type: enum
+    values:
+    - pass
+    - fail
+    - marginal
+    - na
+    derivation: human
+  values_hint: human
+  selection_reason: 相对试验规范的符合性判定
+- 'no': 75
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.spec_limit_db
+  name: 适用限值
+  definition: 试验规范中的声压阈值
+  dtype: float
+  value_schema:
+    type: float
+    unit: dB_SPL
+    derivation: human
+  values_hint: human
+  selection_reason: 试验规范中的声压阈值
+- 'no': 76
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.test_point
+  name: 测点位置
+  definition: 如「左前门板」「boardline」
+  dtype: text
+  value_schema:
+    type: string
+    derivation: human
+  values_hint: human
+  selection_reason: 如「左前门板」「boardline」
+- 'no': 77
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.annotator_notes
+  name: 校核备注
+  definition: 自由文本
+  dtype: text
+  value_schema:
+    type: string
+    derivation: human
+  values_hint: human
+  selection_reason: 自由文本
+- 'no': 78
+  level_code: L6
+  level_name: 语义主观
+  id: nvh.sem.ai_hypothesis
+  name: AI 辅助猜测
+  definition: 可选 VL label stage 预填；首版 deriver 不写入。不覆盖人工字段。
+  dtype: text
+  value_schema:
+    type: string
+    derivation: semi
+  values_hint: semi
+  selection_reason: 可选 VL label stage 预填；首版 deriver 不写入。不覆盖人工字段。

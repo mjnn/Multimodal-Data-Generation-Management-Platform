@@ -119,6 +119,9 @@ def ensure_schema() -> None:
     from hmi.taxonomy_proposal_db import ensure_taxonomy_proposal_schema
 
     ensure_taxonomy_proposal_schema()
+    from hmi.platform.store import ensure_platform_schema
+
+    ensure_platform_schema()
 
 
 @contextmanager

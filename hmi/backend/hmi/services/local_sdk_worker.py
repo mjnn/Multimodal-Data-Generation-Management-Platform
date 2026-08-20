@@ -9,11 +9,12 @@ import subprocess
 import sys
 import threading
 import time
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from hmi.data_source import LOCAL_ROOT, REPO_ROOT, is_local_mode
+from hmi.data_source import LOCAL_OSS_ROOT, LOCAL_ROOT, REPO_ROOT, is_local_mode
 from hmi.db import cache_clear
 from hmi.local import bag_upload, pipeline_run as pr, store
 from hmi.local.bag_upload import resolve_local_bag_path
@@ -117,6 +118,225 @@ def _work_run_dir(clip_dir_name: str, clip_id: str) -> Path:
     return LOCAL_ROOT / "work" / "sdk_runs" / f"{safe}_{suffix}"
 
 
+def _platform_manifest_dir(run_id: str) -> Path:
+    return LOCAL_OSS_ROOT / "platform_runs" / run_id
+
+
+def _sync_platform_run_status(run_id: str) -> None:
+    from hmi.platform.store import get_run, set_run_status
+
+    plat = get_run(run_id)
+    if plat is None:
+        return
+    rows = store.query(
+        "SELECT status FROM pipeline_run WHERE run_id = ? ORDER BY clip_id",
+        (run_id,),
+    )
+    if not rows:
+        return
+    statuses = [str(r.get("status") or "pending").lower() for r in rows]
+    if any(s == "failed" for s in statuses):
+        set_run_status(run_id, "failed")
+    elif all(s in {"completed", "success"} for s in statuses):
+        label_rows = store.query(
+            """
+            SELECT clip_id, labels_json
+            FROM fact_clip_label
+            WHERE run_id = ? AND labels_json IS NOT NULL AND labels_json != '' AND labels_json != '{}'
+            ORDER BY clip_id
+            """,
+            (run_id,),
+        )
+        if label_rows:
+            if len(label_rows) == 1:
+                y = json.loads(str(label_rows[0].get("labels_json") or "{}"))
+            else:
+                y = {
+                    "clips": [
+                        {
+                            "clip_id": str(row.get("clip_id") or ""),
+                            "labels": json.loads(str(row.get("labels_json") or "{}")),
+                        }
+                        for row in label_rows
+                    ]
+                }
+            set_run_status(run_id, "labeled", y=y)
+        else:
+            set_run_status(run_id, "completed")
+    elif any(s == "running" for s in statuses):
+        set_run_status(run_id, "running")
+    else:
+        set_run_status(run_id, "queued")
+
+
+def _resolve_source_media_path(src: dict[str, Any], kind: str) -> str:
+    raw = str(src.get("local_path") or "").strip()
+    p = Path(raw) if raw else None
+    if p and p.is_file() and p.name == "source_manifest.json":
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            payload = {}
+        rel = str(payload.get(kind) or payload.get(f"{kind}_path") or "").strip()
+        cand = (p.parent / rel) if rel else None
+        if cand is not None and cand.is_file():
+            return str(cand.resolve())
+        for name in (f"{kind}.wav", f"{kind}.dat", f"{kind}.mp4", f"{kind}.txt"):
+            alt = p.parent / name
+            if alt.is_file():
+                return str(alt.resolve())
+    if p and p.is_file():
+        return str(p.resolve())
+    return raw
+
+
+def _build_platform_media_manifest(
+    *,
+    run_id: str,
+    sample_id: str,
+    sample_sources: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    by_kind: dict[str, dict[str, Any]] = {}
+    for src in sample_sources:
+        kind = str(src.get("kind") or "").strip().lower()
+        if kind in {"video", "audio", "text"}:
+            by_kind.setdefault(kind, src)
+    if not by_kind:
+        return None
+    if "image" in {str(src.get("kind") or "").strip().lower() for src in sample_sources}:
+        raise RuntimeError("image-only lake samples are not executable in this slice")
+    run_dir = _platform_manifest_dir(run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "clip_id": sample_id,
+        "source_name": sample_id[:32],
+        "modalities": sorted(by_kind),
+        "has_preencoded_video": "video" in by_kind,
+        "source_ids": [
+            str(s.get("source_id") or "").strip()
+            for s in sample_sources
+            if str(s.get("source_id") or "").strip()
+        ],
+        "sources_by_kind": {
+            kind: str(src.get("source_id") or "").strip()
+            for kind, src in by_kind.items()
+            if str(src.get("source_id") or "").strip()
+        },
+    }
+    for kind in ("video", "audio", "text"):
+        src = by_kind.get(kind)
+        abs_path = _resolve_source_media_path(src, kind) if src else ""
+        payload[kind] = abs_path or None
+        payload[f"{kind}_path"] = abs_path or None
+    manifest_path = run_dir / "source_manifest.json"
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "clip_id": sample_id,
+        "clip_dir_name": sample_id[:24],
+        "bag_oss_key": f"local://platform_runs/{run_id}/source_manifest.json",
+        "local_manifest_path": str(manifest_path),
+        "source_kind": "raw_media",
+    }
+
+
+def _compile_platform_run(run_id: str) -> dict[str, Any]:
+    from hmi.local.pipeline_execution import create_execution_record, execution_label_now
+    from hmi.platform.store import get_run, list_sample_sources, set_run_status
+
+    plat = get_run(run_id)
+    if plat is None:
+        raise RuntimeError(f"platform_run not found: {run_id}")
+    sample_sources = list_sample_sources(str(plat["sample_id"]))
+    if not sample_sources:
+        raise RuntimeError(f"platform_run sample has no sources: {plat['sample_id']}")
+
+    started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    create_execution_record(
+        run_id=run_id,
+        label=execution_label_now(),
+        started_at=started_at,
+        data_type_id=str(plat["data_type_id"]),
+    )
+
+    rosbag_sources = [s for s in sample_sources if str(s.get("kind") or "") == "rosbag"]
+    media_manifest = _build_platform_media_manifest(
+        run_id=run_id,
+        sample_id=str(plat["sample_id"]),
+        sample_sources=sample_sources,
+    )
+
+    ds = datetime.now(timezone.utc).strftime("%Y%m%d")
+    clip_count = 0
+    for src in rosbag_sources:
+        clip_id = str(src.get("source_id") or "").strip()
+        bag_oss_key = str(src.get("local_oss_key") or "").strip()
+        clip_dir_name = str(src.get("filename") or clip_id[:24]).strip() or clip_id[:24]
+        pr.upsert_clip_row(
+            clip_id=clip_id,
+            clip_dir_name=clip_dir_name,
+            content_hash=str(src.get("content_hash") or clip_id.replace("sha256:", ""))[:64],
+            bag_oss_key=bag_oss_key,
+            active_run_id=run_id,
+        )
+        pr.upsert_run(
+            run_id=run_id,
+            clip_id=clip_id,
+            ds=ds,
+            status="pending",
+            started_at=started_at,
+            reset_started_at=True,
+        )
+        pr.init_sdk_steps(run_id=run_id, clip_id=clip_id, ds=ds)
+        pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_discover", status="success")
+        clip_count += 1
+
+    if media_manifest is not None:
+        clip_id = str(media_manifest["clip_id"])
+        pr.upsert_clip_row(
+            clip_id=clip_id,
+            clip_dir_name=str(media_manifest["clip_dir_name"]),
+            content_hash=clip_id.replace("sha256:", "")[:64],
+            bag_oss_key=str(media_manifest["bag_oss_key"]),
+            active_run_id=run_id,
+        )
+        pr.upsert_run(
+            run_id=run_id,
+            clip_id=clip_id,
+            ds=ds,
+            status="pending",
+            started_at=started_at,
+            reset_started_at=True,
+        )
+        pr.init_sdk_steps(run_id=run_id, clip_id=clip_id, ds=ds)
+        pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_discover", status="success")
+        clip_count += 1
+
+    if clip_count <= 0:
+        set_run_status(run_id, "failed")
+        raise RuntimeError("platform_run compiled zero executable clips")
+    set_run_status(run_id, "running")
+    return {"clip_count": clip_count}
+
+
+def _claim_platform_runs(*, limit: int) -> None:
+    from hmi.platform.store import list_runs_by_status, try_claim_run
+
+    candidates = list_runs_by_status(["queued"], limit=max(1, limit))
+    for row in candidates:
+        run_id = str(row.get("run_id") or "")
+        if not run_id or not try_claim_run(run_id):
+            continue
+        try:
+            _compile_platform_run(run_id)
+            logger.info("compiled platform_run=%s into local sdk queue", run_id)
+        except Exception as exc:  # noqa: BLE001
+            from hmi.platform.store import set_run_status
+
+            logger.exception("compile platform_run failed run_id=%s", run_id)
+            set_run_status(run_id, "failed")
+            _status["last_error"] = str(exc)
+
+
 def _client_config_overrides() -> dict[str, Any]:
     from hmi.local.pipeline_settings import get_pipeline_settings, omni_label_prompt_overrides_for_worker
 
@@ -132,6 +352,204 @@ def _client_config_overrides() -> dict[str, Any]:
     if prompt_overrides:
         out["omni_label_prompt"] = prompt_overrides
     return out
+
+
+def _run_audio_array_spec(
+    *,
+    work_run: Path,
+    source_manifest_path: Path | None,
+    clip_id: str,
+    run_id: str,
+    ds: str,
+    bag_oss_key: str,
+    recipe: dict[str, Any] | None = None,
+) -> None:
+    from hmi.local.audio_spectrum import analyze_pcm_pa
+    from hmi.local.head_dat import parse_head_dat_bytes
+
+    if source_manifest_path is None or not source_manifest_path.is_file():
+        raise RuntimeError("audio_array_spec requires source_manifest")
+    base = source_manifest_path.parent
+    man = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    pcm_path = base / "pcm_pa.npy"
+    meta_path = base / "head_meta.json"
+    pcm_pa = None
+    fs = None
+    ch_names: list[str] = []
+    loaded_meta_path: Path | None = None
+
+    def _load_pcm_from_paths(pcm_file: Path, meta_file: Path) -> None:
+        nonlocal pcm_pa, fs, ch_names, loaded_meta_path
+        import numpy as np
+
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        pcm_pa = np.load(pcm_file)
+        fs = float(meta["fs_hz"])
+        ch_names = [str(c.get("name") or f"ch{i+1}") for i, c in enumerate(meta.get("channels") or [])]
+        loaded_meta_path = meta_file
+
+    if pcm_path.is_file() and meta_path.is_file():
+        _load_pcm_from_paths(pcm_path, meta_path)
+    else:
+        audio_rel = str(man.get("audio") or man.get("audio_path") or "").strip()
+        audio_path = Path(audio_rel) if audio_rel and Path(audio_rel).is_file() else None
+        if audio_path is not None:
+            src_pcm = audio_path.parent / "pcm_pa.npy"
+            src_meta = audio_path.parent / "head_meta.json"
+            if src_pcm.is_file() and src_meta.is_file():
+                _load_pcm_from_paths(src_pcm, src_meta)
+        if pcm_pa is None:
+            dat_path = base / "source.dat"
+            if not dat_path.is_file():
+                dat_path = audio_path if audio_path is not None else base / "audio.dat"
+            if dat_path.suffix.lower() != ".dat" or not dat_path.is_file():
+                raise RuntimeError(
+                    "audio_array_spec 需要 HEAD 麦克风阵列 .dat（或同目录 pcm_pa.npy + head_meta.json）；"
+                    f"当前源为 {dat_path.name if dat_path else '缺失'}，不能用 e2e/普通 wav 开跑"
+                )
+            parsed = parse_head_dat_bytes(dat_path.read_bytes())
+            pcm_pa = parsed["pcm_pa"]
+            fs = float(parsed["fs_hz"])
+            ch_names = [str(c.get("name") or f"ch{i+1}") for c in parsed["channels"]]
+
+    spec_dir = work_run / "audio_spec"
+    summary = analyze_pcm_pa(pcm_pa, fs, ch_names, spec_dir)
+    (work_run / "audio_spec_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    # Persist parse inputs next to L2 so deriver / artifacts are self-contained.
+    import shutil
+
+    import numpy as np
+
+    from hmi.local.nvh_deriver import (
+        apply_nvh_labels_to_facts,
+        derive_nvh_labels,
+        persist_nvh_labels_artifact,
+    )
+    from hmi.platform.store import lookup_or_record_product
+
+    # Product lineage: source → preprocess op → artifact (cache key for reuse).
+    audio_sid = str((man.get("sources_by_kind") or {}).get("audio") or "").strip()
+    input_ids = [audio_sid] if audio_sid else [
+        str(x).strip() for x in (man.get("source_ids") or []) if str(x).strip()
+    ]
+    if not input_ids:
+        input_ids = [clip_id]
+    product_specs = [
+        ("parse_head_dat", {"artifact": "pcm_pa.npy"}),
+        ("stft_spectrogram", {"artifact": "audio_spec"}),
+        ("mel_spectrogram", {"artifact": "audio_spec"}),
+        ("third_octave", {"artifact": "audio_spec"}),
+        ("spl_timeline", {"artifact": "audio_spec"}),
+    ]
+    for op_id, meta in product_specs:
+        rel = str(meta["artifact"])
+        art = work_run / rel
+        lookup_or_record_product(
+            input_ids=input_ids,
+            op_id=op_id,
+            params={"data_type_id": "audio_array_spec"},
+            artifact_path=str(art) if art.exists() or art.is_dir() else rel,
+            run_id=run_id,
+        )
+
+    if loaded_meta_path is not None and loaded_meta_path.is_file():
+        shutil.copy2(loaded_meta_path, work_run / "head_meta.json")
+    else:
+        (work_run / "head_meta.json").write_text(
+            json.dumps(
+                {
+                    "format": "head_acoustics_hdf_v4",
+                    "fs_hz": fs,
+                    "duration_s": float(pcm_pa.shape[0] / float(fs)),
+                    "n_channels": int(pcm_pa.shape[1]),
+                    "unit": "Pa",
+                    "channels": [
+                        {"name": n, "map_factor": 1.0}
+                        for n in ch_names
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    np.save(work_run / "pcm_pa.npy", pcm_pa)
+    nvh_labels = derive_nvh_labels(work_run, source_dir=base)
+    # L6 semantic AI: only when recipe stages.label.enabled (default heuristic).
+    label_stage = ((recipe or {}).get("stages") or {}).get("label") or {}
+    if bool(label_stage.get("enabled")):
+        from hmi.local.nvh_ai_label import fill_nvh_semantic_labels
+
+        nvh_labels = fill_nvh_semantic_labels(
+            work_run,
+            nvh_labels,
+            model=str(label_stage.get("model") or "nvh_sem_heuristic"),
+        )
+        logger.info(
+            "audio_array_spec semantic AI clip=%s run=%s model=%s mode=%s",
+            clip_id,
+            run_id,
+            (nvh_labels.get("_meta") or {}).get("ai_model"),
+            (nvh_labels.get("_meta") or {}).get("ai_mode"),
+        )
+    persist_nvh_labels_artifact(work_run, nvh_labels)
+
+    pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_infer", status="success")
+    pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_mc_write", status="running")
+    try:
+        from hmi.data_source import artifacts_dir
+        from hmi.local.oss_publish import mirror_artifacts_run_to_oss, write_local_dispatch_manifest
+
+        dest = artifacts_dir(clip_id, run_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        for path in work_run.rglob("*"):
+            if not path.is_file():
+                continue
+            target = dest / path.relative_to(work_run)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+        src_wav = Path(str(man.get("audio") or man.get("audio_path") or ""))
+        if src_wav.is_file():
+            preview = dest / "preview"
+            preview.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_wav, preview / "audio.wav")
+        pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_mc_write", status="success")
+        pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_upload", status="running")
+        n = mirror_artifacts_run_to_oss(clip_id, run_id)
+        if n <= 0:
+            raise RuntimeError("no files mirrored to local OSS")
+        write_local_dispatch_manifest(
+            clip_id=clip_id,
+            run_id=run_id,
+            bag_oss_key=bag_oss_key,
+            ds=ds,
+        )
+        apply_nvh_labels_to_facts(
+            clip_id=clip_id,
+            run_id=run_id,
+            ds=ds,
+            labels=nvh_labels,
+            update_platform_run=True,
+        )
+        pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_upload", status="success")
+        pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_dispatch", status="success")
+        pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="completed")
+    except Exception as exc:
+        pr.set_step(
+            run_id=run_id,
+            clip_id=clip_id,
+            ds=ds,
+            step_id="sdk_upload",
+            status="failed",
+            error_message=str(exc),
+        )
+        pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="failed")
+        cache_clear()
+        raise
+    cache_clear()
 
 
 def _run_sdk_and_ingest(
@@ -170,6 +588,28 @@ def _run_sdk_and_ingest(
     cache_clear()
 
     settings = get_pipeline_settings()
+    recipe: dict[str, Any] | None = None
+    try:
+        from hmi.local.pipeline_execution import get_execution_data_type_id
+        from hmi.platform.run_bind import overlay_pipeline_settings
+        from hmi.platform.store import get_data_type
+
+        dt_id = get_execution_data_type_id(run_id)
+        if dt_id:
+            recipe = get_data_type(dt_id)
+            if recipe:
+                settings = overlay_pipeline_settings(settings, recipe)
+                logger.info(
+                    "local SDK data_type overlay clip=%s run=%s type=%s label=%s embed=%s bbox=%s",
+                    clip_id,
+                    run_id,
+                    dt_id,
+                    recipe.get("stages", {}).get("label", {}).get("enabled"),
+                    recipe.get("stages", {}).get("embed", {}).get("enabled"),
+                    recipe.get("bbox", {}).get("enabled"),
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("data_type overlay skipped clip=%s run=%s: %s", clip_id, run_id, exc)
     try:
         assert_bbox_settings_runnable(settings)
     except RuntimeError as exc:
@@ -221,6 +661,25 @@ def _run_sdk_and_ingest(
         except Exception as exc:  # noqa: BLE001
             logger.warning("normalize source_manifest paths failed: %s", exc)
 
+    dt_id = None
+    try:
+        from hmi.local.pipeline_execution import get_execution_data_type_id
+
+        dt_id = get_execution_data_type_id(run_id)
+    except Exception:  # noqa: BLE001
+        dt_id = None
+    if dt_id == "audio_array_spec" and source_manifest_path is not None:
+        _run_audio_array_spec(
+            work_run=work_run,
+            source_manifest_path=source_manifest_path,
+            clip_id=clip_id,
+            run_id=run_id,
+            ds=ds,
+            bag_oss_key=bag_oss_key,
+            recipe=recipe,
+        )
+        return
+
     client_cfg = ClientConfig.from_env(taxonomy_path=_taxonomy_path())
     # Local / ECS pipeline worker always uses DashScope API; ignore MODEL_BACKEND=mc.
     client_cfg.model_backend = "api"
@@ -236,6 +695,11 @@ def _run_sdk_and_ingest(
         media_mode="local",
     )
     clip_cfg = _clip_config_from_settings()
+    recipe_req: dict[str, Any] = {}
+    if recipe is not None:
+        from hmi.platform.run_bind import overlay_run_request
+
+        recipe_req = overlay_run_request(recipe, settings)
     req = RunRequest(
         bag_path=bag_path,
         run_dir=work_run,
@@ -243,8 +707,12 @@ def _run_sdk_and_ingest(
         if (work_run / "source_manifest.json").is_file()
         else None,
         encode_plain=bool(settings.get("encode_plain", True)),
-        bbox_enabled=bool(settings.get("bbox_enabled", False)),
+        bbox_enabled=bool(
+            recipe_req.get("bbox_enabled", settings.get("bbox_enabled", False))
+        ),
         bbox_in_label_prompt=bool(settings.get("bbox_in_label_prompt", True)),
+        need_label=recipe_req.get("need_label"),
+        need_embed=recipe_req.get("need_embed"),
     )
     try:
         result = plan_and_run(
@@ -407,15 +875,33 @@ def _process_one_wrapper(row: dict[str, Any], *, bag_oss_key: str) -> None:
     global _active_jobs
     clip_id = str(row.get("clip_id") or "")
     run_id = str(row.get("run_id") or "")
+    ds = str(row.get("ds") or "")
     try:
         _status["last_clip_id"] = clip_id
         _status["last_run_id"] = run_id
         _status["last_error"] = None
         _process_one(row, bag_oss_key=bag_oss_key)
+        _sync_platform_run_status(run_id)
         _status["last_finished_at"] = datetime.now(timezone.utc).isoformat()
     except Exception as exc:
         logger.exception("local SDK job failed")
         _status["last_error"] = str(exc)
+        # Ensure UI does not stick on sdk_infer=running when the worker raised.
+        if clip_id and run_id and ds:
+            try:
+                pr.set_step(
+                    run_id=run_id,
+                    clip_id=clip_id,
+                    ds=ds,
+                    step_id="sdk_infer",
+                    status="failed",
+                    error_message=str(exc)[:500],
+                )
+                pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="failed")
+                cache_clear()
+            except Exception:  # noqa: BLE001
+                logger.exception("failed to mark sdk_infer failed after worker error")
+        _sync_platform_run_status(run_id)
     finally:
         with _lock:
             _active_jobs = max(0, _active_jobs - 1)
@@ -435,6 +921,7 @@ def _tick() -> None:
         slots = max_parallel - _active_jobs
         if slots <= 0:
             return
+    _claim_platform_runs(limit=max(slots, 1))
     pending = pr.list_runs_needing_sdk(limit=max(slots * 2, slots) if max_parallel > 1 else 1)
     if not pending:
         return

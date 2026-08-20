@@ -2,7 +2,6 @@ import {
   AuditOutlined,
   ApartmentOutlined,
   CheckCircleOutlined,
-  CloudServerOutlined,
   DatabaseOutlined,
   DeploymentUnitOutlined,
   FolderOpenOutlined,
@@ -18,7 +17,6 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import {
   canAccessDatasets,
-  canAccessOss,
   canAccessPipeline,
   canAccessReview,
   canBrowseTaxonomy,
@@ -35,9 +33,10 @@ import { parseReviewV2OpenMode } from '../utils/reviewConfidence'
 const { Header, Sider, Content } = Layout
 
 const ROUTE_LABELS: Record<string, string> = {
-  '/': '数据总览',
+  '/': '数据类型',
+  '/lake': '源湖入库',
   '/pipeline': '管线管理',
-  '/oss': 'OSS 管理',
+  '/oss': '源湖入库',
   '/review': '校核任务',
   '/review/confidence': '置信度校核',
   '/review/disputes': '置信度校核',
@@ -54,8 +53,14 @@ const ROUTE_LABELS: Record<string, string> = {
 function buildBreadcrumbs(pathname: string, search: string): { title: ReactNode }[] {
   const items: { title: ReactNode }[] = [{ title: <Link to="/">{APP_NAME}</Link> }]
 
+  if (pathname.startsWith('/w/')) {
+    items.push({ title: <Link to="/">数据类型</Link> })
+    items.push({ title: '工作区总览' })
+    return items
+  }
+
   if (pathname.startsWith('/clips/')) {
-    items.push({ title: <Link to="/">数据总览</Link> })
+    items.push({ title: <Link to="/">数据类型</Link> })
     items.push({ title: 'Clip 时间轴' })
     return items
   }
@@ -116,17 +121,15 @@ export function AppLayout() {
 
   const navItems: MenuProps['items'] = useMemo(() => {
     const roles = user?.roles
-    const browse: MenuProps['items'] = [{ key: '/', icon: <DatabaseOutlined />, label: '数据总览' }]
+    const browse: MenuProps['items'] = [{ key: '/', icon: <DatabaseOutlined />, label: '数据类型' }]
     if (canBrowseTaxonomy(roles)) {
       browse.push({ key: '/taxonomy', icon: <ApartmentOutlined />, label: '标签树' })
     }
 
     const workflow: MenuProps['items'] = []
     if (canAccessPipeline(roles)) {
+      workflow.push({ key: '/lake', icon: <DatabaseOutlined />, label: '源湖入库' })
       workflow.push({ key: '/pipeline', icon: <DeploymentUnitOutlined />, label: '管线管理' })
-    }
-    if (canAccessOss(roles)) {
-      workflow.push({ key: '/oss', icon: <CloudServerOutlined />, label: 'OSS 管理' })
     }
     if (canAccessReview(roles)) {
       workflow.push({ key: '/review/confidence', icon: <CheckCircleOutlined />, label: '校核任务' })
@@ -169,7 +172,7 @@ export function AppLayout() {
   const selected =
     flatKeys.find((k) => k !== '/' && location.pathname.startsWith(k)) ??
     (location.pathname.startsWith('/upload') && flatKeys.includes('/pipeline') ? '/pipeline' : undefined) ??
-    (location.pathname.startsWith('/clips') ? '/' : undefined) ??
+    (location.pathname.startsWith('/clips') || location.pathname.startsWith('/w/') ? '/' : undefined) ??
     (location.pathname.startsWith('/review') ? '/review/confidence' : '/')
 
   const breadcrumbs = buildBreadcrumbs(location.pathname, location.search)

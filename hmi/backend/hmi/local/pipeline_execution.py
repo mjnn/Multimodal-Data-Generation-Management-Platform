@@ -20,24 +20,50 @@ def execution_label_now() -> str:
     return datetime.now(_SH_TZ).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def create_execution_record(*, run_id: str, label: str, started_at: str) -> None:
+def create_execution_record(
+    *,
+    run_id: str,
+    label: str,
+    started_at: str,
+    data_type_id: str | None = None,
+) -> None:
     store.execute(
         """
-        INSERT OR REPLACE INTO pipeline_execution (run_id, label, started_at, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT OR REPLACE INTO pipeline_execution (run_id, label, started_at, created_at, data_type_id)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (run_id, label, started_at, started_at),
+        (run_id, label, started_at, started_at, data_type_id),
     )
 
 
-def enqueue_rosbags_batch(files: list[tuple[str, bytes]]) -> dict[str, Any]:
+def get_execution_data_type_id(run_id: str) -> str | None:
+    row = store.query_one(
+        "SELECT data_type_id FROM pipeline_execution WHERE run_id=?",
+        (run_id,),
+    )
+    if not row:
+        return None
+    val = row.get("data_type_id")
+    if val is None:
+        return None
+    text = str(val).strip()
+    return text or None
+
+
+def enqueue_rosbags_batch(
+    files: list[tuple[str, bytes]],
+    *,
+    data_type_id: str | None = None,
+) -> dict[str, Any]:
     if not files:
         raise ValueError("at least one .bag file required")
 
     run_id = str(uuid.uuid4())
     started_at = _utc_now_z()
     label = execution_label_now()
-    create_execution_record(run_id=run_id, label=label, started_at=started_at)
+    create_execution_record(
+        run_id=run_id, label=label, started_at=started_at, data_type_id=data_type_id
+    )
 
     ds = datetime.now(ZoneInfo("UTC")).strftime("%Y%m%d")
     clips: list[dict[str, Any]] = []
@@ -67,10 +93,15 @@ def enqueue_rosbags_batch(files: list[tuple[str, bytes]]) -> dict[str, Any]:
         "started_at": started_at,
         "ds": ds,
         "clips": clips,
+        "data_type_id": data_type_id,
     }
 
 
-def enqueue_pipeline_sources_batch(files: list[tuple[str, bytes]]) -> dict[str, Any]:
+def enqueue_pipeline_sources_batch(
+    files: list[tuple[str, bytes]],
+    *,
+    data_type_id: str | None = None,
+) -> dict[str, Any]:
     """Enqueue a mixed batch: each .bag → one clip; non-bag media → one shared source clip."""
     if not files:
         raise ValueError("at least one file required")
@@ -94,7 +125,9 @@ def enqueue_pipeline_sources_batch(files: list[tuple[str, bytes]]) -> dict[str, 
     run_id = str(uuid.uuid4())
     started_at = _utc_now_z()
     label = execution_label_now()
-    create_execution_record(run_id=run_id, label=label, started_at=started_at)
+    create_execution_record(
+        run_id=run_id, label=label, started_at=started_at, data_type_id=data_type_id
+    )
     ds = datetime.now(ZoneInfo("UTC")).strftime("%Y%m%d")
     clips: list[dict[str, Any]] = []
 
@@ -142,6 +175,7 @@ def enqueue_pipeline_sources_batch(files: list[tuple[str, bytes]]) -> dict[str, 
         "started_at": started_at,
         "ds": ds,
         "clips": clips,
+        "data_type_id": data_type_id,
     }
 
 
@@ -231,7 +265,7 @@ def list_executions(*, page: int = 1, page_size: int = 10) -> dict[str, Any]:
 
     rows = store.query(
         """
-        SELECT run_id, label, started_at, created_at
+        SELECT run_id, label, started_at, created_at, data_type_id
         FROM pipeline_execution
         ORDER BY started_at DESC
         LIMIT ? OFFSET ?
@@ -302,6 +336,7 @@ def list_executions(*, page: int = 1, page_size: int = 10) -> dict[str, Any]:
                 "label": str(row.get("label") or ""),
                 "started_at": str(row.get("started_at") or ""),
                 "created_at": str(row.get("created_at") or ""),
+                "data_type_id": str(row.get("data_type_id") or "").strip() or None,
                 "pipeline_status": _aggregate_status(statuses),
                 "clip_count": len(clip_items),
                 "clips": clip_items,

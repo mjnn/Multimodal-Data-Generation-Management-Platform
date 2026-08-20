@@ -47,6 +47,7 @@ from hmi.data_source import (
 from hmi.db import cache_clear
 from hmi.hmi_baseline_reset import get_reset_progress, reset_hmi_artifacts_to_baseline
 from hmi.local.pipeline_router import router as pipeline_local_router
+from hmi.platform.router import router as platform_router
 from hmi.local.store import get_meta
 from hmi.router import clips_svc, search_svc
 from hmi.services import oss_manage, oss_sync_poller, pipeline_status, upload
@@ -109,6 +110,7 @@ app.include_router(review_v2_router)
 app.include_router(review_assignment_router)
 app.include_router(dataset_router)
 app.include_router(pipeline_local_router)
+app.include_router(platform_router)
 app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -293,21 +295,62 @@ def api_local_file(
 def api_list_clips(
     light: bool = Query(False),
     refresh: bool = Query(False, description="Bypass overview TTL cache"),
+    data_type_id: str | None = Query(None),
     _user: dict[str, Any] = Depends(require_overview_access),
 ) -> list[dict[str, Any]]:
+    from hmi.platform.search_scope import require_data_type_id, uses_oms_legacy_index
+
+    tid = require_data_type_id(data_type_id)
     try:
         svc = clips_svc()
-        if light:
-            return svc.list_clips_light(refresh=refresh)
-        return svc.list_clips()
+        # Local: always type-filter (oms_cabin = legacy-compatible exclude audio/IVI).
+        if is_local_mode() and light:
+            if hasattr(svc, "list_clips_light_for_data_type"):
+                return svc.list_clips_light_for_data_type(tid, refresh=refresh)
+            from hmi.services import clips_local
+
+            return clips_local.list_clips_light_for_data_type(tid, refresh=refresh)
+        if uses_oms_legacy_index(tid):
+            if light:
+                return svc.list_clips_light(refresh=refresh)
+            return svc.list_clips()
+        if not is_local_mode():
+            return []
+        if hasattr(svc, "list_clips_light_for_data_type"):
+            return svc.list_clips_light_for_data_type(tid, refresh=refresh)
+        from hmi.services import clips_local
+
+        return clips_local.list_clips_light_for_data_type(tid, refresh=refresh)
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
 
 
+@app.get("/api/clips/{clip_id}/runs/{run_id}/audio-nvh")
+def api_audio_nvh_bootstrap(
+    clip_id: str,
+    run_id: str,
+    _user: dict[str, Any] = Depends(require_clip_explorer_access),
+) -> dict[str, Any]:
+    """Bootstrap payload for audio_nvh_timeline explorer / review media."""
+    from hmi.local.audio_nvh_view import build_audio_nvh_bootstrap
+
+    clip_id = unquote(clip_id)
+    payload = build_audio_nvh_bootstrap(clip_id, run_id)
+    if payload is None:
+        raise HTTPException(404, detail={"code": "NO_AUDIO_SPEC", "message": "audio_spec artifacts missing"})
+    return payload
+
+
 @app.get("/api/clips/demo")
 def api_list_demo_clips(
+    data_type_id: str | None = Query(None),
     _user: dict[str, Any] = Depends(require_overview_access),
 ) -> list[dict[str, Any]]:
+    from hmi.platform.search_scope import require_data_type_id, uses_oms_legacy_index
+
+    tid = require_data_type_id(data_type_id)
+    if not uses_oms_legacy_index(tid):
+        return []
     try:
         svc = clips_svc()
         if hasattr(svc, "list_demo_clips"):
@@ -578,8 +621,18 @@ def api_search(
     keyword: str = Query(""),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    data_type_id: str | None = Query(None),
     _user: dict[str, Any] = Depends(require_clip_explorer_access),
 ) -> dict[str, Any]:
+    from hmi.platform.search_scope import (
+        empty_search_page,
+        require_data_type_id,
+        uses_oms_legacy_index,
+    )
+
+    tid = require_data_type_id(data_type_id)
+    if not uses_oms_legacy_index(tid):
+        return empty_search_page(page, page_size)
     return search_svc().search_labels(keyword, page, page_size)
 
 
@@ -589,6 +642,7 @@ class OverviewClipQueryBody(BaseModel):
     top_k: int = 200
     # Text lexical floor; embedding floor compares query text ↔ scene/label text vectors.
     min_score: float = 0.25
+    data_type_id: str | None = None
 
 
 @app.post("/api/clips/query")
@@ -597,6 +651,15 @@ def api_clips_query(
     _user: dict[str, Any] = Depends(require_overview_access),
 ) -> dict[str, Any]:
     """数据总览：标签筛选 + 场景描述语义检索（返回匹配 clip_id 列表）。"""
+    from hmi.platform.search_scope import (
+        empty_overview_query,
+        require_data_type_id,
+        uses_oms_legacy_index,
+    )
+
+    tid = require_data_type_id(body.data_type_id)
+    if not uses_oms_legacy_index(tid):
+        return empty_overview_query()
     top_k = max(1, min(int(body.top_k or 200), 500))
     min_score = float(body.min_score if body.min_score is not None else 0.25)
     min_score = max(0.0, min(min_score, 1.0))
@@ -931,6 +994,10 @@ async def api_create_pipeline_execution(
         description="Cloud only: false = upload to OSS only (no DataWorks OpenAPI). "
         "Periodic DW schedules discover bags under rosbags/.",
     ),
+    data_type_id: str | None = Query(
+        None,
+        description="Published DataType id (required in local mode). Preflight runs before enqueue.",
+    ),
     _user: dict = Depends(require_pipeline_write),
 ) -> dict[str, Any]:
     if not files:
@@ -958,16 +1025,42 @@ async def api_create_pipeline_execution(
 
     if is_local_mode():
         from hmi.local.pipeline_execution import enqueue_pipeline_sources_batch, enqueue_rosbags_batch
+        from hmi.platform.run_bind import PreflightError, record_execution_platform_run, require_published_preflight
+
+        dt_id = (data_type_id or "").strip()
+        try:
+            pf = require_published_preflight(dt_id, [n for n, _ in batch_files])
+        except PreflightError as exc:
+            raise HTTPException(400, detail=exc.http_detail()) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
         try:
             if has_media:
-                result = enqueue_pipeline_sources_batch(batch_files)
+                result = enqueue_pipeline_sources_batch(batch_files, data_type_id=dt_id)
             else:
-                result = enqueue_rosbags_batch(batch_files)
+                result = enqueue_rosbags_batch(batch_files, data_type_id=dt_id)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         except Exception as exc:
             raise HTTPException(500, f"enqueue failed: {exc}") from exc
+        sample_id = None
+        clips = result.get("clips") or []
+        if len(clips) == 1 and isinstance(clips[0], dict):
+            sample_id = str(clips[0].get("clip_id") or "").strip() or None
+        try:
+            plat = record_execution_platform_run(
+                files=batch_files,
+                data_type_id=dt_id,
+                pipeline_run_id=str(result["run_id"]),
+                sample_id=sample_id,
+            )
+            result["platform_run_id"] = plat.get("run_id")
+            result["sample_id"] = plat.get("sample_id")
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("platform run record failed: %s", exc)
+        result["preflight"] = {k: pf[k] for k in ("ok", "missing", "ops", "source_kinds") if k in pf}
+        result["data_type_id"] = dt_id
         cache_clear()
         return result
 

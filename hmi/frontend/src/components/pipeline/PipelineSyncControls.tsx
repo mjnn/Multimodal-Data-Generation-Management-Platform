@@ -1,4 +1,4 @@
-import { Alert, Space, Switch, Tag, Typography, message } from 'antd'
+import { Space, Switch, Tag, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../../api'
 import type { OssSyncPollerStatus } from '../../api/types'
@@ -29,17 +29,12 @@ export function PipelineSyncControls() {
   }
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={12}>
-      <Alert
-        type="info"
-        showIcon
-        message={cloud ? '在线模式' : '本地模式'}
-        description={
-          cloud
-            ? '管线进度来自 MaxCompute / dispatch 与 DataWorks Dag；下方开关可将 OSS 产物同步到本机 HMI（可选，不影响在线浏览）。'
-            : '上传 rosbag 后由后台 SDK 轮询自动跑管线；开启下方开关可将 OSS 产物同步回 HMI 浏览目录（云端 dispatch 同理）。'
-        }
-      />
+    <Space direction="vertical" style={{ width: '100%' }} size={12} data-testid="oss-sync-controls">
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+        {cloud
+          ? '在线模式下可将 OSS 产物同步到本机 HMI（可选，不影响在线浏览）。'
+          : '将 OSS 产物同步回本机 HMI 浏览目录（轮询 pipeline/dispatch/latest.json）。'}
+      </Typography.Paragraph>
       <Space wrap align="center">
         <Switch
           checked={syncStatus?.auto_sync_enabled ?? false}
@@ -47,8 +42,9 @@ export function PipelineSyncControls() {
           onChange={onToggleAutoSync}
           checkedChildren="开"
           unCheckedChildren="关"
+          data-testid="oss-auto-sync-switch"
         />
-        <Typography.Text>自动同步 OSS 产物到本地 HMI（轮询 pipeline/dispatch/latest.json）</Typography.Text>
+        <Typography.Text>自动同步 OSS 产物到本地 HMI</Typography.Text>
         {syncStatus?.running_sync && <Tag color="processing">同步进行中</Tag>}
         {syncStatus?.last_sync_status && (
           <Tag color={syncStatus.last_sync_status === 'success' ? 'success' : 'default'}>

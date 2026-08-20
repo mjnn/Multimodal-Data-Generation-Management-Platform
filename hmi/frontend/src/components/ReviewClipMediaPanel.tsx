@@ -1,6 +1,6 @@
 import { ExportOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Space, Tabs, Tag, Typography } from 'antd'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { ReviewTarget, ReviewV2ClipCard as ClipCard, ReviewV2Task } from '../api/types'
 import { ClipMediaPanel } from './ClipMediaPanel'
@@ -46,7 +46,8 @@ function explorerHref(task: ReviewV2Task): string {
 export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
   const { clip_card: card } = task
   const [liveHasBbox, setLiveHasBbox] = useState<boolean | null>(null)
-  const [sideTab, setSideTab] = useState<'asr'>('asr')
+  const [sideTab, setSideTab] = useState<'asr' | 'nvh'>('asr')
+  const [isAudioNvh, setIsAudioNvh] = useState(false)
   const hasBbox = liveHasBbox ?? Boolean(card.has_bbox_preview)
   const targets = reviewTargets?.length ? reviewTargets : (['labels'] as ReviewTarget[])
   const reviewBboxes = targets.includes('bboxes')
@@ -56,11 +57,38 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
     setLiveHasBbox(state.hasBboxPreview)
   }, [])
 
+  const onMediaModeChange = useCallback((mode: 'cabin' | 'audio_nvh') => {
+    const nvh = mode === 'audio_nvh'
+    setIsAudioNvh(nvh)
+    setSideTab(nvh ? 'nvh' : 'asr')
+  }, [])
+
+  useEffect(() => {
+    setLiveHasBbox(null)
+    setIsAudioNvh(false)
+    setSideTab('asr')
+  }, [task.clip_id, task.run_id])
+
   const mediaKey = `${task.clip_id}:${task.run_id}`
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }} key={mediaKey}>
-      {reviewBboxes ? (
+      {isAudioNvh ? (
+        <Alert
+          type="info"
+          showIcon
+          message="NVH 频谱校核"
+          description="媒体区为四通道梅尔频谱 + SPL + 波形共用时间轴。客观标签只读；语义标签编辑保存待后续工单。"
+          data-testid="review-nvh-notice"
+          action={
+            <Link to={explorerHref(task)} target="_blank" rel="noreferrer">
+              <Button size="small" icon={<ExportOutlined />} data-testid="review-open-explorer">
+                打开总览
+              </Button>
+            </Link>
+          }
+        />
+      ) : reviewBboxes ? (
         <Alert
           type="info"
           showIcon
@@ -109,6 +137,7 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
         labelPreview={card.label_preview}
         testId="review-clip-card"
         onTimelineStateChange={onTimelineStateChange}
+        onMediaModeChange={onMediaModeChange}
         metaTags={
           <>
             {renderGateTags(card)}
@@ -117,8 +146,9 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
                 {card.review_status === 'reviewed' ? 'Clip 已校核' : 'Clip 待校核'}
               </Tag>
             ) : null}
-            {hasBbox ? <Tag color="blue">有 BBox</Tag> : null}
-            {reviewBboxes ? <Tag color="geekblue">校核识别框</Tag> : null}
+            {isAudioNvh ? <Tag color="cyan">NVH 频谱</Tag> : null}
+            {!isAudioNvh && hasBbox ? <Tag color="blue">有 BBox</Tag> : null}
+            {!isAudioNvh && reviewBboxes ? <Tag color="geekblue">校核识别框</Tag> : null}
             {reviewLabels ? <Tag>校核标签</Tag> : null}
           </>
         }
@@ -126,24 +156,38 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
 
       <Tabs
         activeKey={sideTab}
-        onChange={(k) => setSideTab(k as 'asr')}
-        items={[
-          {
-            key: 'asr',
-            label: 'ASR 文本',
-            children: card.asr_text?.trim() ? (
-              <Typography.Paragraph className="clip-detail-asr review-workbench-asr" style={{ margin: 0 }}>
-                {card.asr_text.trim()}
-              </Typography.Paragraph>
-            ) : (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="本 Clip 无 ASR 文本"
-                style={{ margin: '8px 0' }}
-              />
-            ),
-          },
-        ]}
+        onChange={(k) => setSideTab(k as 'asr' | 'nvh')}
+        items={
+          isAudioNvh
+            ? [
+                {
+                  key: 'nvh',
+                  label: 'NVH 说明',
+                  children: (
+                    <Typography.Paragraph type="secondary" style={{ margin: 0 }} data-testid="review-nvh-side">
+                      客观声压/频谱标签见媒体区右侧标签轨。语义类（L6）编辑与写回 API 尚未接线，本侧栏仅作校核上下文提示。
+                    </Typography.Paragraph>
+                  ),
+                },
+              ]
+            : [
+                {
+                  key: 'asr',
+                  label: 'ASR 文本',
+                  children: card.asr_text?.trim() ? (
+                    <Typography.Paragraph className="clip-detail-asr review-workbench-asr" style={{ margin: 0 }}>
+                      {card.asr_text.trim()}
+                    </Typography.Paragraph>
+                  ) : (
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description="本 Clip 无 ASR 文本"
+                      style={{ margin: '8px 0' }}
+                    />
+                  ),
+                },
+              ]
+        }
       />
     </Space>
   )

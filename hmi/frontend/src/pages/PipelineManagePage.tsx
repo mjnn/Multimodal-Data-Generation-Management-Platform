@@ -6,12 +6,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import type { PipelineExecution, PipelineExecutionClip } from '../api/types'
 import { PipelineStatus } from '../components/PipelineStatus'
-import { PipelineSyncControls } from '../components/pipeline/PipelineSyncControls'
-import { RosbagUploadCard } from '../components/pipeline/RosbagUploadCard'
+import { LakeRunBindPanel } from '../components/pipeline/LakeRunBindPanel'
 import { PipelineRunSettingsCard } from '../components/pipeline/PipelineRunSettingsCard'
 import { UploadPipelineProgress, firstFailedStepError } from '../components/UploadPipelineProgress'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
+import { readRememberedDataTypeId, rememberDataTypeId } from '../context/DataTypeWorkspaceContext'
 import { clipDisplayName } from '../utils/clipDisplay'
 import { formatDateTime } from '../utils/format'
 
@@ -47,10 +47,11 @@ function executionCanCancel(status: string): boolean {
   return status === 'pending' || status === 'running'
 }
 
-type PipelinePageTab = 'settings' | 'upload' | 'queue'
+type PipelinePageTab = 'run' | 'settings' | 'queue'
 
 function parsePipelineTab(raw: string | null): PipelinePageTab {
-  if (raw === 'settings' || raw === 'upload' || raw === 'queue') return raw
+  if (raw === 'run' || raw === 'settings' || raw === 'queue') return raw
+  // Legacy ?tab=upload → queue (sync moved to system-env)
   return 'queue'
 }
 
@@ -73,6 +74,7 @@ export function PipelineManagePage() {
   const focusResolvedRef = useRef(false)
   const focusPageResolvedRef = useRef(false)
   const loadInFlightRef = useRef(false)
+  const [runDataTypeId, setRunDataTypeId] = useState(readRememberedDataTypeId)
 
   const loadExecutions = useCallback(async (opts?: { quiet?: boolean; refresh?: boolean }) => {
     const quiet = Boolean(opts?.quiet)
@@ -315,6 +317,9 @@ export function PipelineManagePage() {
             <Typography.Text code style={{ fontSize: 10 }} ellipsis={{ tooltip: row.run_id }}>
               {row.run_id.slice(0, 8)}…
             </Typography.Text>
+            {row.data_type_id ? (
+              <Tag style={{ marginInlineEnd: 0, fontSize: 11 }}>{row.data_type_id}</Tag>
+            ) : null}
             {row.dag_id ? (
               <Typography.Text type="secondary" style={{ fontSize: 10 }}>
                 Dag {row.dag_id}
@@ -382,7 +387,7 @@ export function PipelineManagePage() {
     <PageStack>
       <PageHeader
         title="管线管理"
-        description="上传 rosbag、控制 OSS 产物同步，并按执行批次查看 SDK 进度（最新在前）。"
+        description="从源湖开跑、配置执行参数，并按执行批次查看 SDK 进度（最新在前）。"
         icon={<ApartmentOutlined />}
         extra={
           activeTab === 'queue' ? (
@@ -403,23 +408,26 @@ export function PipelineManagePage() {
         destroyInactiveTabPane={false}
         items={[
           {
-            key: 'settings',
-            label: '执行参数',
+            key: 'run',
+            label: '源湖开跑',
             children: (
               <ContentCard>
-                <PipelineRunSettingsCard />
+                <LakeRunBindPanel
+                  initialDataTypeId={runDataTypeId || undefined}
+                  onDataTypeIdChange={(id) => {
+                    setRunDataTypeId(id)
+                    rememberDataTypeId(id)
+                  }}
+                />
               </ContentCard>
             ),
           },
           {
-            key: 'upload',
-            label: '上传与同步',
+            key: 'settings',
+            label: '执行参数',
             children: (
               <ContentCard>
-                <Space direction="vertical" size={20} style={{ width: '100%' }}>
-                  <RosbagUploadCard onUploaded={() => bumpDataRevision()} />
-                  <PipelineSyncControls />
-                </Space>
+                <PipelineRunSettingsCard dataTypeId={runDataTypeId} />
               </ContentCard>
             ),
           },
@@ -493,8 +501,8 @@ export function PipelineManagePage() {
                     locale={{
                       emptyText:
                         dataSource === 'local'
-                          ? '暂无执行记录；请暂存 rosbag 并「确认执行管线」'
-                          : '暂无云端执行记录；请暂存 rosbag 并「上传并触发云端管线」',
+                          ? '暂无执行记录；请在「源湖开跑」选类型并创建运行'
+                          : '暂无云端执行记录；请在「源湖开跑」创建运行或触发云端管线',
                     }}
                   />
                 </ContentCard>

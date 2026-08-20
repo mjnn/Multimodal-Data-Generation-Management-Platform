@@ -170,6 +170,7 @@ def list_runs_needing_sdk(*, limit: int = 4) -> list[dict[str, Any]]:
           AND (
             c.bag_oss_key LIKE 'local://rosbags/%'
             OR c.bag_oss_key LIKE 'local://sources/%'
+            OR c.bag_oss_key LIKE 'local://platform_runs/%'
           )
         ORDER BY
           COALESCE(
