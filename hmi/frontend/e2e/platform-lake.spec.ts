@@ -51,6 +51,9 @@ test('pipeline lake-run: select data type, multi-select eligible source, preflig
   await page.locator('button').filter({ hasText: '入湖' }).click()
   await expect(page.getByText(/已入湖 1 个源文件/)).toBeVisible()
   await expect(page.getByTestId('lake-sources-table').getByText(name)).toBeVisible({ timeout: 15_000 })
+  await expect(
+    page.getByTestId('lake-sources-table').locator('.ant-tag').filter({ hasText: /^\.wav$/ }).first(),
+  ).toBeVisible()
 
   await page.goto('/pipeline?tab=run')
   await expect(page.getByTestId('lake-run-bind-panel')).toBeVisible({ timeout: 20_000 })
@@ -63,9 +66,10 @@ test('pipeline lake-run: select data type, multi-select eligible source, preflig
   await expect(audioOption).toBeVisible()
   await audioOption.click()
 
-  await expect(page.getByTestId('lake-run-sources-table').getByText(name)).toBeVisible({ timeout: 15_000 })
-  const row = page.locator('.ant-table-row').filter({ hasText: name }).first()
-  await row.getByRole('checkbox').check()
+  const audioSlot = page.getByTestId('lake-run-slot-audio_primary')
+  await expect(audioSlot).toBeVisible({ timeout: 15_000 })
+  await expect(audioSlot.getByText(name)).toBeVisible()
+  await audioSlot.locator('.ant-table-row').filter({ hasText: name }).first().getByRole('checkbox').check()
 
   await page.getByTestId('lake-run-preflight').click()
   await expect(page.getByTestId('lake-run-bind-panel').getByText('预检通过')).toBeVisible({
@@ -97,5 +101,7 @@ test('pipeline lake-run: text source filtered out for ivi_ui_stub', async ({ pag
     .first()
     .click()
 
+  await expect(page.getByTestId('lake-run-slot-ui_media')).toBeVisible({ timeout: 15_000 })
   await expect(page.getByTestId('lake-run-sources-table').getByText(name)).toHaveCount(0)
+  await expect(page.getByTestId('lake-run-slot-ui_media').getByText(name)).toHaveCount(0)
 })

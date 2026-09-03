@@ -41,7 +41,7 @@ class TestRunBindPreflight(unittest.TestCase):
 
         pf = require_published_preflight("oms_cabin", ["clip.bag"])
         self.assertTrue(pf["ok"])
-        self.assertIn("rosbag", pf["source_kinds"])
+        self.assertIn(".bag", pf["source_kinds"])
         self.assertIn("parse_bag", pf["ops"])
 
     def test_video_ivi_ok(self) -> None:

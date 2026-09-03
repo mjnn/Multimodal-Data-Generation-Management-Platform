@@ -63,6 +63,9 @@ class TestLakePersistence(LakeTestCase):
         )
         image = put_source(content=b"fakepng", kind="image", filename="frame.png")
 
+        self.assertEqual(bag["kind"], ".bag")
+        self.assertEqual(text["kind"], ".json")
+        self.assertEqual(image["kind"], ".png")
         self.assertTrue(str(bag["local_oss_key"]).startswith("local://rosbags/"))
         self.assertTrue(str(text["local_oss_key"]).startswith("local://sources/"))
         self.assertTrue(str(image["local_oss_key"]).startswith("local://lake_images/"))

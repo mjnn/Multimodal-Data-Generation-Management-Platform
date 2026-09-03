@@ -52,6 +52,59 @@ class TestRecipeValidation(unittest.TestCase):
             validate_recipe(bad)
         self.assertIn("overview_view", str(ctx.exception))
 
+    def test_seeds_hydrate_overview_cards(self) -> None:
+        from hmi.platform.recipe import seed_recipes
+
+        seeds = seed_recipes()
+        oms = seeds["oms_cabin"]["overview"]
+        self.assertEqual(oms["preset"], "cabin_timeline")
+        self.assertEqual([c["widget_id"] for c in oms["list"]], ["clip_metrics", "label_search", "clip_table"])
+        self.assertEqual([c["widget_id"] for c in oms["detail"]], ["cabin_multicam", "asr_panel"])
+        nvh = seeds["audio_array_spec"]["overview"]
+        self.assertEqual([c["widget_id"] for c in nvh["list"]], ["clip_metrics", "nvh_spl_column", "clip_table"])
+        self.assertEqual([c["widget_id"] for c in nvh["detail"]], ["nvh_spectrum"])
+        ivi = seeds["ivi_ui_stub"]["overview"]
+        self.assertEqual([c["widget_id"] for c in ivi["detail"]], ["frame_gallery_bbox"])
+
+    def test_unknown_overview_widget_rejected(self) -> None:
+        from hmi.platform.recipe import SEED_RECIPES, validate_recipe
+
+        bad = dict(SEED_RECIPES["oms_cabin"])
+        bad["overview"] = {
+            "preset": "cabin_timeline",
+            "list": [{"key": "x", "widget_id": "not_a_widget", "bindings": {}}],
+            "detail": [],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_recipe(bad)
+        self.assertIn("unknown overview widget_id", str(ctx.exception))
+
+    def test_overview_widget_wrong_surface_rejected(self) -> None:
+        from hmi.platform.recipe import SEED_RECIPES, validate_recipe
+
+        bad = dict(SEED_RECIPES["oms_cabin"])
+        bad["overview"] = {
+            "preset": "cabin_timeline",
+            "list": [{"key": "x", "widget_id": "cabin_multicam", "bindings": {}}],
+            "detail": [],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_recipe(bad)
+        self.assertIn("belongs on detail", str(ctx.exception))
+
+    def test_explicit_overview_list_kept(self) -> None:
+        from hmi.platform.recipe import SEED_RECIPES, validate_recipe
+
+        rec = dict(SEED_RECIPES["oms_cabin"])
+        rec["overview"] = {
+            "preset": "cabin_timeline",
+            "list": [{"key": "t", "widget_id": "clip_table", "bindings": {}}],
+            "detail": [{"key": "n", "widget_id": "nvh_spectrum", "bindings": {}}],
+        }
+        out = validate_recipe(rec)
+        self.assertEqual([c["widget_id"] for c in out["overview"]["list"]], ["clip_table"])
+        self.assertEqual([c["widget_id"] for c in out["overview"]["detail"]], ["nvh_spectrum"])
+
     def test_vl_bbox_rejected(self) -> None:
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
 

@@ -18,10 +18,10 @@ class TestSourceUploadModality(unittest.TestCase):
         from hmi.local import store
         from hmi.local.source_upload import classify_source_filename, save_uploaded_sources
 
-        self.assertEqual(classify_source_filename("a.mp4"), "video")
-        self.assertEqual(classify_source_filename("b.WAV"), "audio")
-        self.assertEqual(classify_source_filename("c.txt"), "text")
-        self.assertEqual(classify_source_filename("d.bag"), "bag")
+        self.assertEqual(classify_source_filename("a.mp4"), ".mp4")
+        self.assertEqual(classify_source_filename("b.WAV"), ".wav")
+        self.assertEqual(classify_source_filename("c.txt"), ".txt")
+        self.assertEqual(classify_source_filename("d.bag"), ".bag")
         self.assertIsNone(classify_source_filename("x.bin"))
 
         store.ensure_db()

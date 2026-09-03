@@ -1,5 +1,108 @@
 # 进度变更日志（倒序）
 
+## 2026-09-02 — UI-DTYPE-SOURCE-NODES Task 8（切片 B Playwright 收工）
+
+- **命令**：`cd hmi/frontend && cmd /c "npx.cmd playwright test e2e/platform-dtype-editor.spec.ts e2e/platform-lake.spec.ts"`
+- **结果**：**7 passed (48.2s)** = editor **3/3** + lake **4/4**
+- **覆盖**：wav 入湖 → `/pipeline?tab=run` → `audio_array_spec` → `lake-run-slot-audio_primary` 勾选预检通过；`ivi_ui_stub` 下 `.txt` 不进 `lake-run-slot-ui_media`
+- **文档**：`acceptance/UI-DTYPE-SOURCE-NODES.md` 刷新执行记录；推荐下一仍 **UI-NVH-REVIEW-SAVE**
+- **未改**：DataWorks；勿 publish audio_nvh-v2；无 git commit
+
+## 2026-09-02 — UI-DTYPE-SOURCE-NODES（数据源节点 + 开跑分源）
+
+- **问卷**：S1 删独立源槽位表；S2 源节点（一源多文件）；S3 开跑 `manual_map` 分块勾选；S4 产物名 `label_only`
+- **实现**：`validate_source_assignments`；`POST /runs` 收 `assignments`；多 slot 禁止裸 `source_ids`；`LakeRunBindPanel` 每 slot 一块 `lake-run-slot-{id}`
+- **验收**：bind **9/9**；kernel **19/19**；editor **23/23**；`tsc -b` ok；e2e editor **3/3** + lake **4/4**（Task 8 复验 7/7 · 48.2s）
+- **未改**：DataWorks；worker 阶段顺序；勿 publish audio_nvh-v2
+- **下一**：UI-NVH-REVIEW-SAVE
+
+## 2026-09-02 — 数据源卡内追加输入行
+
+- **诉求**：点「添加数据源」不要再长出一张卡，只在数据源卡里新增一路输入
+- **实现**：编排顶部固定一张数据源卡；多路源是卡内行（仍编译为各自 slot）；oms_cabin 为 1 卡 4 行
+- **验收**：editor e2e **3/3**
+
+## 2026-09-02 — UI-DTYPE-OVERVIEW-COMPOSE（总览组件拼版）
+
+- **诉求**：总览不要只选整页模板；列表和 Clip 详情要像管线那样叠组件卡
+- **实现**：`recipe.overview.list/detail`；`overview_view` 为预设一键填入；编辑器两套拼版；Overview / Explorer / 校核按卡渲染（空 detail 仍 bootstrap 兜底）
+- **验收**：kernel **19/19**；editor **23/23**；`tsc -b` ok；e2e editor **3/3**
+- **未改**：DataWorks；worker；勿 publish audio_nvh-v2
+
+## 2026-09-02 — UI-DTYPE-PIPELINE-ORCH（parse_bag 产出连续帧）
+
+- **诉求**：ROSBAG 解析器解析的是连续帧，不是成片视频
+- **实现**：`PARSE_BAG_MODALITIES = frames / .wav / .json`；旧 `video|.mp4` hydrate 成 `frames`；编码器可绑「ROSBAG 解析器 · 连续帧」
+- **验收**：editor **12/12**；kernel **15/15**；e2e editor **3/3**；`tsc -b` ok
+
+## 2026-09-02 — UI-DTYPE-PIPELINE-ORCH（kind = 入湖文件后缀）
+
+- **诉求**：不要用泛型「视频/音频」当 kind；kind 以上传到湖里的文件后缀为准
+- **实现**：`file_kinds.py` / `fileKinds.ts`；入库优先文件名后缀；旧 `video|audio|image|text|rosbag` 读时归一；解析产出 `.mp4` `.wav` `.json`
+- **验收**：editor **12/12**；kernel **15/15**；lake **6/6**；e2e editor **3/3** + lake **4/4**；`tsc -b` ok
+- **未改**：SDK ingest 内部仍用 video.mp4 等文件名；DataWorks；勿 publish audio_nvh-v2
+
+## 2026-09-02 — UI-DTYPE-PIPELINE-ORCH（视频编码器不再吃视频）
+
+- **诉求**：`encode_preview` 输入不要「视频」chip，也不要绑解析器视频产物
+- **实现**：输入端口仅 `frames`/`image`；`TYPE_PROVIDES.video` 不再等价于帧/图（视频走抽帧）
+- **验收**：editor **12/12**；e2e **3/3**（编码器无视频 chip；绑定可见「视频抽帧 · 连续帧」）
+
+## 2026-09-02 — UI-DTYPE-PIPELINE-ORCH（parse_bag 产出视频/音频/文本）
+
+- **诉求**：解析器产出不要「多模数据」一种 kind；参数里勾选视频/音频/文本，作为产物接到后续节点
+- **实现**：`emit_modalities`；卡上「解析产出」多选；下游绑定 `ROSBAG 解析器 · 音频` 等；旧 `frames_audio_topics` hydrate 成三项
+- **验收**：editor **11/11**；kernel **15/15**；e2e **3/3**；`tsc -b` ok
+- **未改**：worker / DataWorks 仍不按 `emit_modalities` 裁剪解析
+
+## 2026-09-02 — UI-DTYPE-PIPELINE-ORCH（DataType 管线编排组件卡）
+
+- **UI**：`DataTypeEditorPage` 拆掉「预处理列表 + 管线能力开关」，改为左侧 SDK 目录 + 有序组件卡（输入/产出/参数）
+- **目录**：`operators.py` 补端口、分组、`label`/`embed`（`role=stage`）；`GET /operators` 带 `type_provides`
+- **编译**：卡 → 现有 `preprocess` / `stages` / `bbox`；worker / DataWorks 不改
+- **验收**：`acceptance/UI-DTYPE-PIPELINE-ORCH.md`；editor 单测 **9/9**；e2e **3/3**
+- **未改**：执行路径；勿 publish audio_nvh-v2
+
+## 2026-08-28 — FIX-SPA-PREFIX（直连 :8012 子路径空白页）
+
+- **原因**：生产前端 `VITE_BASE=/tools/rosbag-labels/`，直连 8012 时 JS/CSS 打到该前缀，SPA fallback 把脚本当成 HTML
+- **修复**：`hmi/public_prefix.py` + `strip_public_ui_prefix` 中间件；nginx 已剥前缀时 no-op
+- **验收**：`py -3 hmi/backend/scripts/test_public_ui_prefix.py` 通过
+- **发布**：须重新 `save-image.ps1` 再 load 到 POC
+
+## 2026-08-27 — DOC-INTRANET-CICD（域内部署交接）
+
+- **文档**：`docs/deploy-intranet-cicd.md`（堡垒机登录、Dockerfile、仓库根 save、SFTP、POC load/run 参数）
+- **脚本**：`hmi/deploy/save-image.ps1`
+- **约束**：Word 指南中的堡垒机口令不入库；账号交接后向 CI 改绑
+- **验收**：`acceptance/DOC-INTRANET-CICD.md`
+
+## 2026-08-25 — DOC-HANDOVER（项目交接文档 + Agent 技能包）
+
+- **文档**：`docs/HANDOVER.md`、`docs/architecture.md`、`docs/CODE_MAP.md`；刷新 `docs/WIKI.md`
+- **技能**：`.cursor/skills/rosbag-onboarding|platform-kernel|hmi-dev|sdk-pipeline`；打包说明 `handover/`
+- **代码**：关键入口模块级中文注释（main/platform/data_source/SDK driver/App.tsx 等）
+- **压缩包**：`py -3 handover/pack_handover.py` → `handover-output/`
+- **验收**：`acceptance/DOC-HANDOVER.md`
+- **未改**：DataWorks 业务节点逻辑；未 publish audio_nvh-v2
+
+## 2026-08-21 — PLAT-AUDIO-AST-LABEL（麦克风阵列 L6 用 AST AudioSet）
+
+- **模型**：YuanGongND AST 架构 + 本地 HF `pytorch_model.bin`（527 类）；q/k/v remap 成 fused qkv
+- **写入**：只覆盖 `nvh.sem.noise_category` / `noise_sources`；`quality_grade` 等仍 heuristic；hypothesis 含 top-k 分数
+- **预处理**：16 kHz Kaldi 128-mel、AudioSet mean/std；四通道 RMS 混单声道
+- **回退**：缺 torchaudio / 权重 → `heuristic_fallback`
+- **验收**：`acceptance/PLAT-AUDIO-AST-LABEL.md`；`test_nvh_ast_label.py` **7/7**；权重 `strict_load OK`
+- **约束**：勿 publish `audio_nvh-v2`；勿 DataWorks；勿提交 330MB 权重
+
+## 2026-08-20 — UI-DTYPE-EDITOR（新建/编辑数据类型配方）
+
+- **入口**：数据类型首页「新建数据类型」/ 卡片「编辑」（admin）
+- **表单**：元信息 · 源槽位 kinds · 预处理算子→中间产物 · label/embed/bbox 开关；可从已有类型复制
+- **API**：`GET /platform/operators` + `PUT /platform/data-types/{id}`（既有校验）
+- **验收**：`acceptance/UI-DTYPE-EDITOR.md`；upsert **2/2**；e2e **2/2**；`tsc -b` ok
+- **约束**：勿 publish `audio_nvh-v2`；新算子仍须发版注册
+
 ## 2026-08-20 — UI 信息架构：源湖只入库+OSS；开跑进管线管理
 
 - **诉求**：源湖不要筛源/开跑；执行全在管线管理；OSS 并入源湖

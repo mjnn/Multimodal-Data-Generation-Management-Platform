@@ -53,10 +53,12 @@ import type {
   OssFilePreview,
   OssSyncPollerStatus,
   DataTypeRecipe,
+  PlatformCatalog,
   PlatformRunPreflight,
   PlatformRunRecord,
   PlatformSampleRecord,
   PlatformSourceRecord,
+  SlotAssignment,
 } from './types'
 
 /** Query `mode` for review v2 APIs (legacy servers only accept `ai_dispute` for open queue). */
@@ -952,6 +954,14 @@ export const api = {
   getDataType: (id: string): Promise<DataTypeRecipe> =>
     fetchJson(`/platform/data-types/${encodeURIComponent(id)}`),
 
+  listPlatformCatalog: (): Promise<PlatformCatalog> => fetchJson('/platform/operators'),
+
+  putDataType: (id: string, body: DataTypeRecipe): Promise<DataTypeRecipe> =>
+    fetchJson(`/platform/data-types/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
   listPlatformSources: (
     limit = 100,
     opts?: { eligibleFor?: string },
@@ -982,6 +992,7 @@ export const api = {
     sample_id?: string
     source_kinds?: string[]
     source_ids?: string[]
+    assignments?: SlotAssignment[]
   }): Promise<PlatformRunPreflight> =>
     fetchJson('/platform/runs/preflight', { method: 'POST', body: JSON.stringify(body) }),
 
@@ -989,6 +1000,7 @@ export const api = {
     data_type_id: string
     sample_id?: string
     source_ids?: string[]
+    assignments?: SlotAssignment[]
   }): Promise<PlatformRunRecord> =>
     fetchJson('/platform/runs', { method: 'POST', body: JSON.stringify(body) }),
 

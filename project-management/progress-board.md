@@ -1,13 +1,12 @@
 # 进度看板
 
-> 最后更新：2026-08-20
+> 最后更新：2026-09-02
 
 ## Todo
 
 | ID | 标题 | 里程碑 |
 |----|------|--------|
 | UI-NVH-REVIEW-SAVE | 语义 L6 人工写回 | platform |
-| UI-DTYPE-EDITOR | 新建 DataType 槽位/预处理/产物表单（后置） | platform |
 | M9.3-H-2 | HMI 在线主观（**暂停不排期**） | M9 |
 | M7.5-E2E | Parquet 全链 zip E2E | M7.5 |
 
@@ -15,12 +14,20 @@
 
 | ID | 标题 | 备注 |
 |----|------|------|
-| 平台内核重构 | DataType 底座 | 开跑绑定 + 血缘已合；勿 publish audio_nvh-v2 |
+| 平台内核重构 | DataType 底座 | 源节点 + 开跑分源已接；勿 publish audio_nvh-v2 |
 
 ## Done
 
 | ID | 标题 | 完成日 |
 |----|------|--------|
+| **UI-DTYPE-SOURCE-NODES** | 数据源节点 + 开跑分源勾选（Task 8 e2e 7/7） | 2026-09-02 |
+| **UI-DTYPE-OVERVIEW-COMPOSE** | 总览列表 + 详情组件拼版 | 2026-09-02 |
+| **UI-DTYPE-PIPELINE-ORCH** | DataType 管线编排（SDK 组件卡） | 2026-09-02 |
+| **FIX-SPA-PREFIX** | 直连 :8012 子路径空白页（剥 UI 前缀） | 2026-08-28 |
+| **DOC-INTRANET-CICD** | 域内堡垒机 + docker save/load/run 交接 | 2026-08-27 |
+| **DOC-HANDOVER** | 交接 Wiki、架构图、Agent 技能包、压缩包脚本 | 2026-08-25 |
+| **PLAT-AUDIO-AST-LABEL** | AudioSet AST 映射 category/sources | 2026-08-21 |
+| **UI-DTYPE-EDITOR** | 新建/编辑 DataType（槽位·预处理·产物·能力开关） | 2026-08-20 |
 | **UI-LAKE-OSS-IA** | 源湖入库+OSS；开跑进管线管理 | 2026-08-20 |
 | **DOC-DTYPE-SLOTS** | Sample 内部化 / slots / collection / lineage 规格 | 2026-08-20 |
 | **PLAT-LAKE-RUN-BIND** | 选类型筛源多选 → 自动 Sample+Run | 2026-08-20 |

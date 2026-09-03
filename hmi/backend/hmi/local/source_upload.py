@@ -23,28 +23,19 @@ from typing import Any
 from hmi.data_source import LOCAL_OSS_ROOT, oss_key_path
 from hmi.local import pipeline_run as pr
 from hmi.local.bag_upload import collection_dir_from_filename
-
-VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
-AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".dat"}
-TEXT_EXTS = {".txt", ".json", ".md", ".csv"}
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+from hmi.platform.file_kinds import (
+    AUDIO_EXTS,
+    IMAGE_EXTS,
+    TEXT_EXTS,
+    VIDEO_EXTS,
+    kind_from_filename,
+    modality_of,
+)
 
 
 def classify_source_filename(filename: str) -> str | None:
-    """Return modality kind: video | audio | text | image | bag | None."""
-    name = Path(filename.replace("\\", "/")).name.lower()
-    if name.endswith(".bag"):
-        return "bag"
-    suffix = Path(name).suffix
-    if suffix in VIDEO_EXTS:
-        return "video"
-    if suffix in AUDIO_EXTS:
-        return "audio"
-    if suffix in TEXT_EXTS:
-        return "text"
-    if suffix in IMAGE_EXTS:
-        return "image"
-    return None
+    """Return lake kind: file suffix (.mp4) or None. `.bag` for rosbag."""
+    return kind_from_filename(filename)
 
 
 def _utc_ds() -> str:
@@ -72,8 +63,9 @@ def save_uploaded_sources(
 
     by_kind: dict[str, tuple[str, bytes]] = {}
     for filename, data in files:
-        kind = classify_source_filename(filename)
-        if kind is None or kind == "bag":
+        suffix = classify_source_filename(filename)
+        kind = modality_of(suffix)
+        if kind is None or kind == "rosbag":
             raise ValueError(f"unsupported source file: {filename}")
         if kind in by_kind:
             raise ValueError(f"duplicate {kind} file in one source package (got {filename})")
@@ -180,8 +172,9 @@ def persist_local_media_source(
     text_schema_id: str | None = None,
 ) -> dict[str, Any]:
     """Write one local lake source without creating any pipeline rows."""
-    kind = classify_source_filename(filename)
-    if kind is None or kind == "bag":
+    suffix = classify_source_filename(filename)
+    kind = modality_of(suffix)
+    if kind is None or kind == "rosbag":
         raise ValueError(f"unsupported source file: {filename}")
     if kind == "text" and not (text_schema_id or "").strip():
         raise ValueError("text source requires text_schema_id")
@@ -190,7 +183,7 @@ def persist_local_media_source(
     source_id = f"sha256:{digest}"
     coll = collection_dir_from_filename(filename)
     storage_dir = _storage_dir_name(coll, digest)
-    ext = Path(filename).suffix.lower() or {
+    ext = suffix or {
         "video": ".mp4",
         "audio": ".wav",
         "text": ".txt",

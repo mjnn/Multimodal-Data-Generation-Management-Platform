@@ -3,27 +3,20 @@ import { Alert, Button, Checkbox, Select, Space, Table, Tag, Typography, message
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../api'
-import type { DataTypeRecipe, PlatformRunPreflight, PlatformSourceRecord } from '../../api/types'
+import type {
+  DataTypeRecipe,
+  DataTypeSlot,
+  PlatformRunPreflight,
+  PlatformSourceRecord,
+  SlotAssignment,
+} from '../../api/types'
 import { rememberDataTypeId } from '../../context/DataTypeWorkspaceContext'
 import { apiErrorMessage } from '../../utils/apiError'
 
-type LakeKind = 'rosbag' | 'video' | 'audio' | 'text' | 'image'
+import { IMAGE_EXTS, normalizeSourceKind } from '../../utils/fileKinds'
 
 function kindLabel(kind: string): string {
-  switch (kind) {
-    case 'rosbag':
-      return 'Rosbag'
-    case 'video':
-      return '视频'
-    case 'audio':
-      return '音频'
-    case 'text':
-      return '文本'
-    case 'image':
-      return '图片'
-    default:
-      return kind
-  }
+  return normalizeSourceKind(kind) || kind
 }
 
 function mergeSources(prev: PlatformSourceRecord[], next: PlatformSourceRecord[]): PlatformSourceRecord[] {
@@ -40,44 +33,96 @@ function collectionKey(row: PlatformSourceRecord): string {
   return String(row.collection_id || row.source_id)
 }
 
+function slotKinds(slot: DataTypeSlot): Set<string> {
+  const kinds = new Set<string>()
+  for (const k of slot.kinds || []) {
+    kinds.add(normalizeSourceKind(k) || k)
+  }
+  return kinds
+}
+
+function slotTitle(slot: DataTypeSlot): string {
+  return (slot.title || slot.id).trim() || slot.id
+}
+
+function sourcesForSlot(slot: DataTypeSlot, sources: PlatformSourceRecord[]): PlatformSourceRecord[] {
+  const kinds = slotKinds(slot)
+  if (!kinds.size) return sources
+  return sources.filter((s) => kinds.has(normalizeSourceKind(s.kind) || s.kind))
+}
+
+function slotError(slot: DataTypeSlot, ids: string[]): string | null {
+  const n = ids.length
+  const min = slot.cardinality_min ?? 1
+  const max = slot.cardinality_max ?? min
+  const title = slotTitle(slot)
+  if (slot.required && n === 0) return `${title}：需要 ${min}–${max} 个文件，已选 ${n}`
+  if (n === 0) return null
+  if (n < min || n > max) return `${title}：需要 ${min}–${max} 个文件，已选 ${n}`
+  return null
+}
+
+function buildAssignments(slots: DataTypeSlot[], selectedBySlot: Record<string, string[]>): SlotAssignment[] {
+  return slots
+    .filter((slot) => slot.required || (selectedBySlot[slot.id] || []).length > 0)
+    .map((slot) => ({ slot_id: slot.id, source_ids: selectedBySlot[slot.id] || [] }))
+}
+
 type LakeRunBindPanelProps = {
   initialDataTypeId?: string
   onDataTypeIdChange?: (id: string) => void
 }
 
-/** 管线管理 · 源湖开跑：选类型 → 筛合格源 → 多选 → 预检 → 自动 Sample+Run */
+/** 管线管理 · 源湖开跑：选类型 → 按数据源分块勾选 → 预检 → 自动 Sample+Run */
 export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: LakeRunBindPanelProps) {
   const navigate = useNavigate()
   const [sources, setSources] = useState<PlatformSourceRecord[]>([])
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [selectedBySlot, setSelectedBySlot] = useState<Record<string, string[]>>({})
   const [dataTypes, setDataTypes] = useState<DataTypeRecipe[]>([])
   const [dataTypeId, setDataTypeId] = useState<string | undefined>(initialDataTypeId)
   const [preflight, setPreflight] = useState<PlatformRunPreflight | null>(null)
   const [loadingSources, setLoadingSources] = useState(false)
   const [running, setRunning] = useState(false)
 
-  const selectedSources = useMemo(
-    () => sources.filter((item) => selectedIds.includes(item.source_id)),
-    [sources, selectedIds],
-  )
-
   const selectedRecipe = useMemo(
     () => dataTypes.find((item) => item.id === dataTypeId) ?? null,
     [dataTypes, dataTypeId],
   )
 
-  const displaySources = useMemo(() => {
-    if (!dataTypeId || !selectedRecipe) return sources
-    const kinds = new Set<string>()
-    for (const slot of selectedRecipe.slots || []) {
-      for (const k of slot.kinds || []) kinds.add(k)
+  const slots = selectedRecipe?.slots || []
+
+  const selectedIds = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const ids of Object.values(selectedBySlot)) {
+      for (const id of ids) {
+        if (seen.has(id)) continue
+        seen.add(id)
+        out.push(id)
+      }
     }
-    for (const group of selectedRecipe.require_any_kinds || []) {
-      for (const k of group) kinds.add(k)
+    return out
+  }, [selectedBySlot])
+
+  const selectedSources = useMemo(
+    () => sources.filter((item) => selectedIds.includes(item.source_id)),
+    [sources, selectedIds],
+  )
+
+  const takenByOther = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const [slotId, ids] of Object.entries(selectedBySlot)) {
+      for (const id of ids) map.set(id, slotId)
     }
-    if (!kinds.size) return sources
-    return sources.filter((s) => kinds.has(s.kind))
-  }, [sources, dataTypeId, selectedRecipe])
+    return map
+  }, [selectedBySlot])
+
+  const blockErrors = useMemo(
+    () => slots.map((slot) => slotError(slot, selectedBySlot[slot.id] || [])).filter((msg): msg is string => Boolean(msg)),
+    [slots, selectedBySlot],
+  )
+
+  const assignments = useMemo(() => buildAssignments(slots, selectedBySlot), [slots, selectedBySlot])
 
   const loadDataTypes = async () => {
     const res = await api.listDataTypes()
@@ -111,6 +156,7 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
   useEffect(() => {
     if (!dataTypeId) return
     void loadSources(dataTypeId)
+    setSelectedBySlot({})
     setPreflight(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataTypeId])
@@ -122,11 +168,11 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
   }
 
   const runPreflight = async () => {
-    if (!dataTypeId || !selectedIds.length) return
+    if (!dataTypeId || !assignments.length) return
     try {
       const result = await api.preflightPlatformRun({
         data_type_id: dataTypeId,
-        source_ids: selectedIds,
+        assignments,
       })
       setPreflight(result)
       if (result.ok) message.success('预检通过')
@@ -138,12 +184,12 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
   }
 
   const createRun = async () => {
-    if (!dataTypeId || !selectedIds.length || !preflight?.ok || running) return
+    if (!dataTypeId || !assignments.length || !preflight?.ok || running) return
     setRunning(true)
     try {
       const created = await api.createPlatformRun({
         data_type_id: dataTypeId,
-        source_ids: selectedIds,
+        assignments,
       })
       rememberDataTypeId(dataTypeId)
       message.success(`已创建平台运行：${created.run_id}（自动绑定 Sample ${created.sample_id}）`)
@@ -155,18 +201,77 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
     }
   }
 
-  const toggleSelected = (sourceId: string, checked: boolean) => {
-    setSelectedIds((prev) => {
-      if (checked) return prev.includes(sourceId) ? prev : [...prev, sourceId]
-      return prev.filter((id) => id !== sourceId)
+  const toggleSelected = (slotId: string, sourceId: string, checked: boolean) => {
+    setSelectedBySlot((prev) => {
+      const current = prev[slotId] || []
+      const next = checked
+        ? current.includes(sourceId)
+          ? current
+          : [...current, sourceId]
+        : current.filter((id) => id !== sourceId)
+      return { ...prev, [slotId]: next }
     })
     setPreflight(null)
   }
 
+  const sourceColumns = (slot: DataTypeSlot) => [
+    {
+      title: '选用',
+      width: 72,
+      render: (_: unknown, row: PlatformSourceRecord) => {
+        const owner = takenByOther.get(row.source_id)
+        const taken = Boolean(owner && owner !== slot.id)
+        return (
+          <Checkbox
+            data-testid={`lake-run-source-check-${row.source_id}`}
+            checked={(selectedBySlot[slot.id] || []).includes(row.source_id)}
+            disabled={taken}
+            onChange={(e) => toggleSelected(slot.id, row.source_id, e.target.checked)}
+          />
+        )
+      },
+    },
+    {
+      title: '采集批',
+      width: 140,
+      render: (_: unknown, row: PlatformSourceRecord) => {
+        const id = collectionKey(row)
+        return (
+          <Tag color="blue" data-testid="lake-collection-tag">
+            {id.length > 12 ? `${id.slice(0, 10)}…` : id}
+          </Tag>
+        )
+      },
+    },
+    {
+      title: '类型',
+      dataIndex: 'kind',
+      width: 100,
+      render: (kind: string) => <Tag>{kindLabel(kind)}</Tag>,
+    },
+    {
+      title: '文件',
+      render: (_: unknown, row: PlatformSourceRecord) => (
+        <Space>
+          <span>{row.filename || row.source_id}</span>
+          {(IMAGE_EXTS as readonly string[]).includes(normalizeSourceKind(row.kind) || row.kind) ? (
+            <Tag color="orange">仅入湖</Tag>
+          ) : null}
+        </Space>
+      ),
+    },
+    {
+      title: '入湖时间',
+      dataIndex: 'created_at',
+      width: 180,
+      render: (v: string | null | undefined) => v || '—',
+    },
+  ]
+
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }} data-testid="lake-run-bind-panel">
       <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-        选择 published 数据类型后列出合格源（仍按采集批展示，不自动绑定）。勾选后预检并通过则创建运行；Sample
+        选择 published 数据类型后，按数据源分块勾选入湖文件（仍按采集批展示）。预检通过后创建运行；Sample
         由系统自动生成。入湖请前往「源湖入库」。
       </Typography.Paragraph>
 
@@ -182,12 +287,7 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
         onChange={onSelectDataType}
       />
       {selectedRecipe ? (
-        <Typography.Text type="secondary">
-          {selectedRecipe.purpose}
-          {selectedRecipe.slots?.length
-            ? ` · 槽位：${selectedRecipe.slots.map((s) => s.id).join(', ')}`
-            : ''}
-        </Typography.Text>
+        <Typography.Text type="secondary">{selectedRecipe.purpose}</Typography.Text>
       ) : null}
 
       <div data-testid="lake-run-sources-table">
@@ -197,69 +297,56 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
           </Button>
           <Typography.Text type="secondary">
             已选 {selectedIds.length} 个
-            {dataTypeId ? '（已按类型过滤）' : '（未选类型时显示全部；请先选类型再开跑）'}
+            {dataTypeId ? '（按数据源分块）' : '（未选类型时显示全部；请先选类型再开跑）'}
           </Typography.Text>
         </Space>
-        {displaySources.length === 0 ? (
-          <Typography.Text type="secondary">还没有可展示的入湖源；请先在「源湖入库」上传</Typography.Text>
+        {!dataTypeId ? (
+          <Typography.Text type="secondary">请先选择数据类型，再按数据源勾选文件</Typography.Text>
+        ) : slots.length === 0 ? (
+          <Typography.Text type="secondary">该类型没有数据源节点</Typography.Text>
         ) : (
-          <Table
-            size="small"
-            rowKey="source_id"
-            loading={loadingSources}
-            pagination={{ pageSize: 20, hideOnSinglePage: true }}
-            dataSource={[...displaySources].sort((a, b) =>
-              String(b.created_at || '').localeCompare(String(a.created_at || '')),
-            )}
-            columns={[
-              {
-                title: '选用',
-                width: 72,
-                render: (_: unknown, row: PlatformSourceRecord) => (
-                  <Checkbox
-                    data-testid={`lake-run-source-check-${row.source_id}`}
-                    checked={selectedIds.includes(row.source_id)}
-                    onChange={(e) => toggleSelected(row.source_id, e.target.checked)}
-                  />
-                ),
-              },
-              {
-                title: '采集批',
-                width: 140,
-                render: (_: unknown, row: PlatformSourceRecord) => {
-                  const id = collectionKey(row)
-                  return (
-                    <Tag color="blue" data-testid="lake-collection-tag">
-                      {id.length > 12 ? `${id.slice(0, 10)}…` : id}
-                    </Tag>
-                  )
-                },
-              },
-              {
-                title: '类型',
-                dataIndex: 'kind',
-                width: 100,
-                render: (kind: string) => <Tag>{kindLabel(kind as LakeKind)}</Tag>,
-              },
-              {
-                title: '文件',
-                render: (_: unknown, row: PlatformSourceRecord) => (
-                  <Space>
-                    <span>{row.filename || row.source_id}</span>
-                    {row.kind === 'image' ? <Tag color="orange">仅入湖</Tag> : null}
-                  </Space>
-                ),
-              },
-              {
-                title: '入湖时间',
-                dataIndex: 'created_at',
-                width: 180,
-                render: (v: string | null | undefined) => v || '—',
-              },
-            ]}
-          />
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            {slots.map((slot) => {
+              const rows = sourcesForSlot(slot, sources)
+              const min = slot.cardinality_min ?? 1
+              const max = slot.cardinality_max ?? min
+              const err = slotError(slot, selectedBySlot[slot.id] || [])
+              const kindsTxt = (slot.kinds || []).map((k) => kindLabel(k)).join(' / ') || '—'
+              return (
+                <div key={slot.id} data-testid={`lake-run-slot-${slot.id}`}>
+                  <Typography.Text strong>{slotTitle(slot)}</Typography.Text>
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                    {kindsTxt} · {min}–{max} 个
+                    {slot.required ? ' · 必选' : ' · 可选'}
+                    {` · 已选 ${(selectedBySlot[slot.id] || []).length}`}
+                  </Typography.Paragraph>
+                  {err ? (
+                    <Alert type="warning" showIcon message={err} style={{ marginBottom: 8 }} />
+                  ) : null}
+                  {rows.length === 0 ? (
+                    <Typography.Text type="secondary">没有匹配该数据源 kinds 的入湖文件</Typography.Text>
+                  ) : (
+                    <Table
+                      size="small"
+                      rowKey="source_id"
+                      loading={loadingSources}
+                      pagination={{ pageSize: 20, hideOnSinglePage: true }}
+                      dataSource={[...rows].sort((a, b) =>
+                        String(b.created_at || '').localeCompare(String(a.created_at || '')),
+                      )}
+                      columns={sourceColumns(slot)}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </Space>
         )}
       </div>
+
+      {blockErrors.length ? (
+        <Alert type="warning" showIcon message="分块未满足基数" description={blockErrors.join('；')} />
+      ) : null}
 
       <Space>
         <Button
@@ -273,7 +360,7 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
           type="primary"
           icon={<PlayCircleOutlined />}
           data-testid="lake-run-create-run"
-          disabled={!preflight?.ok}
+          disabled={!preflight?.ok || blockErrors.length > 0}
           loading={running}
           onClick={() => void createRun()}
         >
@@ -290,7 +377,9 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
           }${preflight.missing?.length ? `；缺：${preflight.missing.join('、')}` : ''}`}
         />
       ) : null}
-      {selectedSources.some((item) => item.kind === 'image') ? (
+      {selectedSources.some((item) =>
+        (IMAGE_EXTS as readonly string[]).includes(normalizeSourceKind(item.kind) || item.kind),
+      ) ? (
         <Alert
           type="warning"
           showIcon

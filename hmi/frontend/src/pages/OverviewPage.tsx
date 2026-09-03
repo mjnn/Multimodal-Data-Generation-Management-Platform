@@ -24,6 +24,7 @@ import {
 import { ContentCard, FilterBar, PageHeader, PageStack } from '../components/ui'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
 import { useDataTypeWorkspace } from '../context/DataTypeWorkspaceContext'
+import { resolveListCards } from '../utils/overviewLayout'
 import { useListQueryState } from '../hooks/useListQueryState'
 import {
   clearOverviewSnapshot,
@@ -55,10 +56,11 @@ export function OverviewPage() {
   const browseClips = canBrowseClips(user?.roles)
   const showOssLinks = canAccessOss(user?.roles)
   const { dataSource, dataRevision } = useDataSourceMode()
-  const { dataTypeId } = useDataTypeWorkspace()
-  const isAudioNvh = dataTypeId === 'audio_array_spec'
-  /** OMS cabin keeps label/ASR search; other DataTypes use typed list without OMS index. */
-  const usesOmsOverview = dataTypeId === 'oms_cabin'
+  const { dataTypeId, recipe } = useDataTypeWorkspace()
+  const listCards = resolveListCards(recipe)
+  const showMetrics = listCards.some((c) => c.widget_id === 'clip_metrics')
+  const showSearch = listCards.some((c) => c.widget_id === 'label_search')
+  const showNvhCol = listCards.some((c) => c.widget_id === 'nvh_spl_column')
   const cacheKey = `${dataSource}-${dataRevision}-${dataTypeId}`
   const [clips, setClips] = useState<ClipOverview[]>([])
   const [loading, setLoading] = useState(true)
@@ -363,10 +365,10 @@ export function OverviewPage() {
       ),
     },
     {
-      title: isAudioNvh ? '声压摘要' : usesOmsOverview ? '多模内容' : '内容摘要',
-      width: isAudioNvh ? 180 : 140,
+      title: showNvhCol ? '声压摘要' : showSearch ? '多模内容' : '内容摘要',
+      width: showNvhCol ? 180 : 140,
       render: (_, r) =>
-        isAudioNvh ? (
+        showNvhCol ? (
           <Space direction="vertical" size={2}>
             {r.nvh_thumb_url ? (
               <img
@@ -380,7 +382,7 @@ export function OverviewPage() {
             </span>
             <span>{r.nvh_channel_count ?? 0} 通道 · {r.duration_sec.toFixed(1)}s</span>
           </Space>
-        ) : usesOmsOverview ? (
+        ) : showSearch ? (
           <Space direction="vertical" size={2}>
             <span>
               <TagOutlined /> {r.clip_label_ready ? 'Clip 已打标' : 'Clip 未打标'}
@@ -442,7 +444,7 @@ export function OverviewPage() {
         description={
           isAnonymousOnly(user?.roles)
             ? `当前为匿名账号，仅可查看总览列表与统计。当前数据源：${modeLabel}。`
-            : isAudioNvh
+            : showNvhCol
               ? `当前数据源：${modeLabel}。麦克风阵列频谱类型：列表展示 Leq / 通道数；点进 Clip 为四通道频谱时间轴（非舱内四路画面）。`
               : `当前数据源：${modeLabel}。以 Clip 为单位查看管线状态与校核进度。列表默认缓存 6 小时，过期自动重拉；也可手动刷新。`
         }
@@ -465,26 +467,35 @@ export function OverviewPage() {
         <Alert type="error" showIcon message="加载失败" description={loadError} style={{ marginBottom: 16 }} />
       ) : null}
 
-      <ContentCard>
-        <div className="overview-summary">
-          <OverviewClipPieChart counts={bucketCounts} total={clips.length} />
-          <OverviewClipMetricsGrid counts={bucketCounts} total={clips.length} />
-        </div>
-      </ContentCard>
-
-      {usesOmsOverview ? (
-        <OverviewClipSearchPanel
-          dataTypeId={dataTypeId}
-          onApplied={(result) => {
-            setQueryActive(result.active)
-            setQueryClipIds(result.clipIds)
-            setQueryHits(result.hits)
-            setPage(1)
-          }}
-        />
-      ) : null}
-
+      {listCards.map((card) => {
+        if (card.widget_id === 'clip_metrics' && showMetrics) {
+          return (
+            <ContentCard key={card.key}>
+              <div className="overview-summary">
+                <OverviewClipPieChart counts={bucketCounts} total={clips.length} />
+                <OverviewClipMetricsGrid counts={bucketCounts} total={clips.length} />
+              </div>
+            </ContentCard>
+          )
+        }
+        if (card.widget_id === 'label_search' && showSearch) {
+          return (
+            <OverviewClipSearchPanel
+              key={card.key}
+              dataTypeId={dataTypeId}
+              onApplied={(result) => {
+                setQueryActive(result.active)
+                setQueryClipIds(result.clipIds)
+                setQueryHits(result.hits)
+                setPage(1)
+              }}
+            />
+          )
+        }
+        if (card.widget_id !== 'clip_table') return null
+        return (
       <ContentCard
+        key={card.key}
         title={queryActive ? '检索结果 Clip' : '全部 Clip'}
         extra={browseClips ? '点击行进入 Clip 预览' : undefined}
         noPadding
@@ -528,7 +539,7 @@ export function OverviewPage() {
             emptyText: queryActive
               ? '检索无匹配 Clip'
               : dataSource === 'local'
-                ? isAudioNvh
+                ? showNvhCol
                   ? '暂无本类型 Clip；请在源湖上传 HEAD .dat 并选择「麦克风阵列频谱」开跑'
                   : '暂无 Clip；可运行 init_local_runtime.py、seed_demo 或 import_real_data_clips'
                 : '暂无 Clip；请确认 OSS/MC 凭证与云端数据',
@@ -541,6 +552,8 @@ export function OverviewPage() {
           }
         />
       </ContentCard>
+        )
+      })}
     </PageStack>
   )
 }

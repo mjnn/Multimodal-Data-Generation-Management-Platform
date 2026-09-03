@@ -1113,6 +1113,113 @@ export interface RegisterResponse {
   user: import('../auth/types').AuthUser
 }
 
+export interface DataTypeSlot {
+  id: string
+  title?: string
+  kinds: string[]
+  cardinality_min?: number
+  cardinality_max?: number
+  role?: string
+  required?: boolean
+}
+
+export interface DataTypePreprocessStep {
+  op_id: string
+  when_kind?: string | null
+  required?: boolean
+  inputs?: string[]
+  produces?: string[]
+  params?: Record<string, unknown>
+  output_labels?: Record<string, string>
+}
+
+export interface DataTypeProduct {
+  id: string
+  from_op?: string | null
+  reusable?: boolean
+}
+
+export interface OperatorPort {
+  id: string
+  types: string[]
+  title?: string
+  multiple?: boolean
+}
+
+export interface PlatformOperator {
+  op_id: string
+  title: string
+  input_kinds: string[]
+  product: string
+  role?: 'preprocess' | 'stage'
+  category?: string
+  input_ports?: OperatorPort[]
+  output_ports?: OperatorPort[]
+  params_schema?: Record<string, unknown>
+}
+
+export interface PlatformViewTemplate {
+  id: string
+  title: string
+  description?: string
+  list?: string[]
+  detail?: string[]
+}
+
+export interface ViewWidget {
+  id: string
+  surface: 'list' | 'detail'
+  title: string
+  description?: string
+  needs?: string[]
+}
+
+export interface PlatformCatalog {
+  operators: PlatformOperator[]
+  views: PlatformViewTemplate[]
+  view_widgets?: ViewWidget[]
+  text_schemas: Array<string | { schema_id?: string; title?: string }>
+  source_kinds?: string[]
+  categories?: Record<string, string>
+  type_provides?: Record<string, string[]>
+}
+
+export type PipelineBinding =
+  | { kind: 'slot'; slot_id: string }
+  | { kind: 'upstream'; step_key: string; port_id?: string }
+
+export type PipelinePortBindings = PipelineBinding | PipelineBinding[]
+
+export interface PipelineStep {
+  key: string
+  op_id: string
+  card_kind?: 'source' | 'op'
+  title?: string
+  kinds?: string[]
+  cardinality_min?: number
+  cardinality_max?: number
+  role?: 'preprocess' | 'stage'
+  required?: boolean
+  when_kind?: string | null
+  produces?: string[]
+  output_labels?: Record<string, string>
+  params?: Record<string, unknown>
+  bindings?: Record<string, PipelinePortBindings>
+  bbox_enabled?: boolean
+}
+
+export interface ViewCard {
+  key: string
+  widget_id: string
+  bindings?: Record<string, PipelinePortBindings>
+}
+
+export interface RecipeOverview {
+  preset?: string
+  list: ViewCard[]
+  detail: ViewCard[]
+}
+
 export interface DataTypeRecipe {
   id: string
   title: string
@@ -1120,20 +1227,17 @@ export interface DataTypeRecipe {
   owner: string
   taxonomy_id: string
   overview_view: string
+  overview?: RecipeOverview
   status: 'draft' | 'published'
   require_any_kinds?: string[][]
-  slots?: Array<{
-    id: string
-    kinds: string[]
-    cardinality_min?: number
-    cardinality_max?: number
-    role?: string
-    required?: boolean
-  }>
-  preprocess?: Array<Record<string, unknown>>
-  products?: Array<{ id: string; from_op?: string | null; reusable?: boolean }>
+  slots?: DataTypeSlot[]
+  preprocess?: DataTypePreprocessStep[]
+  products?: DataTypeProduct[]
   bbox?: { enabled: boolean; detector: string; yolo_classes?: string }
-  stages?: { label?: { enabled: boolean }; embed?: { enabled: boolean } }
+  stages?: {
+    label?: { enabled: boolean; model?: string; inputs?: string[] }
+    embed?: { enabled: boolean; model?: string; inputs?: string[] }
+  }
 }
 
 export interface AudioNvhChannel {
@@ -1176,6 +1280,11 @@ export interface PlatformSourceRecord {
 
 export interface PlatformSampleRecord {
   sample_id: string
+  source_ids: string[]
+}
+
+export interface SlotAssignment {
+  slot_id: string
   source_ids: string[]
 }
 

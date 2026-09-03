@@ -1,4 +1,9 @@
-"""SQLite persistence for source lake, samples, DataType recipes, and runs."""
+"""平台内核 SQLite（写入 app.db）。
+
+表：platform_source / sample / sample_source / data_type / run / product。
+配方种子与校验走 recipe.py；开跑多选绑定走 run_bind / create_run_from_sources。
+产物 cache_key = 输入 + 算子 + 参数，供血缘查询。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,7 @@ from typing import Any
 
 from hmi.app_db import _utc_now_iso, db_conn
 from hmi.platform.cache import product_cache_key
+from hmi.platform.file_kinds import modality_of, resolve_source_kind
 from hmi.platform.operators import SOURCE_KINDS
 from hmi.platform.preflight import preflight
 from hmi.platform.recipe import eligible_kinds_for_recipe, seed_recipes, validate_recipe
@@ -283,6 +289,16 @@ def upsert_data_type(recipe: dict[str, Any]) -> dict[str, Any]:
     return rec
 
 
+def _source_row(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    kind = resolve_source_kind(kind=str(item.get("kind") or ""), filename=str(item.get("filename") or ""))
+    if kind:
+        item["kind"] = kind
+    if not item.get("collection_id"):
+        item["collection_id"] = item.get("source_id")
+    return item
+
+
 def put_source(
     *,
     content: bytes,
@@ -293,26 +309,28 @@ def put_source(
 ) -> dict[str, Any]:
     from hmi.data_source import is_local_mode
 
-    kind_n = str(kind).strip().lower()
-    if kind_n not in SOURCE_KINDS:
-        raise ValueError(f"unknown source kind={kind_n!r}")
-    if kind_n == "text" and not (text_schema_id or "").strip():
+    kind_n = resolve_source_kind(kind=kind, filename=filename)
+    if kind_n is None or kind_n not in SOURCE_KINDS:
+        raise ValueError(f"unknown source kind={kind!r}")
+    mod = modality_of(kind_n)
+    if mod == "text" and not (text_schema_id or "").strip():
         raise ValueError("text source requires text_schema_id")
     digest = hashlib.sha256(content).hexdigest()
     source_id = "sha256:" + digest
     coll = (collection_id or "").strip() or source_id
+    fname = (filename or "").strip() or f"{source_id}{kind_n}"
     local_oss_key: str | None = None
     local_path: str | None = None
     if is_local_mode():
-        if kind_n == "rosbag":
+        if mod == "rosbag":
             from hmi.local.bag_upload import persist_local_rosbag_source
 
-            persisted = persist_local_rosbag_source(filename or f"{source_id}.bag", content)
+            persisted = persist_local_rosbag_source(fname, content)
         else:
             from hmi.local.source_upload import persist_local_media_source
 
             persisted = persist_local_media_source(
-                filename=filename or f"{source_id}.{kind_n}",
+                filename=fname,
                 data=content,
                 text_schema_id=text_schema_id,
             )
@@ -336,12 +354,12 @@ def put_source(
               local_path = excluded.local_path,
               collection_id = COALESCE(NULLIF(excluded.collection_id, ''), platform_source.collection_id)
             """,
-            (source_id, kind_n, filename, text_schema_id, digest, local_oss_key, local_path, coll, now),
+            (source_id, kind_n, fname, text_schema_id, digest, local_oss_key, local_path, coll, now),
         )
     return {
         "source_id": source_id,
         "kind": kind_n,
-        "filename": filename,
+        "filename": fname,
         "text_schema_id": text_schema_id,
         "content_hash": digest,
         "local_oss_key": local_oss_key,
@@ -409,14 +427,28 @@ def list_sources(
             """,
             (lim if kind_filter is None else 2000,),
         ).fetchall()
-    items = [dict(r) for r in rows]
-    for item in items:
-        if not item.get("collection_id"):
-            item["collection_id"] = item["source_id"]
+    items = [_source_row(r) for r in rows]
     if kind_filter is not None:
         items = [row for row in items if str(row.get("kind") or "") in kind_filter]
         items = items[:lim]
     return items
+
+
+def _source_kind_by_id(source_ids: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    with db_conn() as conn:
+        for src in source_ids:
+            row = conn.execute(
+                "SELECT kind, filename FROM platform_source WHERE source_id = ?",
+                (src,),
+            ).fetchone()
+            if row is None:
+                continue
+            out[src] = (
+                resolve_source_kind(kind=str(row["kind"]), filename=str(row["filename"] or ""))
+                or str(row["kind"])
+            )
+    return out
 
 
 def create_run_from_sources(
@@ -424,31 +456,40 @@ def create_run_from_sources(
     data_type_id: str,
     *,
     pipeline_run_id: str | None = None,
+    assignments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Auto-create Sample from multi-selected sources, then queue a platform run."""
-    ids = [str(s).strip() for s in source_ids if str(s).strip()]
-    if not ids:
-        raise ValueError("source_ids required")
-    kinds: list[str] = []
-    with db_conn() as conn:
-        for src in ids:
-            row = conn.execute(
-                "SELECT kind FROM platform_source WHERE source_id = ?",
-                (src,),
-            ).fetchone()
-            if row is None:
-                raise ValueError(f"unknown source_id={src}")
-            kinds.append(str(row["kind"]))
+    from hmi.platform.run_bind import resolve_run_source_bindings
+
     recipe = get_data_type(data_type_id)
     if recipe is None:
         raise ValueError(f"unknown data_type_id={data_type_id}")
     if recipe.get("status") != "published":
         raise ValueError(f"data type {data_type_id} is not published")
+    rec = validate_recipe(recipe)
+
+    mentioned: list[str] = []
+    if assignments:
+        for asg in assignments:
+            if isinstance(asg, dict):
+                mentioned.extend(str(s).strip() for s in (asg.get("source_ids") or []) if str(s).strip())
+    else:
+        mentioned = [str(s).strip() for s in source_ids if str(s).strip()]
+    kind_map = _source_kind_by_id(mentioned)
+    ids = resolve_run_source_bindings(
+        rec,
+        source_ids=source_ids,
+        assignments=assignments,
+        source_kind_by_id=kind_map,
+    )
+    if not ids:
+        raise ValueError("source_ids required")
+    kinds = [kind_map.get(src) or "" for src in ids]
     pf = preflight(recipe, kinds)
     if not pf["ok"]:
         raise ValueError("preflight failed: missing " + ",".join(pf.get("missing") or []))
     sample_id = None
-    if len(ids) == 1 and kinds[0] == "rosbag":
+    if len(ids) == 1 and modality_of(kinds[0]) == "rosbag":
         sample_id = ids[0]
     sample = create_sample(ids, sample_id=sample_id)
     run = create_run(sample["sample_id"], data_type_id, pipeline_run_id=pipeline_run_id)
@@ -477,21 +518,24 @@ def list_sample_sources(sample_id: str) -> list[dict[str, Any]]:
             """,
             (sample_id,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [_source_row(r) for r in rows]
 
 
 def sample_source_kinds(sample_id: str) -> list[str]:
     with db_conn() as conn:
         rows = conn.execute(
             """
-            SELECT s.kind
+            SELECT s.kind, s.filename
             FROM platform_sample_source ps
             JOIN platform_source s ON s.source_id = ps.source_id
             WHERE ps.sample_id = ?
             """,
             (sample_id,),
         ).fetchall()
-    return [r["kind"] for r in rows]
+    return [
+        resolve_source_kind(kind=str(r["kind"]), filename=str(r["filename"] or "")) or str(r["kind"])
+        for r in rows
+    ]
 
 
 def preflight_sample(sample_id: str, data_type_id: str) -> dict[str, Any]:

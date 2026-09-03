@@ -38,6 +38,11 @@ export function canManageUsers(userRoles: string[] | undefined): boolean {
   return hasAnyRole(userRoles, ['admin'])
 }
 
+/** 新建/编辑 DataType 配方（对应 PUT /api/platform/data-types，需 admin）。 */
+export function canManageDataTypes(userRoles: string[] | undefined): boolean {
+  return hasAnyRole(userRoles, ['admin'])
+}
+
 export function canManageTaxonomy(userRoles: string[] | undefined): boolean {
   return hasAnyRole(userRoles, ['admin', 'taxonomy_manager'])
 }

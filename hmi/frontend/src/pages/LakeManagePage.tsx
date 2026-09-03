@@ -10,42 +10,26 @@ import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useAuth } from '../auth/AuthContext'
 import { canAccessOss } from '../auth/roles'
 import { apiErrorMessage } from '../utils/apiError'
-
-type LakeKind = 'rosbag' | 'video' | 'audio' | 'text' | 'image'
+import { TEXT_EXTS, kindFromFilename, normalizeSourceKind } from '../utils/fileKinds'
 
 type StagedLakeFile = {
   uid: string
   file: File
-  kind: LakeKind
+  kind: string
 }
 
-function classifyLakeFile(name: string): LakeKind | null {
-  const lower = name.toLowerCase()
-  if (lower.endsWith('.bag')) return 'rosbag'
-  if (/\.(mp4|webm|mov|mkv|avi)$/.test(lower)) return 'video'
-  if (/\.(wav|mp3|m4a|flac|ogg|aac|dat)$/.test(lower)) return 'audio'
-  if (/\.(txt|json|md|csv)$/.test(lower)) return 'text'
-  if (/\.(jpg|jpeg|png|webp|bmp)$/.test(lower)) return 'image'
-  return null
+function classifyLakeFile(name: string): string | null {
+  return kindFromFilename(name)
 }
 
 function textSchemaIdForFile(name: string): string | undefined {
+  const kind = kindFromFilename(name)
+  if (!kind || !(TEXT_EXTS as readonly string[]).includes(kind)) return undefined
   return name.toLowerCase().endsWith('.json') ? 'generic_json' : 'generic_text'
 }
 
-function kindLabel(kind: LakeKind): string {
-  switch (kind) {
-    case 'rosbag':
-      return 'Rosbag'
-    case 'video':
-      return '视频'
-    case 'audio':
-      return '音频'
-    case 'text':
-      return '文本'
-    case 'image':
-      return '图片'
-  }
+function kindLabel(kind: string): string {
+  return normalizeSourceKind(kind) || kind
 }
 
 function newCollectionId(): string {
@@ -152,7 +136,7 @@ export function LakeManagePage() {
         const created = await api.createPlatformSource({
           kind: item.kind,
           filename: item.file.name,
-          text_schema_id: item.kind === 'text' ? textSchemaIdForFile(item.file.name) : undefined,
+          text_schema_id: textSchemaIdForFile(item.file.name),
           content_b64: await fileToBase64(item.file),
           collection_id: collectionId,
         })
@@ -249,7 +233,7 @@ export function LakeManagePage() {
                   title: '类型',
                   dataIndex: 'kind',
                   width: 100,
-                  render: (kind: string) => <Tag>{kindLabel(kind as LakeKind)}</Tag>,
+                  render: (kind: string) => <Tag>{kindLabel(kind)}</Tag>,
                 },
                 {
                   title: '文件',

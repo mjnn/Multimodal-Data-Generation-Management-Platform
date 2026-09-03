@@ -1,3 +1,10 @@
+/**
+ * HMI 前端路由表（平台内核信息架构）。
+ *
+ * `/` 数据类型列表 → `/w/:id` 工作区；源湖 `/lake`；开跑 `/pipeline`。
+ * 检索必须带 DataType 工作区，禁止跨类型混合。
+ * 开发：npm run dev 默认 :5173，代理 /api → :8000。
+ */
 import { App as AntApp, Spin } from 'antd'
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
@@ -15,6 +22,7 @@ import { SystemEnvPage } from './pages/SystemEnvPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { OverviewPage } from './pages/OverviewPage'
+import { DataTypeEditorPage } from './pages/DataTypeEditorPage'
 import { DataTypeHomePage } from './pages/DataTypeHomePage'
 import { DataTypeWorkspaceLayout } from './pages/DataTypeWorkspaceLayout'
 import { LakeManagePage } from './pages/LakeManagePage'
@@ -46,6 +54,10 @@ export default function App() {
             <Route element={<RequireAuth />}>
               <Route element={<AppLayout />}>
                 <Route index element={<DataTypeHomePage />} />
+                <Route element={<RequireRole roles={['admin']} />}>
+                  <Route path="data-types/new" element={<DataTypeEditorPage />} />
+                  <Route path="data-types/:dataTypeId/edit" element={<DataTypeEditorPage />} />
+                </Route>
                 <Route path="w/:dataTypeId" element={<DataTypeWorkspaceLayout />}>
                   <Route index element={<OverviewPage />} />
                 </Route>

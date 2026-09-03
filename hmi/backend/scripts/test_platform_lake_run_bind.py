@@ -42,15 +42,16 @@ class BindTestCase(unittest.TestCase):
 
 class TestRecipeSlots(BindTestCase):
     def test_seeds_have_slots_and_products(self) -> None:
+        from hmi.platform.file_kinds import AUDIO_EXTS, IMAGE_EXTS, VIDEO_EXTS
         from hmi.platform.recipe import eligible_kinds_for_recipe, seed_recipes
 
         seeds = seed_recipes()
         audio = seeds["audio_array_spec"]
         self.assertEqual(audio["slots"][0]["id"], "audio_primary")
         self.assertTrue(audio["products"])
-        self.assertEqual(eligible_kinds_for_recipe(audio), {"audio"})
+        self.assertEqual(eligible_kinds_for_recipe(audio), set(AUDIO_EXTS))
         ivi = seeds["ivi_ui_stub"]
-        self.assertEqual(eligible_kinds_for_recipe(ivi), {"video", "image"})
+        self.assertEqual(eligible_kinds_for_recipe(ivi), set(VIDEO_EXTS) | set(IMAGE_EXTS))
 
 
 class TestLakeRunBind(BindTestCase):
@@ -71,8 +72,10 @@ class TestLakeRunBind(BindTestCase):
         self.assertGreaterEqual(len(all_items), 2)
         ivi_only = list_sources(limit=50, eligible_for="ivi_ui_stub")
         kinds = {r["kind"] for r in ivi_only}
-        self.assertIn("video", kinds)
+        self.assertIn(".mp4", kinds)
+        self.assertNotIn(".txt", kinds)
         self.assertNotIn("text", kinds)
+        self.assertNotIn("video", kinds)
 
     def test_create_run_from_sources_auto_sample(self) -> None:
         from hmi.platform.store import create_run_from_sources, get_run, put_source
@@ -85,6 +88,92 @@ class TestLakeRunBind(BindTestCase):
         row = get_run(run["run_id"])
         assert row is not None
         self.assertEqual(row["status"], "queued")
+
+    def test_assignments_required_for_multi_slot(self) -> None:
+        from hmi.platform.store import create_run_from_sources, put_source
+
+        bag = put_source(content=b"x", kind="rosbag", filename="a.bag")
+        with self.assertRaises(ValueError) as ctx:
+            create_run_from_sources([bag["source_id"]], "oms_cabin")
+        self.assertIn("assignments", str(ctx.exception).lower())
+
+    def test_preflight_bare_source_ids_require_assignments_for_multi_slot(self) -> None:
+        """api_preflight shares resolve_run_source_bindings with create_run_from_sources."""
+        from hmi.platform.recipe import seed_recipes
+        from hmi.platform.run_bind import resolve_run_source_bindings
+        from hmi.platform.store import put_source
+
+        bag = put_source(content=b"x", kind="rosbag", filename="preflight.bag")
+        cabin = seed_recipes()["oms_cabin"]
+        kind_map = {bag["source_id"]: ".bag"}
+        with self.assertRaises(ValueError) as ctx:
+            resolve_run_source_bindings(
+                cabin,
+                source_ids=[bag["source_id"]],
+                assignments=None,
+                source_kind_by_id=kind_map,
+            )
+        self.assertIn("assignments", str(ctx.exception).lower())
+
+        # single-slot still auto-wraps (same helper used by preflight)
+        wav = put_source(content=b"audio", kind="audio", filename="preflight.wav")
+        audio = seed_recipes()["audio_array_spec"]
+        ids = resolve_run_source_bindings(
+            audio,
+            source_ids=[wav["source_id"]],
+            assignments=None,
+            source_kind_by_id={wav["source_id"]: ".wav"},
+        )
+        self.assertEqual(ids, [wav["source_id"]])
+
+    def test_single_slot_source_ids_still_works(self) -> None:
+        from hmi.platform.store import create_run_from_sources, put_source
+
+        wav = put_source(content=b"audio-bytes", kind="audio", filename="a.wav")
+        run = create_run_from_sources([wav["source_id"]], "audio_array_spec")
+        self.assertTrue(run["run_id"])
+
+    def test_assignments_maps_wav_to_audio_slot(self) -> None:
+        from hmi.platform.store import create_run_from_sources, put_source
+
+        wav = put_source(content=b"audio-bytes", kind="audio", filename="b.wav")
+        run = create_run_from_sources(
+            [],
+            "audio_array_spec",
+            assignments=[{"slot_id": "audio_primary", "source_ids": [wav["source_id"]]}],
+        )
+        self.assertEqual(run["source_ids"], [wav["source_id"]])
+
+    def test_assignment_rejects_wrong_kind_and_duplicate(self) -> None:
+        from hmi.platform.run_bind import validate_source_assignments
+        from hmi.platform.recipe import seed_recipes
+        from hmi.platform.store import put_source
+
+        wav = put_source(content=b"audio-bytes", kind="audio", filename="c.wav")
+        mp4 = put_source(content=b"fake-mp4", kind="video", filename="c.mp4")
+        recipe = seed_recipes()["audio_array_spec"]
+        kinds = {wav["source_id"]: ".wav", mp4["source_id"]: ".mp4"}
+        with self.assertRaises(ValueError) as ctx:
+            validate_source_assignments(
+                recipe,
+                [{"slot_id": "audio_primary", "source_ids": [mp4["source_id"]]}],
+                source_kind_by_id=kinds,
+            )
+        self.assertIn("audio_primary", str(ctx.exception))
+
+        bag = put_source(content=b"bag-bytes", kind="rosbag", filename="d.bag")
+        kinds[bag["source_id"]] = ".bag"
+        cabin = seed_recipes()["oms_cabin"]
+        with self.assertRaises(ValueError) as ctx2:
+            validate_source_assignments(
+                cabin,
+                [
+                    {"slot_id": "rosbag", "source_ids": [bag["source_id"]]},
+                    {"slot_id": "video", "source_ids": [bag["source_id"]]},
+                ],
+                source_kind_by_id=kinds,
+            )
+        self.assertIn("multiple", str(ctx2.exception).lower())
 
 
 class TestProductLineage(BindTestCase):

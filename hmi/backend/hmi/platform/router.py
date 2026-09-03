@@ -1,4 +1,12 @@
-"""Platform kernel REST: operators, DataTypes, lake, samples, preflight, lineage."""
+"""平台内核 REST：`/api/platform`。
+
+- 算子目录、DataType 配方 CRUD
+- 源湖 sources（POST 仅 local）
+- 开跑：preflight + runs（可带 source_ids，内部自动 Sample）
+- 产物 lookup / lineage
+
+Sample 是内部实体，UI 主路径不要手搓组样本。勿在此 publish audio_nvh-v2。
+"""
 
 from __future__ import annotations
 
@@ -9,10 +17,12 @@ from pydantic import BaseModel, Field
 
 from hmi.auth.deps import require_admin, require_overview_access, require_pipeline_write
 from hmi.data_source import is_local_mode
-from hmi.platform.operators import list_operators
+from hmi.platform.operators import CATEGORY_TITLES, list_operators, list_source_kinds, list_type_provides
 from hmi.platform.preflight import preflight
+from hmi.platform.run_bind import resolve_run_source_bindings
 from hmi.platform.store import (
     TEXT_SCHEMAS,
+    _source_kind_by_id,
     create_run,
     create_run_from_sources,
     create_sample,
@@ -26,7 +36,7 @@ from hmi.platform.store import (
     put_source,
     upsert_data_type,
 )
-from hmi.platform.views import list_view_templates
+from hmi.platform.views import list_view_templates, list_view_widgets
 
 router = APIRouter(prefix="/api/platform", tags=["platform"])
 
@@ -45,17 +55,24 @@ class SampleIn(BaseModel):
     sample_id: str | None = None
 
 
+class SlotAssignmentIn(BaseModel):
+    slot_id: str
+    source_ids: list[str] = Field(default_factory=list)
+
+
 class PreflightIn(BaseModel):
     data_type_id: str
     sample_id: str | None = None
     source_kinds: list[str] | None = None
     source_ids: list[str] | None = None
+    assignments: list[SlotAssignmentIn] | None = None
 
 
 class RunIn(BaseModel):
     data_type_id: str
     sample_id: str | None = None
     source_ids: list[str] | None = None
+    assignments: list[SlotAssignmentIn] | None = None
 
 
 class ProductLookupIn(BaseModel):
@@ -68,7 +85,15 @@ class ProductLookupIn(BaseModel):
 
 @router.get("/operators")
 def api_list_operators(_user: dict[str, Any] = Depends(require_overview_access)) -> dict[str, Any]:
-    return {"operators": list_operators(), "views": list_view_templates(), "text_schemas": list(TEXT_SCHEMAS)}
+    return {
+        "operators": list_operators(),
+        "views": list_view_templates(),
+        "view_widgets": list_view_widgets(),
+        "text_schemas": list(TEXT_SCHEMAS),
+        "type_provides": list_type_provides(),
+        "categories": CATEGORY_TITLES,
+        "source_kinds": list_source_kinds(),
+    }
 
 
 @router.get("/data-types")
@@ -153,6 +178,12 @@ def api_create_sample(
         raise HTTPException(400, detail=str(exc)) from exc
 
 
+def _assignment_dicts(items: list[SlotAssignmentIn] | None) -> list[dict[str, Any]] | None:
+    if not items:
+        return None
+    return [item.model_dump() for item in items]
+
+
 @router.post("/runs/preflight")
 def api_preflight(
     body: PreflightIn,
@@ -165,18 +196,24 @@ def api_preflight(
         if recipe is None:
             raise ValueError(f"unknown data_type_id={body.data_type_id}")
         kinds = list(body.source_kinds or [])
-        if body.source_ids:
-            from hmi.app_db import db_conn
-
-            with db_conn() as conn:
-                for sid in body.source_ids:
-                    row = conn.execute(
-                        "SELECT kind FROM platform_source WHERE source_id = ?",
-                        (sid,),
-                    ).fetchone()
-                    if row is None:
-                        raise ValueError(f"unknown source_id={sid}")
-                    kinds.append(str(row["kind"]))
+        asg = _assignment_dicts(body.assignments)
+        if asg or body.source_ids:
+            mentioned: list[str] = []
+            if asg:
+                for item in asg:
+                    mentioned.extend(
+                        str(s).strip() for s in (item.get("source_ids") or []) if str(s).strip()
+                    )
+            else:
+                mentioned = [str(s).strip() for s in body.source_ids if str(s).strip()]
+            kind_map = _source_kind_by_id(mentioned)
+            ids = resolve_run_source_bindings(
+                recipe,
+                source_ids=list(body.source_ids or []),
+                assignments=asg,
+                source_kind_by_id=kind_map,
+            )
+            kinds.extend(kind_map.get(sid) or "" for sid in ids)
         result = preflight(recipe, kinds)
         result["source_kinds"] = kinds
         return result
@@ -190,8 +227,13 @@ def api_create_run(
     _user: dict[str, Any] = Depends(require_pipeline_write),
 ) -> dict[str, Any]:
     try:
-        if body.source_ids:
-            return create_run_from_sources(body.source_ids, body.data_type_id)
+        asg = _assignment_dicts(body.assignments)
+        if asg or body.source_ids:
+            return create_run_from_sources(
+                list(body.source_ids or []),
+                body.data_type_id,
+                assignments=asg,
+            )
         if not body.sample_id:
             raise ValueError("sample_id or source_ids required")
         return create_run(body.sample_id, body.data_type_id)

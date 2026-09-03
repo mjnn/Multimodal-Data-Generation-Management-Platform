@@ -4,6 +4,13 @@ import { Alert, Spin, Typography } from 'antd'
 import { api } from '../api'
 import type { DataTypeRecipe } from '../api/types'
 import { DataTypeWorkspaceProvider } from '../context/DataTypeWorkspaceContext'
+import { hydrateOverview, overviewCustomized } from '../utils/overviewLayout'
+
+function workspaceBanner(recipe: DataTypeRecipe): string {
+  const ov = hydrateOverview(recipe)
+  const custom = overviewCustomized(ov) ? ' · 自定义拼版' : ''
+  return `标签树 ${recipe.taxonomy_id} · 视图 ${recipe.overview_view}${custom}`
+}
 
 export function DataTypeWorkspaceLayout() {
   const { dataTypeId } = useParams()
@@ -39,7 +46,7 @@ export function DataTypeWorkspaceLayout() {
   }
 
   return (
-    <DataTypeWorkspaceProvider>
+    <DataTypeWorkspaceProvider recipe={recipe}>
       <Alert
         data-testid="data-type-workspace-banner"
         type="info"
@@ -52,7 +59,7 @@ export function DataTypeWorkspaceLayout() {
             <Link to="/">切换数据类型</Link>
           </span>
         }
-        description={`标签树 ${recipe.taxonomy_id} · 视图 ${recipe.overview_view}`}
+        description={workspaceBanner(recipe)}
       />
       <Outlet />
     </DataTypeWorkspaceProvider>

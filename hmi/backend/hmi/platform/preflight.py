@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hmi.platform.file_kinds import modality_of, normalize_source_kind
+from hmi.platform.operators import get_operator
 from hmi.platform.recipe import validate_recipe
 
 
@@ -14,7 +16,8 @@ def preflight(recipe: dict[str, Any], source_kinds: list[str]) -> dict[str, Any]
     Missing kinds are listed for the first unsatisfied group (or all groups).
     """
     rec = validate_recipe(recipe)
-    present = {str(k).strip().lower() for k in source_kinds if k}
+    present = {normalize_source_kind(k) or str(k).strip().lower() for k in source_kinds if k}
+    present.discard("")
     groups: list[list[str]] = rec["require_any_kinds"]
     matched: list[str] | None = None
     missing_by_group: list[list[str]] = []
@@ -36,20 +39,27 @@ def preflight(recipe: dict[str, Any], source_kinds: list[str]) -> dict[str, Any]
                     continue
                 ops.append(step["op_id"])
             continue
-        if when in present:
+        op = get_operator(str(step.get("op_id") or ""))
+        accepted = {normalize_source_kind(when) or str(when).strip().lower()}
+        for kind in (op or {}).get("input_kinds") or []:
+            nk = normalize_source_kind(str(kind)) or str(kind).strip().lower()
+            if nk:
+                accepted.add(nk)
+        if present & accepted:
             ops.append(step["op_id"])
         elif step.get("required"):
             ok = False
-            if when not in missing:
-                missing.append(when)
+            wk = normalize_source_kind(when) or str(when)
+            if wk not in missing:
+                missing.append(wk)
 
     # bbox operator when enabled even if not listed with when_kind
     if rec["bbox"]["enabled"] and "detect_bbox" not in ops:
-        if present & {"image", "video", "rosbag"}:
+        if any(modality_of(k) in {"image", "video", "rosbag"} for k in present):
             ops.append("detect_bbox")
         elif ok:
             ok = False
-            missing = sorted(set(missing) | {"image"})
+            missing = sorted(set(missing) | {".jpg"})
 
     if rec["stages"]["label"]["enabled"]:
         ops.append("label")
