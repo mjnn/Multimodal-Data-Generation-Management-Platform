@@ -134,7 +134,23 @@ def encode_cursor(clip_id: str, run_id: str, label_id: str) -> str:
 
 
 
-def _taxonomy_node_map() -> dict[str, dict[str, Any]]:
+def _taxonomy_node_map(data_type_id: str | None = None) -> dict[str, dict[str, Any]]:
+
+    dt_id = str(data_type_id or "").strip() or None
+
+    if dt_id:
+
+        from hmi.taxonomy.data_type_bind import resolve_taxonomy_version_for_data_type
+
+        version = resolve_taxonomy_version_for_data_type(dt_id)
+
+        if version is None:
+
+            return {}
+
+        nodes = list_nodes(version["id"], active_only=True)
+
+        return {str(n["label_id"]): n for n in nodes}
 
     published = get_published_version()
 
@@ -410,6 +426,8 @@ def build_pending_tasks(
 
     include_clip_card: bool = True,
 
+    data_type_id: str | None = None,
+
 ) -> list[dict[str, Any]]:
 
     mode = normalize_review_v2_mode(mode)
@@ -424,7 +442,9 @@ def build_pending_tasks(
 
     reviewed_keys = field_review_key_set()
 
-    node_map = _taxonomy_node_map()
+    dt_id = str(data_type_id or "").strip() or None
+
+    node_map = _taxonomy_node_map(dt_id)
 
     tasks: list[dict[str, Any]] = []
 
@@ -497,6 +517,10 @@ def build_pending_tasks(
 
 
         for lid in _collect_label_ids(view):
+
+            if dt_id and lid not in node_map:
+
+                continue
 
             if (clip_id, run_id, lid) in reviewed_keys:
 
@@ -628,8 +652,12 @@ def filter_low_confidence_claim_tasks(tasks: list[dict[str, Any]]) -> list[dict[
     return [t for t in tasks if is_eligible_for_low_confidence_claim(t)]
 
 
-def build_low_confidence_claim_tasks(limit: int) -> list[dict[str, Any]]:
-    tasks = build_pending_tasks("confidence")
+def build_low_confidence_claim_tasks(
+    limit: int,
+    *,
+    data_type_id: str | None = None,
+) -> list[dict[str, Any]]:
+    tasks = build_pending_tasks("confidence", data_type_id=data_type_id)
     return filter_low_confidence_claim_tasks(tasks)[:limit]
 
 
@@ -646,6 +674,8 @@ def task_stats(
 
     filter_value: Any = None,
 
+    data_type_id: str | None = None,
+
 ) -> dict[str, Any]:
 
     tasks = build_pending_tasks(
@@ -653,6 +683,7 @@ def task_stats(
         label_id=label_id,
         filter_value=filter_value,
         include_clip_card=False,
+        data_type_id=data_type_id,
     )
 
     normalized = normalize_review_v2_mode(mode)
@@ -664,6 +695,8 @@ def task_stats(
         "label_id": label_id,
 
         "value": filter_value,
+
+        "data_type_id": str(data_type_id).strip() or None if data_type_id else None,
 
         "pending": len(tasks),
 

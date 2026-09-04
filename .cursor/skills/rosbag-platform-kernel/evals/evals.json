@@ -1,0 +1,10 @@
+{
+  "skill_name": "rosbag-platform-kernel",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "源湖怎么开跑？要不要先手动组 Sample？",
+      "expected_output": "管线管理多选源自动 Sample+Run；不要把组 Sample 当主路径；POST sources 仅 local"
+    }
+  ]
+}

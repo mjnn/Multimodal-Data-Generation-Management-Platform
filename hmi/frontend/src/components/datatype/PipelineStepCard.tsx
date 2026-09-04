@@ -65,6 +65,9 @@ type Props = {
   /** Real array index for move disable; defaults to `index`. */
   listIndex?: number
   listTotal?: number
+  pinnedLast?: boolean
+  canMoveUp?: boolean
+  canMoveDown?: boolean
   slots: DataTypeSlot[]
   upstream: PipelineStep[]
   operators: PlatformOperator[]
@@ -83,6 +86,9 @@ export function PipelineStepCard({
   total,
   listIndex,
   listTotal,
+  pinnedLast,
+  canMoveUp,
+  canMoveDown,
   slots,
   upstream,
   operators,
@@ -101,6 +107,8 @@ export function PipelineStepCard({
   const isStage = (step.role || op?.role) === 'stage'
   const moveIndex = listIndex ?? index
   const moveTotal = listTotal ?? total
+  const moveUp = canMoveUp ?? moveIndex > 0
+  const moveDown = canMoveDown ?? moveIndex < moveTotal - 1
 
   const setOutputLabel = (typeName: string, label: string) => {
     const labels = { ...(step.output_labels || {}) }
@@ -139,10 +147,10 @@ export function PipelineStepCard({
     <PipelineCardShell
       testId={`pipe-step-${step.op_id}`}
       title={`${index + 1}. ${title}`}
-      subtitle={`${step.op_id}${isStage ? ' · AI 阶段' : ''}`}
+      subtitle={`${step.op_id}${pinnedLast ? ' · 固定最后 · 输出标签树' : isStage ? ' · AI 阶段' : ''}`}
       dragging={dragging}
       dragOver={dragOver}
-      onHandlePointerDown={onHandlePointerDown}
+      onHandlePointerDown={pinnedLast ? undefined : onHandlePointerDown}
       summary={
         outTypes.length ? (
           <span className="pipe-step__chips">
@@ -158,11 +166,17 @@ export function PipelineStepCard({
         )
       }
       extra={
+        pinnedLast ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            固定最后
+          </Typography.Text>
+        ) : (
         <Space>
-          <Button size="small" icon={<ArrowUpOutlined />} disabled={moveIndex === 0} onClick={() => onMove(-1)} />
-          <Button size="small" icon={<ArrowDownOutlined />} disabled={moveIndex === moveTotal - 1} onClick={() => onMove(1)} />
+          <Button size="small" icon={<ArrowUpOutlined />} disabled={!moveUp} onClick={() => onMove(-1)} />
+          <Button size="small" icon={<ArrowDownOutlined />} disabled={!moveDown} onClick={() => onMove(1)} />
           <Button size="small" danger icon={<DeleteOutlined />} onClick={onRemove} data-testid={`pipe-remove-${step.op_id}`} />
         </Space>
+        )
       }
     >
 

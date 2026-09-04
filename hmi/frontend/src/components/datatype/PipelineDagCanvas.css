@@ -1,0 +1,141 @@
+.dag-canvas {
+  position: relative;
+  height: min(320px, 42vh);
+  min-height: 240px;
+  min-width: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  overflow: hidden;
+}
+
+.dag-canvas .react-flow {
+  width: 100%;
+  height: 100%;
+}
+
+.dag-canvas .react-flow__controls {
+  box-shadow: none;
+  border: 1px solid var(--color-hairline);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+
+.dag-canvas .react-flow__controls-button {
+  background: var(--color-surface-2);
+  border-bottom-color: var(--color-hairline);
+  fill: var(--color-ink-muted);
+}
+
+.dag-canvas .react-flow__attribution {
+  display: none;
+}
+
+.dag-node {
+  position: relative;
+  min-width: 168px;
+  max-width: 220px;
+  padding: 8px 10px 12px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+  font-size: 13px;
+}
+
+.dag-node--source {
+  border-color: color-mix(in srgb, #27a644 40%, var(--color-hairline));
+}
+
+.dag-node--label {
+  border-color: color-mix(in srgb, var(--color-primary) 50%, var(--color-hairline));
+}
+
+.dag-node--if {
+  border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-hairline));
+}
+
+.dag-node--review,
+.dag-node--export {
+  border-color: color-mix(in srgb, #828fff 40%, var(--color-hairline));
+}
+
+.dag-node__title {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.dag-node__op {
+  margin-top: 2px;
+  font-family: 'Fira Code', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--color-ink-tertiary);
+}
+
+.dag-node__ports {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--color-ink-tertiary);
+  padding: 0 8px;
+}
+
+.dag-canvas .react-flow__handle {
+  width: 8px;
+  height: 8px;
+  background: var(--color-primary);
+  border: 1px solid var(--color-surface-1);
+}
+
+.dag-canvas .react-flow__edge-path {
+  stroke: var(--color-ink-subtle);
+}
+
+.dag-canvas .react-flow__arrowhead {
+  fill: var(--color-ink-subtle);
+}
+
+.dag-canvas .react-flow__node.selected .dag-node {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.dag-node:not(.dag-node--label) {
+  padding-right: 26px;
+}
+
+.dag-node__remove,
+.dag-edge__remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: 50%;
+  background: var(--color-surface-2);
+  color: var(--color-ink-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dag-node__remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
+.dag-node__remove:hover,
+.dag-edge__remove:hover,
+.dag-edge__remove.is-selected {
+  border-color: var(--color-danger, #c43c3c);
+  color: var(--color-danger, #c43c3c);
+  background: color-mix(in srgb, #c43c3c 10%, var(--color-surface-2));
+}
+
+.dag-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--color-primary);
+}

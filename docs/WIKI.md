@@ -1,7 +1,10 @@
 # Rosbag Labels Platform — 项目 Wiki
 
-> **最后更新**：2026-07-27  
-> **定位**：本仓库的**总览 Wiki**（产品、架构、目录、上手、索引）。细节编排见 DataWorks / PRD / 各模块 README。
+> **最后更新**：2026-08-27  
+> **定位**：本仓库的**总览 Wiki**（产品、架构、目录、上手、索引）。  
+> **交接入口**：[`HANDOVER.md`](HANDOVER.md) · **架构图**：[`architecture.md`](architecture.md) · **代码导览**：[`CODE_MAP.md`](CODE_MAP.md)
+
+当前产品形态已从「舱内 OMS 专用 HMI」升级为 **DataType 平台内核**（源湖 → 配方开跑 → 校核 → Dataset）。进度以 [`CURRENT.md`](../project-management/CURRENT.md) 为准。
 
 ---
 
@@ -9,22 +12,30 @@
 
 | 你想… | 从这里开始 |
 |--------|------------|
+| **交接 / 新会话** | [`HANDOVER.md`](HANDOVER.md) · [`CURRENT.md`](../project-management/CURRENT.md) |
+| 域内部署 / 堡垒机 CI | [`deploy-intranet-cicd.md`](deploy-intranet-cicd.md) |
+| 看架构图 | [`architecture.md`](architecture.md) |
+| 找该改哪个文件 | [`CODE_MAP.md`](CODE_MAP.md) |
 | 弄清目录与命令 | [`REPO_LAYOUT.md`](REPO_LAYOUT.md) |
-| 做需求 / 里程碑 | [`prd-rosbag-labels.md`](prd-rosbag-labels.md) · [`project-management/CURRENT.md`](../project-management/CURRENT.md) |
+| 做需求 / 里程碑 | [`prd-rosbag-labels.md`](prd-rosbag-labels.md) |
+| 平台内核规格 | [`superpowers/specs/2026-08-18-platform-datatype-kernel-design.md`](superpowers/specs/2026-08-18-platform-datatype-kernel-design.md) |
 | SDK 产物与 OSS `sdk_v1` | [`sdk-first-pipeline-design.md`](sdk-first-pipeline-design.md) |
 | DataWorks 节点与参数 | [`pipeline/dataworks/WORKFLOW.md`](../pipeline/dataworks/WORKFLOW.md) · [`PIPELINE_DEVELOPER_GUIDE.md`](../pipeline/dataworks/PIPELINE_DEVELOPER_GUIDE.md) |
 | HMI 本地 / 云端 | [`hmi/backend/README.md`](../hmi/backend/README.md) · [§8 HMI](#8-hmi-人机界面) |
-| OSS / MC CLI | [`cloud-cli-runbook.md`](cloud-cli-runbook.md) |
+| OSS / MC CLI | `.cursor/skills/cloud-cli-ops/`（[`cloud-cli-runbook.md`](cloud-cli-runbook.md) 为遗留指针） |
 | Agent 工单流程 | [`AGENTS.md`](../AGENTS.md) |
 
 ---
 
 ## 1. 项目简介
 
-**rosbag_to_labels_pipline**（Rosbag Labels Platform）面向车载 / 机器人 **ROS bag** 多模态录制数据，提供：
+**rosbag_to_labels_pipline**（Rosbag Labels Platform / 多模态数据生成与管理平台）面向车载 / 机器人 **ROS bag** 与阵列音频，提供：
 
-1. **解析与 AI 管线** — 从 bag 到 clip 级 OMS 标签、ASR、融合向量，可上云（DataWorks + MaxCompute + OSS）或本地/SDK 批跑。  
-2. **校核 HMI** — FastAPI + React：时间轴浏览、标签检索、OSS 与管线进度、账号与 Taxonomy、**校核工作台 v2**、数据集导出（按 PRD 里程碑扩展）。
+1. **解析与 AI 管线** — bag → OMS Multimodal SDK（`sdk_v1` jsonl + 预览）→ OSS + MaxCompute；云上为 DataWorks **单 Driver hybrid**。  
+2. **平台内核** — DataType 配方（槽位 / 预处理 / 产物 / 打标阶段）+ 源湖 + 内部 Sample + 产物血缘。  
+3. **校核 HMI** — FastAPI + React：按类型工作区浏览、Taxonomy Hub、校核工作台 v2、Dataset 导出。
+
+内置配方：`oms_cabin`（舱内 OMS）、`audio_array_spec`（阵列 NVH + AST L6）、`ivi_ui_stub`（IVI 占位，业务打标未完成）。
 
 ### 1.1 核心能力
 
@@ -74,6 +85,26 @@ rosbag_to_labels_pipline/
 | **`hmi/`** | 产品 UI + 应用 DB；`hmi/data/hmi_local/` 为 sync 后的本地真相 |
 
 完整树与开发命令：**[`REPO_LAYOUT.md`](REPO_LAYOUT.md)**。
+
+---
+
+## 2.5 平台内核（2026-08 主路径）
+
+HMI 不再假设「全世界都是舱内 OMS clip」。工作区入口是 **数据类型列表** `/`，再进 `/w/:dataTypeId`。
+
+| 实体 | 表 | 说明 |
+|------|-----|------|
+| 源 | `platform_source` | 与类型解绑；按 `collection_id` 展示采集批 |
+| 配方 | `platform_data_type` | JSON recipe：slots / preprocess / products / stages / bbox / taxonomy |
+| Sample | `platform_sample` | **内部实体**；开跑多选时自动创建，UI 不手搓 |
+| Run | `platform_run` | 一次配方执行 |
+| 产物 | `platform_product` | `cache_key = inputs + op + params`；`GET /api/platform/lineage` |
+
+本地开跑由 `local_sdk_worker` 执行：`oms_cabin` 调 SDK；`audio_array_spec` 走频谱 + `nvh_deriver` + **`nvh_sem_ast`**（权重 gitignore，勿提交）。
+
+**禁止**：publish `audio_nvh-v2`；跨 DataType 混合检索；用 VL 打 bbox。
+
+API 前缀：`/api/platform/*`。规格：`docs/superpowers/specs/2026-08-18-platform-datatype-kernel-design.md`。
 
 ---
 
@@ -287,15 +318,17 @@ python -m oms_multimodal inspect --bag path\to\output.bag
 
 | 路由 | 功能 |
 |------|------|
-| `/login` | JWT 登录 |
-| `/` | Clip 总览 |
-| `/clips/:clipId` | 多模态时间轴（legacy 数据） |
-| `/search` | OMS 标签检索（时刻簇） |
-| `/oss` | OSS 与 bag 管线进度 |
-| `/taxonomy` | Taxonomy 版本编辑 / 发布 |
-| `/review` | **校核工作台 v2**（逐标签 · 双模式；`/review/:clipId` 重定向至此） |
+| `/login` `/register` | JWT |
+| `/` | **数据类型列表**（平台内核入口） |
+| `/data-types/new` · `/data-types/:id/edit` | 配方编辑（admin） |
+| `/w/:dataTypeId` | 类型工作区总览（舱内时间轴 / NVH 频谱） |
+| `/lake` | 源湖入库 + OSS Tab（`/oss` 会转到此） |
+| `/pipeline` | 管线管理与源湖开跑 |
+| `/clips/:clipId` | 多模态时间轴 |
+| `/taxonomy` · `/taxonomy/:versionId` | Taxonomy Hub（context/coverage/diff/impact） |
+| `/review` | 校核工作台 v2 |
 | `/datasets` | 数据集快照 |
-| `/admin/users` | 用户管理 |
+| `/admin/users` `/admin/audit` `/admin/system-env` | 管理 |
 
 前端细节：**[`hmi/frontend/README.md`](../hmi/frontend/README.md)**。
 
@@ -487,7 +520,7 @@ py -3 scripts\verify_pipeline_run.py --clip-id sha256:3cd012197d1f2112f51c741450
 | 文档 | 内容 |
 |------|------|
 | [`prd-rosbag-labels.md`](prd-rosbag-labels.md) | 账号、Taxonomy、校核、Dataset（需求权威） |
-| [`project-management/CURRENT.md`](../project-management/CURRENT.md) | **当前工单**（如 M6 校核 v2 → M6.6 E2E） |
+| [`project-management/CURRENT.md`](../project-management/CURRENT.md) | **当前工单**（平台内核；下一票 UI-NVH-REVIEW-SAVE） |
 | [`AGENTS.md`](../AGENTS.md) | Agent 开工 / 收工四件套 |
 
 **基线能力**（Wiki §1–§13）已具备管线 + HMI 浏览 / 检索 / OSS。  
@@ -524,4 +557,4 @@ py -3 scripts\verify_pipeline_run.py --clip-id sha256:3cd012197d1f2112f51c741450
 
 ---
 
-*维护：架构或目录变更时，请同步更新本 Wiki 与 [`REPO_LAYOUT.md`](REPO_LAYOUT.md)。*
+*维护：架构或目录变更时，请同步更新本 Wiki、[`HANDOVER.md`](HANDOVER.md)、[`architecture.md`](architecture.md)、[`CODE_MAP.md`](CODE_MAP.md) 与 [`REPO_LAYOUT.md`](REPO_LAYOUT.md)。*

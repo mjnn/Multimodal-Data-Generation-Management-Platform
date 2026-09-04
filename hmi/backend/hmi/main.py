@@ -1,4 +1,12 @@
-"""Rosbag HMI FastAPI application."""
+"""HMI FastAPI 应用入口。
+
+装配：鉴权、平台内核 /api/platform、Taxonomy Hub、校核、Dataset、clips/OSS/上传。
+lifespan 里按数据源启动 local_sdk_worker / oss_sync_poller / cloud_bag_trigger_poller
+（后台线程，无 Celery）。
+
+启动：`hmi/backend/run.py` → http://127.0.0.1:8000
+数据源：`hmi/data_source.py`（local SQLite vs cloud MC/OSS）。
+"""
 
 from __future__ import annotations
 
@@ -51,6 +59,7 @@ from hmi.platform.router import router as platform_router
 from hmi.local.store import get_meta
 from hmi.router import clips_svc, search_svc
 from hmi.services import oss_manage, oss_sync_poller, pipeline_status, upload
+from hmi.public_prefix import strip_ui_prefix_scope
 
 
 def _warmup() -> None:
@@ -683,8 +692,24 @@ def api_search_clusters(
 @app.get("/api/label-taxonomy")
 def api_label_taxonomy(
     version_id: str | None = Query(default=None),
+    data_type_id: str | None = Query(default=None),
     _user: dict[str, Any] = Depends(require_clip_explorer_access),
 ) -> list[dict[str, Any]]:
+    if data_type_id and data_type_id.strip():
+        from hmi.platform.store import get_data_type
+        from hmi.taxonomy.compat import get_label_taxonomy
+        from hmi.taxonomy.data_type_bind import resolve_taxonomy_version_for_data_type
+
+        dt_id = data_type_id.strip()
+        if get_data_type(dt_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "404_NOT_FOUND", "message": f"unknown data_type_id={dt_id}"},
+            )
+        version = resolve_taxonomy_version_for_data_type(dt_id)
+        if version is None:
+            return []
+        return get_label_taxonomy(version["id"])
     if version_id:
         from hmi.taxonomy.compat import get_label_taxonomy
         from hmi.taxonomy_db import get_version
@@ -961,6 +986,7 @@ def api_put_pipeline_settings(
         "bbox_yolo_classes",
         "bbox_in_label_prompt",
         "bbox_face_attrs",
+        "dag_node_overrides",
     }
     updates = {k: body[k] for k in allowed if k in body}
     try:
@@ -1005,6 +1031,7 @@ async def api_create_pipeline_execution(
 
     from hmi.db import cache_clear
     from hmi.local.source_upload import classify_source_filename
+    from hmi.platform.file_kinds import modality_of
 
     batch_files: list[tuple[str, bytes]] = []
     kinds: set[str] = set()
@@ -1021,7 +1048,7 @@ async def api_create_pipeline_execution(
         data = await upload.read()
         batch_files.append((name, data))
 
-    has_media = bool(kinds & {"video", "audio", "text"})
+    has_media = any(modality_of(k) in {"video", "audio", "text"} for k in kinds)
 
     if is_local_mode():
         from hmi.local.pipeline_execution import enqueue_pipeline_sources_batch, enqueue_rosbags_batch
@@ -1174,6 +1201,13 @@ async def html_no_cache(request, call_next):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
     return response
+
+
+@app.middleware("http")
+async def strip_public_ui_prefix(request, call_next):
+    """直连 :8012/tools/rosbag-labels/... 时剥掉 UI 前缀（须在读 path 的鉴权之前）。"""
+    strip_ui_prefix_scope(request.scope)
+    return await call_next(request)
 
 
 _mount_frontend()

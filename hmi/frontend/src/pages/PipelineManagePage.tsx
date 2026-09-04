@@ -11,7 +11,7 @@ import { PipelineRunSettingsCard } from '../components/pipeline/PipelineRunSetti
 import { UploadPipelineProgress, firstFailedStepError } from '../components/UploadPipelineProgress'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
-import { readRememberedDataTypeId, rememberDataTypeId } from '../context/DataTypeWorkspaceContext'
+import { peekRememberedDataTypeId, rememberDataTypeId } from '../context/DataTypeWorkspaceContext'
 import { clipDisplayName } from '../utils/clipDisplay'
 import { formatDateTime } from '../utils/format'
 
@@ -74,7 +74,7 @@ export function PipelineManagePage() {
   const focusResolvedRef = useRef(false)
   const focusPageResolvedRef = useRef(false)
   const loadInFlightRef = useRef(false)
-  const [runDataTypeId, setRunDataTypeId] = useState(readRememberedDataTypeId)
+  const [runDataTypeId, setRunDataTypeId] = useState(peekRememberedDataTypeId)
 
   const loadExecutions = useCallback(async (opts?: { quiet?: boolean; refresh?: boolean }) => {
     const quiet = Boolean(opts?.quiet)
@@ -387,7 +387,7 @@ export function PipelineManagePage() {
     <PageStack>
       <PageHeader
         title="管线管理"
-        description="从源湖开跑、配置执行参数，并按执行批次查看 SDK 进度（最新在前）。"
+        description="选择湖中数据开跑、按 DAG 节点调整参数，并按执行批次查看 SDK 进度（最新在前）。"
         icon={<ApartmentOutlined />}
         extra={
           activeTab === 'queue' ? (
@@ -409,7 +409,7 @@ export function PipelineManagePage() {
         items={[
           {
             key: 'run',
-            label: '源湖开跑',
+            label: '数据选择',
             children: (
               <ContentCard>
                 <LakeRunBindPanel
@@ -427,7 +427,13 @@ export function PipelineManagePage() {
             label: '执行参数',
             children: (
               <ContentCard>
-                <PipelineRunSettingsCard dataTypeId={runDataTypeId} />
+                <PipelineRunSettingsCard
+                  dataTypeId={runDataTypeId}
+                  onDataTypeIdChange={(id) => {
+                    setRunDataTypeId(id)
+                    rememberDataTypeId(id)
+                  }}
+                />
               </ContentCard>
             ),
           },
@@ -501,8 +507,8 @@ export function PipelineManagePage() {
                     locale={{
                       emptyText:
                         dataSource === 'local'
-                          ? '暂无执行记录；请在「源湖开跑」选类型并创建运行'
-                          : '暂无云端执行记录；请在「源湖开跑」创建运行或触发云端管线',
+                          ? '暂无执行记录；请在「数据选择」选类型并创建运行'
+                          : '暂无云端执行记录；请在「数据选择」创建运行或触发云端管线',
                     }}
                   />
                 </ContentCard>

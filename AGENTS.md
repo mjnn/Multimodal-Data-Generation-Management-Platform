@@ -1,11 +1,18 @@
 # Agent 须知（跨会话）
 
-本项目正在按 PRD 扩展 **账号 / Taxonomy / 校核 / Dataset** 能力。实施期请遵守以下入口。
+本项目正在按 PRD 扩展 **账号 / Taxonomy / 校核 / Dataset**，并重构 **DataType 平台内核**。
+
+## 交接入口（优先）
+
+1. **`docs/HANDOVER.md`** — 人与 Agent 的第一页  
+2. **`docs/architecture.md`** — 架构图  
+3. **`docs/CODE_MAP.md`** — 中文代码导览  
+4. **`.cursor/skills/rosbag-onboarding/SKILL.md`** — 新会话技能  
 
 ## 开工前必读
 
 1. **`project-management/CURRENT.md`** — 推荐下一个工单、判据、禁止抢跑
-2. **`docs/m1-implementation-notes.md`**（或当前里程碑 Mn Notes）
+2. **`docs/m1-implementation-notes.md`**（或当前里程碑 Mn Notes / `docs/superpowers/specs/`）
 3. **`docs/prd-rosbag-labels.md`** — 需求冲突时最高权威
 
 ## 收工必做

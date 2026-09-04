@@ -1,4 +1,8 @@
-"""Monorepo path constants — single source for pipeline, HMI, SDK, and shared config."""
+"""Monorepo 路径常量（管线 / HMI / SDK / 配置的单一来源）。
+
+入口脚本应把 shared/ 加入 sys.path 后 `from repo_paths import CONFIG_PATH, ENV_PATH`。
+HMI 运行时目录：HMI_RUNTIME_ROOT（默认 hmi/data/hmi_runtime）。
+"""
 
 from __future__ import annotations
 

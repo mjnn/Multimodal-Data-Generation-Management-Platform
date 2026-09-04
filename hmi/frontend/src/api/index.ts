@@ -57,6 +57,7 @@ import type {
   PlatformRunPreflight,
   PlatformRunRecord,
   PlatformSampleRecord,
+  PlatformProductRecord,
   PlatformSourceRecord,
   SlotAssignment,
 } from './types'
@@ -71,11 +72,13 @@ function reviewV2SearchParams(opts: {
   labelId?: string
   value?: string
   dtype?: string
+  dataTypeId?: string
 }): URLSearchParams {
   const params = new URLSearchParams({ mode: reviewV2ModeQuery(opts.mode) })
   if (opts.labelId) params.set('label_id', opts.labelId)
   if (opts.value != null && opts.value !== '') params.set('value', opts.value)
   if (opts.dtype) params.set('dtype', opts.dtype)
+  if (opts.dataTypeId) params.set('data_type_id', opts.dataTypeId)
   return params
 }
 
@@ -266,7 +269,16 @@ export const api = {
     })
   },
 
-  getLabelTaxonomy: (): Promise<LabelTaxonomyNode[]> => fetchJson('/label-taxonomy'),
+  getLabelTaxonomy: (opts?: {
+    versionId?: string
+    dataTypeId?: string
+  }): Promise<LabelTaxonomyNode[]> => {
+    const params = new URLSearchParams()
+    if (opts?.dataTypeId) params.set('data_type_id', opts.dataTypeId)
+    if (opts?.versionId) params.set('version_id', opts.versionId)
+    const q = params.toString()
+    return fetchJson(`/label-taxonomy${q ? `?${q}` : ''}`)
+  },
 
   findSimilar: (compositeId: string, topK = 8): Promise<SimilarItem[]> =>
     fetchJson(`/similar?` + new URLSearchParams({ id: compositeId, top_k: String(topK) })),
@@ -630,6 +642,7 @@ export const api = {
     labelId?: string
     value?: string
     dtype?: string
+    dataTypeId?: string
   }): Promise<ReviewV2Stats> => {
     const params = reviewV2SearchParams(opts)
     return fetchJson(`/review/v2/tasks/stats?${params}`)
@@ -718,6 +731,7 @@ export const api = {
     label_ids: string[]
     queue_limit: number
     review_targets?: import('./types').ReviewTarget[]
+    data_type_id?: string | null
   }): Promise<{ count: number; items: ReviewV2Task[] }> =>
     fetchJson('/review/assignments/preview', {
       method: 'POST',
@@ -730,6 +744,7 @@ export const api = {
     queue_limit: number
     assignee_id?: string | null
     review_targets?: import('./types').ReviewTarget[]
+    data_type_id?: string | null
   }): Promise<ReviewAssignmentBatch> =>
     fetchJson('/review/assignments/batches', {
       method: 'POST',
@@ -773,6 +788,7 @@ export const api = {
   claimLowConfidenceReviewBatch: (body: {
     limit: number
     review_targets?: import('./types').ReviewTarget[]
+    data_type_id: string
   }): Promise<ReviewAssignmentBatch> =>
     fetchJson('/review/assignments/claim-low-confidence', {
       method: 'POST',
@@ -1003,6 +1019,18 @@ export const api = {
     assignments?: SlotAssignment[]
   }): Promise<PlatformRunRecord> =>
     fetchJson('/platform/runs', { method: 'POST', body: JSON.stringify(body) }),
+
+  listPlatformProducts: (limit = 200): Promise<{ items: PlatformProductRecord[] }> =>
+    fetchJson(`/platform/products?limit=${limit}`),
+
+  lookupPlatformProduct: (body: {
+    input_ids: string[]
+    op_id: string
+    params?: Record<string, unknown>
+    artifact_path?: string
+    run_id?: string
+  }): Promise<{ cache_key: string; skipped: boolean }> =>
+    fetchJson('/platform/products/lookup', { method: 'POST', body: JSON.stringify(body) }),
 
   getPlatformLineage: (opts: {
     sourceId?: string

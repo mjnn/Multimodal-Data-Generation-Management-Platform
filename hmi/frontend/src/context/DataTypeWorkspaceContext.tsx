@@ -12,6 +12,14 @@ type WorkspaceValue = {
 
 const Ctx = createContext<WorkspaceValue>({ dataTypeId: 'oms_cabin', recipe: null })
 
+export function peekRememberedDataTypeId(): string {
+  try {
+    return sessionStorage.getItem(STORAGE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
 export function rememberDataTypeId(id: string): void {
   try {
     sessionStorage.setItem(STORAGE_KEY, id)

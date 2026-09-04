@@ -2,7 +2,7 @@ import { Typography } from 'antd'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { PipelineStep, PlatformOperator } from '../../api/types'
 import { sourceKindOptions } from '../../utils/fileKinds'
-import { isSourceCard, newSourceCard, newStepFromOp, nextSourceTitle, slotsFromSteps } from '../../utils/recipePipeline'
+import { isLabelCard, isSourceCard, newSourceCard, newStepFromOp, nextSourceTitle, pinLabelLast, slotsFromSteps } from '../../utils/recipePipeline'
 import { ComponentPalette } from './ComponentPalette'
 import { PipelineSourceCard } from './PipelineSourceCard'
 import { PipelineStepCard } from './PipelineStepCard'
@@ -30,18 +30,22 @@ export function PipelineOrchestrator({
   const opTotal = steps.filter((s) => !isSourceCard(s)).length
 
   const add = (opId: string) => {
+    if (opId === 'label' && steps.some(isLabelCard)) return
+    const prior = steps.filter((s) => !isLabelCard(s))
     const key = `${opId}-${Date.now()}`
-    onChange([
-      ...steps,
-      newStepFromOp({
-        opId,
-        key,
-        operators,
-        slots,
-        upstream: steps,
-        typeProvides,
-      }),
-    ])
+    const card = newStepFromOp({
+      opId,
+      key,
+      operators,
+      slots,
+      upstream: prior,
+      typeProvides,
+    })
+    const labelIdx = steps.findIndex(isLabelCard)
+    const next = [...steps]
+    if (opId === 'label' || labelIdx < 0) next.push(card)
+    else next.splice(labelIdx, 0, card)
+    onChange(pinLabelLast(next))
   }
 
   const lastSourceIndex = steps.reduce((acc, s, i) => (isSourceCard(s) ? i : acc), -1)
@@ -58,7 +62,7 @@ export function PipelineOrchestrator({
     const insertAt = lastSourceIndex >= 0 ? lastSourceIndex + 1 : 0
     const next = [...steps]
     next.splice(insertAt, 0, card)
-    onChange(next)
+    onChange(pinLabelLast(next))
   }
 
   const patch = (index: number, next: PipelineStep) => {
@@ -68,19 +72,26 @@ export function PipelineOrchestrator({
   }
 
   const move = (index: number, delta: number) => {
+    if (isLabelCard(steps[index])) return
     const dir = delta < 0 ? -1 : 1
     let dest = index + dir
     while (dest >= 0 && dest < steps.length && isSourceCard(steps[dest])) dest += dir
     if (dest < 0 || dest >= steps.length) return
+    if (isLabelCard(steps[dest])) return
     moveTo(index, dest)
   }
 
   const moveTo = (from: number, to: number) => {
     if (from === to || from < 0 || to < 0 || from >= steps.length || to >= steps.length) return
+    if (isLabelCard(steps[from])) return
+    const labelIdx = steps.findIndex(isLabelCard)
+    let dest = to
+    if (labelIdx >= 0 && dest >= labelIdx) dest = labelIdx - 1
+    if (dest < 0 || dest === from || dest >= steps.length) return
     const copy = [...steps]
     const [item] = copy.splice(from, 1)
-    copy.splice(to, 0, item)
-    onChange(copy)
+    copy.splice(dest, 0, item)
+    onChange(pinLabelLast(copy))
   }
 
   const dragFromRef = useRef<number | null>(null)
@@ -89,6 +100,7 @@ export function PipelineOrchestrator({
   const [dragOver, setDragOver] = useState<number | null>(null)
 
   const beginDrag = (index: number, e: ReactPointerEvent<HTMLButtonElement>) => {
+    if (isLabelCard(steps[index])) return
     dragFromRef.current = index
     overRef.current = index
     setDragFrom(index)
@@ -114,12 +126,8 @@ export function PipelineOrchestrator({
       overRef.current = null
       setDragFrom(null)
       setDragOver(null)
-      if (from == null || to == null || from === to) return
-      if (from < 0 || to < 0 || from >= steps.length || to >= steps.length) return
-      const copy = [...steps]
-      const [item] = copy.splice(from, 1)
-      copy.splice(to, 0, item)
-      onChange(copy)
+      if (from == null || to == null) return
+      moveTo(from, to)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -130,8 +138,10 @@ export function PipelineOrchestrator({
   }, [dragFrom, steps, onChange])
 
   const remove = (index: number) => {
+    if (isLabelCard(steps[index])) return
     const gone = steps[index]?.key
     onChange(
+      pinLabelLast(
       steps
         .filter((_, i) => i !== index)
         .map((s) => {
@@ -159,6 +169,7 @@ export function PipelineOrchestrator({
           }
           return changed ? { ...s, bindings } : s
         }),
+      ),
     )
   }
 
@@ -186,6 +197,14 @@ export function PipelineOrchestrator({
                 total={opTotal}
                 listIndex={index}
                 listTotal={steps.length}
+                pinnedLast={isLabelCard(step)}
+                canMoveUp={!isLabelCard(step) && index > lastSourceIndex + 1}
+                canMoveDown={
+                  !isLabelCard(step) &&
+                  (steps.findIndex(isLabelCard) >= 0
+                    ? index < steps.findIndex(isLabelCard) - 1
+                    : index < steps.length - 1)
+                }
                 slots={slots}
                 upstream={steps.slice(0, index)}
                 operators={operators}
@@ -195,13 +214,13 @@ export function PipelineOrchestrator({
                 onRemove={() => remove(index)}
                 dragging={dragFrom === index}
                 dragOver={dragOver === index}
-                onHandlePointerDown={(e) => beginDrag(index, e)}
+                onHandlePointerDown={isLabelCard(step) ? undefined : (e) => beginDrag(index, e)}
               />
               </div>
           ),
         )}
         <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
-          打标器 / 向量化器保存为 stages，不进入 preprocess。BBox 检测器仍写 preprocess，并用卡片上的开跑开关对应 bbox.enabled。
+          打标器固定在最后一个节点（管线最终输出标签树），不能拖走或删除。点选其他算子会插到打标器前面。打标 / 向量化保存为 stages，不进入 preprocess。
         </Typography.Paragraph>
       </div>
     </div>

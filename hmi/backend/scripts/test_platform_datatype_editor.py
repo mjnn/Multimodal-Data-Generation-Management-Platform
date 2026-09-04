@@ -223,7 +223,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
         }
         with self.assertRaises(ValueError) as ctx:
             validate_recipe(recipe)
-        self.assertIn("duplicate slot title", str(ctx.exception))
+        self.assertIn("数据源名称不能重复", str(ctx.exception))
 
 
 class TestRecipePipelineCompile(unittest.TestCase):
@@ -406,6 +406,11 @@ class TestRecipePipelineCompile(unittest.TestCase):
         steps = hydrate_recipe_to_steps(rec)
         sources = [s for s in steps if s.get("card_kind") == "source"]
         self.assertEqual([s["key"] for s in sources], ["rosbag", "video", "image", "audio"])
+        self.assertEqual([s.get("title") for s in sources], ["舱内 bag", "舱内视频", "舱内图片", "舱内音频"])
+        self.assertEqual(steps[-1].get("op_id"), "label")
+        embed_i = next(i for i, s in enumerate(steps) if s.get("op_id") == "embed")
+        label_i = next(i for i, s in enumerate(steps) if s.get("op_id") == "label")
+        self.assertLess(embed_i, label_i)
         self.assertTrue(any(s.get("op_id") == "parse_bag" for s in steps))
         self.assertLess(steps.index(sources[0]), next(i for i, s in enumerate(steps) if s.get("op_id") == "parse_bag"))
 
@@ -596,6 +601,18 @@ class TestRecipePipelineCompile(unittest.TestCase):
         with self.assertRaises(ValueError):
             assert_upward_bindings([src, label, parse])
         assert_upward_bindings([src, parse, label])
+
+    def test_pin_label_last_keeps_label_present_not_forced_last(self) -> None:
+        from hmi.platform.recipe_pipeline import pin_label_last
+
+        steps = [
+            {"op_id": "source", "card_kind": "source"},
+            {"op_id": "label"},
+            {"op_id": "parse_bag"},
+        ]
+        out = pin_label_last(steps)
+        self.assertTrue(any(s.get("op_id") == "label" for s in out))
+        # label may sit before parse_bag (DAG successor)
 
 
 if __name__ == "__main__":

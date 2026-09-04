@@ -16,24 +16,45 @@ from hmi.review.assignment_db import (
 from hmi.review.v2_tasks import build_low_confidence_claim_tasks, build_pending_tasks
 
 
+def _assert_labels_match_data_type(label_ids: list[str], data_type_id: str | None) -> None:
+    dt_id = str(data_type_id or "").strip()
+    if not dt_id:
+        return
+    from hmi.platform.store import get_data_type
+    from hmi.taxonomy.data_type_bind import label_ids_for_data_type
+
+    if get_data_type(dt_id) is None:
+        raise ValueError(f"未知数据类型 {dt_id}")
+    allowed = label_ids_for_data_type(dt_id)
+    extra = [lid for lid in label_ids if lid and lid not in allowed]
+    if extra:
+        raise ValueError("所选标签不属于该数据类型绑定的标签树")
+
+
 def preview_assignment_items(
     label_ids: list[str],
     queue_limit: int,
     *,
     review_targets: list[str] | None = None,
+    data_type_id: str | None = None,
 ) -> list[dict[str, Any]]:
     targets = normalize_review_targets(review_targets)
     if targets == ["bboxes"]:
-        return preview_bbox_only_items(queue_limit)
+        return preview_bbox_only_items(queue_limit, data_type_id=data_type_id)
+    _assert_labels_match_data_type(label_ids, data_type_id)
     label_set = set(label_ids)
     tasks = build_pending_tasks("confidence")
     filtered = [t for t in tasks if t["label_id"] in label_set]
     return filtered[:queue_limit]
 
 
-def preview_bbox_only_items(queue_limit: int) -> list[dict[str, Any]]:
+def preview_bbox_only_items(
+    queue_limit: int,
+    *,
+    data_type_id: str | None = None,
+) -> list[dict[str, Any]]:
     """One work item per clip/run for bbox frame review."""
-    tasks = build_pending_tasks("confidence")
+    tasks = build_pending_tasks("confidence", data_type_id=data_type_id)
     seen: set[tuple[str, str]] = set()
     out: list[dict[str, Any]] = []
     for t in tasks:
@@ -59,9 +80,15 @@ def dispatch_assignment_batch(
     assignee_id: str | None,
     created_by: str,
     review_targets: list[str] | None = None,
+    data_type_id: str | None = None,
 ) -> dict[str, Any]:
     targets = normalize_review_targets(review_targets)
-    items = preview_assignment_items(label_ids, queue_limit, review_targets=targets)
+    items = preview_assignment_items(
+        label_ids,
+        queue_limit,
+        review_targets=targets,
+        data_type_id=data_type_id,
+    )
     batch_kind = "assigned" if assignee_id else "public_pool"
     return create_batch(
         name=name,
@@ -72,6 +99,7 @@ def dispatch_assignment_batch(
         items=items,
         batch_kind=batch_kind,
         review_targets=targets,
+        data_type_id=data_type_id,
     )
 
 
@@ -81,16 +109,21 @@ def claim_low_confidence_batch(
     limit: int,
     created_by: str,
     review_targets: list[str] | None = None,
+    data_type_id: str | None = None,
 ) -> dict[str, Any]:
     targets = normalize_review_targets(review_targets)
+    dt_id = str(data_type_id or "").strip() or None
+    if not dt_id:
+        raise ValueError("请选择数据类型")
+    from hmi.platform.store import get_data_type
+
+    if get_data_type(dt_id) is None:
+        raise ValueError(f"未知数据类型 {dt_id}")
     if targets == ["bboxes"]:
-        tasks = preview_bbox_only_items(limit)
+        tasks = preview_bbox_only_items(limit, data_type_id=dt_id)
         label_ids: list[str] = []
     else:
-        tasks = build_low_confidence_claim_tasks(limit)
-        if "bboxes" in targets and "labels" not in targets:
-            # already handled
-            pass
+        tasks = build_low_confidence_claim_tasks(limit, data_type_id=dt_id)
         label_ids = sorted({str(t["label_id"]) for t in tasks})
     if not tasks:
         raise ValueError("当前没有可领取的空值或低置信度校核条目")
@@ -105,6 +138,7 @@ def claim_low_confidence_batch(
         items=tasks,
         batch_kind="low_confidence",
         review_targets=targets,
+        data_type_id=dt_id,
     )
 
 

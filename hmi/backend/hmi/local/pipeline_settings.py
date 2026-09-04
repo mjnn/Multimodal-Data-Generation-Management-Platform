@@ -44,6 +44,8 @@ _DEFAULTS: dict[str, Any] = {
     "clip_video_max_width": 1920,
     "clip_video_max_height": 1080,
     "clip_video_crf": 18,
+    # Per DataType DAG node param overlays (execution tab). {dtype_id: {node_key: {params, condition}}}
+    "dag_node_overrides": {},
 }
 
 
@@ -266,6 +268,32 @@ def _sanitize_stored_taxonomy_version_id(out: dict[str, Any]) -> None:
         pass
 
 
+def _sanitize_dag_node_overrides(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for dtype_id, nodes in raw.items():
+        did = str(dtype_id or "").strip()
+        if not did or not isinstance(nodes, dict):
+            continue
+        node_map: dict[str, Any] = {}
+        for key, ov in nodes.items():
+            nid = str(key or "").strip()
+            if not nid or not isinstance(ov, dict):
+                continue
+            item: dict[str, Any] = {}
+            params = ov.get("params")
+            if isinstance(params, dict):
+                item["params"] = dict(params)
+            if "condition" in ov and (ov["condition"] is None or isinstance(ov["condition"], dict)):
+                item["condition"] = ov["condition"]
+            if item:
+                node_map[nid] = item
+        if node_map:
+            out[did] = node_map
+    return out
+
+
 def get_pipeline_settings() -> dict[str, Any]:
     out = dict(_DEFAULTS)
     stored_prompt: dict[str, Any] = {}
@@ -300,6 +328,7 @@ def get_pipeline_settings() -> dict[str, Any]:
     _sanitize_stored_taxonomy_version_id(out)
     out["omni_label_prompt"] = get_merged_omni_label_prompt(stored_prompt)
     out["taxonomy_version_label"] = resolve_pipeline_taxonomy_display(out)
+    out["dag_node_overrides"] = _sanitize_dag_node_overrides(out.get("dag_node_overrides"))
     return out
 
 
@@ -315,6 +344,7 @@ def get_pipeline_settings_for_save() -> dict[str, Any]:
                         out[k] = data[k]
         except (json.JSONDecodeError, OSError):
             pass
+    out["dag_node_overrides"] = _sanitize_dag_node_overrides(out.get("dag_node_overrides"))
     return out
 
 
@@ -360,6 +390,8 @@ def save_pipeline_settings(updates: dict[str, Any]) -> dict[str, Any]:
                 current[key] = compact_fn(merged)
             else:
                 current[key] = {}
+        elif key == "dag_node_overrides":
+            current[key] = _sanitize_dag_node_overrides(val)
     # Opening bbox detection: keep plain encode + prompt flags; no bbox MP4.
     if current.get("bbox_enabled"):
         # Default: feed detected classes into Omni prompt when BBox is enabled

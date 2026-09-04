@@ -66,7 +66,7 @@ class TestAudioArraySpecRecipe(unittest.TestCase):
         rec = seeds["audio_array_spec"]
         self.assertEqual(rec["overview_view"], "audio_nvh_timeline")
         self.assertTrue(rec["stages"]["label"]["enabled"])
-        self.assertEqual(rec["stages"]["label"]["model"], "nvh_sem_heuristic")
+        self.assertEqual(rec["stages"]["label"]["model"], "nvh_sem_ast")
         self.assertEqual(rec.get("taxonomy_version_code"), "audio_nvh-v2")
         self.assertFalse(rec["stages"]["embed"]["enabled"])
         ops = [s["op_id"] for s in rec["preprocess"]]

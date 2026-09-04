@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 # =============================================================================
-# DataWorks PyODPS3: SDK single-driver (discover + pipeline apply_chunk)
-# Production discovery uses two apply_chunk passes in this one Driver node:
-# (1) hash bag bytes on the OSS mount; (2) run selected SDK pipeline stages.
+# DataWorks PyODPS3：SDK 单 Driver（生产主路径）
+#
+# 同一节点两次 DPE apply_chunk：
+#   (1) 在 OSS 挂载上对 bag 字节做 hash → clip_id
+#   (2) 跑 extract + preview（dpe_parallel）
+# Driver 再跑 MaxFrame AI：asr / label / embed（ai_media_mode=oss_url）
+# 最后写 run.json、aig_sdk__*、pipeline/dispatch/latest.json
+#
+# 粘贴进控制台请用 bundled/sdk_pipeline_driver_node.py（改完先 bundle）。
+# DPE UDF 禁止 dataclass/自定义 class（worker __main__ 无法 unpickle）。
 # =============================================================================
 
 from datetime import datetime, timezone

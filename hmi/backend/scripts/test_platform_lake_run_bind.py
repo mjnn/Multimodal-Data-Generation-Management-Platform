@@ -200,6 +200,61 @@ class TestProductLineage(BindTestCase):
         )
         self.assertTrue(again["skipped"])
 
+    def test_list_products_includes_run_step_and_source(self) -> None:
+        from hmi.platform.store import (
+            create_run_from_sources,
+            list_products,
+            lookup_or_record_product,
+            put_source,
+        )
+
+        src = put_source(content=b"audio-bytes", kind="audio", filename="lineage.wav")
+        run = create_run_from_sources([src["source_id"]], "audio_array_spec")
+        lookup_or_record_product(
+            input_ids=[src["source_id"]],
+            op_id="mel_spectrogram",
+            params={"n_mels": 64},
+            artifact_path="runs/x/audio_spec/mel.png",
+            run_id=run["run_id"],
+        )
+        items = list_products(limit=50)
+        self.assertGreaterEqual(len(items), 1)
+        row = next(p for p in items if p["op_id"] == "mel_spectrogram")
+        self.assertEqual(row["op_title"], "梅尔频谱")
+        self.assertEqual(row["run_id"], run["run_id"])
+        self.assertEqual(row["data_type_id"], "audio_array_spec")
+        self.assertIn("麦克风阵列频谱", str(row.get("data_type_title") or ""))
+        self.assertEqual(row["sources"][0]["filename"], "lineage.wav")
+        self.assertIn(run["run_id"], row["lineage"])
+        self.assertIn("梅尔频谱", row["lineage"])
+        self.assertIn("lineage.wav", row["lineage"])
+        self.assertIn("管线运行", row["lineage"])
+        self.assertIn("数据源", row["lineage"])
+
+    def test_list_products_walks_nested_product_to_source(self) -> None:
+        from hmi.platform.store import list_products, lookup_or_record_product, put_source
+
+        src = put_source(content=b"audio-bytes", kind="audio", filename="nested.wav")
+        first = lookup_or_record_product(
+            input_ids=[src["source_id"]],
+            op_id="stft_spectrogram",
+            artifact_path="runs/x/stft.npy",
+        )
+        lookup_or_record_product(
+            input_ids=[first["cache_key"]],
+            op_id="mel_spectrogram",
+            artifact_path="runs/x/mel.png",
+        )
+        items = list_products(limit=50)
+        row = next(
+            p
+            for p in items
+            if p["op_id"] == "mel_spectrogram" and first["cache_key"] in p["input_ids"]
+        )
+        self.assertEqual(row["sources"][0]["filename"], "nested.wav")
+        self.assertIn("nested.wav", row["lineage"])
+        self.assertIn("未关联管线运行", row["lineage"])
+
 
 if __name__ == "__main__":
     unittest.main()

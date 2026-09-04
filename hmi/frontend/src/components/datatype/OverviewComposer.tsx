@@ -9,6 +9,7 @@ import type {
   ViewCard,
   ViewWidget,
 } from '../../api/types'
+import { ensureLabelsTree } from '../../utils/overviewLayout'
 import {
   asBindingList,
   bindingOptions,
@@ -18,6 +19,7 @@ import {
 } from '../../utils/recipePipeline'
 import { PipelineCardShell } from './PipelineCardShell'
 import './PipelineOrchestrator.css'
+import './OverviewPreview.css'
 
 type Surface = 'list' | 'detail'
 
@@ -31,27 +33,22 @@ type Props = {
 }
 
 export function OverviewComposer({ overview, onChange, widgets, steps, operators, typeProvides }: Props) {
+  useEffect(() => {
+    if (overview.detail.some((c) => c.widget_id === 'labels_tree')) return
+    onChange({ ...overview, detail: ensureLabelsTree(overview.detail) })
+  }, [overview, onChange])
+
   return (
     <div className="overview-compose" data-testid="overview-composer" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <OverviewSurface
-        surface="list"
-        title="总览列表"
-        cards={overview.list}
-        widgets={widgets.filter((w) => w.surface === 'list')}
-        steps={steps}
-        operators={operators}
-        typeProvides={typeProvides}
-        onChange={(list) => onChange({ ...overview, list })}
-      />
-      <OverviewSurface
         surface="detail"
-        title="Clip 详情"
-        cards={overview.detail}
+        title="展示页"
+        cards={ensureLabelsTree(overview.detail)}
         widgets={widgets.filter((w) => w.surface === 'detail')}
         steps={steps}
         operators={operators}
         typeProvides={typeProvides}
-        onChange={(detail) => onChange({ ...overview, detail })}
+        onChange={(detail) => onChange({ ...overview, detail: ensureLabelsTree(detail) })}
       />
     </div>
   )
@@ -82,6 +79,7 @@ function OverviewSurface({
   const [dragOver, setDragOver] = useState<number | null>(null)
 
   const add = (widgetId: string) => {
+    if (widgetId === 'labels_tree' && cards.some((c) => c.widget_id === 'labels_tree')) return
     onChange([...cards, { key: `${surface}-${widgetId}-${Date.now()}`, widget_id: widgetId, bindings: {} }])
   }
 
@@ -136,17 +134,20 @@ function OverviewSurface({
     <div className="pipe-orch" data-testid={`overview-composer-${surface}`} style={{ marginBottom: 16 }}>
       <div className="pipe-orch__palette">
         <p className="pipe-orch__palette-kicker">{title}组件</p>
-        {widgets.map((w) => (
-          <button
-            key={w.id}
-            type="button"
-            className="pipe-orch__op"
-            data-testid={`overview-add-${w.id}`}
-            onClick={() => add(w.id)}
-          >
-            <span>{w.title}</span>
-          </button>
-        ))}
+        {widgets.map((w) => {
+          if (w.id === 'labels_tree' && cards.some((c) => c.widget_id === 'labels_tree')) return null
+          return (
+            <button
+              key={w.id}
+              type="button"
+              className="pipe-orch__op"
+              data-testid={`overview-add-${w.id}`}
+              onClick={() => add(w.id)}
+            >
+              <span>{w.title}</span>
+            </button>
+          )
+        })}
       </div>
       <div className="pipe-orch__steps">
         {cards.length === 0 ? (
@@ -154,11 +155,18 @@ function OverviewSurface({
         ) : (
           cards.map((card, index) => {
             const spec = widgets.find((w) => w.id === card.widget_id)
+            const locked = card.widget_id === 'labels_tree'
             return (
-              <div key={card.key} data-ov-surface={surface} data-ov-index={index}>
+              <div
+                key={card.key}
+                data-ov-surface={surface}
+                data-ov-index={index}
+                data-testid={locked ? 'overview-locked-labels_tree' : undefined}
+              >
                 <OverviewWidgetCard
                   card={card}
                   spec={spec}
+                  locked={locked}
                   steps={steps}
                   operators={operators}
                   typeProvides={typeProvides}
@@ -180,6 +188,7 @@ function OverviewSurface({
 function OverviewWidgetCard({
   card,
   spec,
+  locked,
   steps,
   operators,
   typeProvides,
@@ -191,6 +200,7 @@ function OverviewWidgetCard({
 }: {
   card: ViewCard
   spec?: ViewWidget
+  locked?: boolean
   steps: PipelineStep[]
   operators: PlatformOperator[]
   typeProvides: Record<string, string[]>
@@ -222,7 +232,9 @@ function OverviewWidgetCard({
       dragOver={dragOver}
       onHandlePointerDown={onHandlePointerDown}
       extra={
-        <Button size="small" danger icon={<DeleteOutlined />} onClick={onRemove} data-testid={`overview-remove-${card.widget_id}`} />
+        locked ? null : (
+          <Button size="small" danger icon={<DeleteOutlined />} onClick={onRemove} data-testid={`overview-remove-${card.widget_id}`} />
+        )
       }
     >
       {spec?.description ? (
@@ -256,5 +268,61 @@ function OverviewWidgetCard({
         </div>
       ) : null}
     </PipelineCardShell>
+  )
+}
+
+export function OverviewPreview({
+  overview,
+  widgets,
+}: {
+  overview: RecipeOverview
+  widgets: ViewWidget[]
+}) {
+  const byId = new Map(widgets.map((w) => [w.id, w]))
+  const detail = ensureLabelsTree(overview.detail || [])
+  return (
+    <div className="overview-preview" data-testid="overview-preview">
+      <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+        预览：Clip 详情页将按此顺序叠卡（示意，非真实数据）。
+      </Typography.Text>
+      <div className="overview-preview__cols">
+        <PreviewColumn title="展示页" testId="overview-preview-detail" cards={detail} byId={byId} />
+      </div>
+    </div>
+  )
+}
+
+function PreviewColumn({
+  title,
+  testId,
+  cards,
+  byId,
+}: {
+  title: string
+  testId: string
+  cards: ViewCard[]
+  byId: Map<string, ViewWidget>
+}) {
+  return (
+    <div className="overview-preview__col" data-testid={testId}>
+      <div className="overview-preview__col-title">{title}</div>
+      {cards.length === 0 ? (
+        <div className="overview-preview__empty">尚未添加组件</div>
+      ) : (
+        cards.map((card) => {
+          const spec = byId.get(card.widget_id)
+          return (
+            <div
+              key={card.key}
+              className="overview-preview__card"
+              data-testid={`overview-preview-card-${card.widget_id}`}
+            >
+              <div className="overview-preview__card-title">{spec?.title || card.widget_id}</div>
+              <div className="overview-preview__card-id">{card.widget_id}</div>
+            </div>
+          )
+        })
+      )}
+    </div>
   )
 }

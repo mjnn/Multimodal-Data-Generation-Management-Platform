@@ -1,6 +1,7 @@
 """Clip 音频 ASR（默认 Qwen3-ASR-Flash，可选 Paraformer Recognition）。"""
 from __future__ import annotations
 
+import base64
 import os
 from dataclasses import asdict, dataclass
 from http import HTTPStatus
@@ -87,10 +88,35 @@ class AsrClient:
         config: AsrConfig | None = None,
         api_key: str | None = None,
         workspace_id: str | None = None,
+        provider: str | None = None,
     ):
         self.config = config or AsrConfig.from_env()
+        from .llm_provider import load_aigw_settings, resolve_llm_provider
+
+        self.provider = (provider or resolve_llm_provider("asr")).strip().lower()
+        if self.provider not in {"dashscope", "aigw"}:
+            self.provider = "dashscope"
+
+        if self.provider == "aigw":
+            aigw = load_aigw_settings()
+            self.api_key = aigw.api_key
+            self.workspace_id = None
+            self._aigw = aigw
+            if self.config.enabled and not self.api_key:
+                raise RuntimeError("AIGW_API_KEY is not configured")
+            if aigw.asr_model:
+                self.config = AsrConfig(
+                    enabled=self.config.enabled,
+                    model=aigw.asr_model,
+                    audio_format=self.config.audio_format,
+                    enable_itn=self.config.enable_itn,
+                    language=self.config.language,
+                )
+            return
+
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
         self.workspace_id = workspace_id or os.getenv("DASHSCOPE_WORKSPACE_ID") or None
+        self._aigw = None
         if self.config.enabled and not self.api_key:
             raise RuntimeError("DASHSCOPE_API_KEY is not configured")
 
@@ -98,6 +124,76 @@ class AsrClient:
         if self.api_key:
             dashscope.api_key = self.api_key
             os.environ.setdefault("DASHSCOPE_API_KEY", self.api_key)
+
+    def _transcribe_aigw(self, wav_path: str) -> dict[str, Any]:
+        """OpenAI-compatible ASR via chat (multimodal audio) or audio.transcriptions."""
+        from .llm_provider import make_openai_client
+
+        assert self._aigw is not None
+        client = make_openai_client(
+            base_url=self._aigw.base_url,
+            api_key=self._aigw.api_key,
+            timeout_sec=self._aigw.timeout_sec,
+        )
+        model = self.config.model
+        if not model:
+            raise RuntimeError("AIGW_ASR_MODEL (or AIGW_MODEL) is not configured")
+
+        # Prefer Whisper-style transcriptions when gateway exposes it
+        mode = (os.getenv("AIGW_ASR_MODE") or "chat").strip().lower()
+        if mode in {"transcriptions", "whisper", "audio"}:
+            with open(wav_path, "rb") as fh:
+                tr = client.audio.transcriptions.create(model=model, file=fh)
+            text = getattr(tr, "text", None) or str(tr)
+            return {
+                "model": model,
+                "text": str(text).strip(),
+                "sentences": None,
+                "request_id": getattr(tr, "id", "") or "",
+                "usage": None,
+                "backend": "aigw.audio.transcriptions",
+                "provider": "aigw",
+            }
+
+        encoded = base64.b64encode(Path(wav_path).read_bytes()).decode("utf-8")
+        fmt = Path(wav_path).suffix.lower().lstrip(".") or "wav"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": f"data:;base64,{encoded}", "format": fmt},
+                    },
+                    {
+                        "type": "text",
+                        "text": "请将这段音频完整转写为文字，只输出转写文本，不要解释。",
+                    },
+                ],
+            }
+        ]
+        completion = client.chat.completions.create(model=model, messages=messages, stream=False)
+        choice0 = completion.choices[0] if completion.choices else None
+        message = getattr(choice0, "message", None) if choice0 else None
+        content = getattr(message, "content", None) if message else None
+        if isinstance(content, list):
+            text = " ".join(
+                str(p.get("text", "")).strip() for p in content if isinstance(p, dict) and p.get("text")
+            ).strip()
+        else:
+            text = str(content or "").strip()
+        usage = getattr(completion, "usage", None)
+        if hasattr(usage, "model_dump"):
+            usage = usage.model_dump()
+        return {
+            "model": model,
+            "text": text,
+            "sentences": None,
+            "request_id": getattr(completion, "id", "") or "",
+            "usage": usage,
+            "backend": "aigw.chat.completions",
+            "provider": "aigw",
+        }
 
     def _transcribe_qwen_asr(self, wav_path: str) -> dict[str, Any]:
         self._apply_api_key()
@@ -136,6 +232,7 @@ class AsrClient:
             "request_id": getattr(response, "request_id", ""),
             "usage": usage,
             "backend": "MultiModalConversation",
+            "provider": "dashscope",
         }
 
     def _transcribe_paraformer(self, wav_path: str, *, sample_rate: int) -> dict[str, Any]:
@@ -172,6 +269,8 @@ class AsrClient:
         sample_rate: int = 48000,
     ) -> dict[str, Any]:
         """识别本地 WAV，返回 text + 元数据。"""
+        if self.provider == "aigw":
+            return self._transcribe_aigw(wav_path)
         if _is_qwen_asr_model(self.config.model):
             return self._transcribe_qwen_asr(wav_path)
         return self._transcribe_paraformer(wav_path, sample_rate=sample_rate)

@@ -7,6 +7,9 @@
 | | |
 |---|---|
 | **详细 Wiki** | [docs/WIKI.md](docs/WIKI.md) |
+| **交接说明书** | [docs/HANDOVER.md](docs/HANDOVER.md) |
+| **架构图** | [docs/architecture.md](docs/architecture.md) |
+| **代码导览** | [docs/CODE_MAP.md](docs/CODE_MAP.md) |
 | **目录说明** | [docs/REPO_LAYOUT.md](docs/REPO_LAYOUT.md) |
 | **产品需求** | [docs/prd-rosbag-labels.md](docs/prd-rosbag-labels.md) |
 
@@ -252,11 +255,18 @@ HMI 可轮询 OSS `pipeline/dispatch/latest.json` 自动 sync（ECS 部署时通
 
 ## Docker 部署
 
-镜像内嵌前端静态资源 + uvicorn 单进程，适合 ECS / 内网服务器。
+镜像内嵌前端静态资源 + uvicorn 单进程。
+
+**域内 POC（堡垒机、docker save/load）**：见 [`docs/deploy-intranet-cicd.md`](docs/deploy-intranet-cicd.md)。开发机在仓库根：
+
+```powershell
+powershell -File hmi\deploy\save-image.ps1 -Tag 20260827-1
+```
+
+**本机 / 公网 compose**：
 
 ```powershell
 cd hmi\deploy
-
 # 参考 .env.runtime.example 准备 .env.runtime
 docker compose up -d
 ```
@@ -289,6 +299,9 @@ docker compose up -d
 | 主题 | 路径 |
 |------|------|
 | 项目总览 Wiki | [docs/WIKI.md](docs/WIKI.md) |
+| 交接说明书 | [docs/HANDOVER.md](docs/HANDOVER.md) |
+| 域内部署 / CI | [docs/deploy-intranet-cicd.md](docs/deploy-intranet-cicd.md) |
+| 域内部署 Word | [docs/多模态数据平台-域内部署指南.docx](docs/多模态数据平台-域内部署指南.docx) |
 | 目录与开发命令 | [docs/REPO_LAYOUT.md](docs/REPO_LAYOUT.md) |
 | 产品需求 PRD | [docs/prd-rosbag-labels.md](docs/prd-rosbag-labels.md) |
 | SDK-first 设计 | [docs/sdk-first-pipeline-design.md](docs/sdk-first-pipeline-design.md) |

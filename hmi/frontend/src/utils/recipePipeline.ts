@@ -115,6 +115,31 @@ export function isSourceCard(card: PipelineStep | null | undefined): boolean {
   return card.card_kind === 'source' || card.op_id === 'source'
 }
 
+export function isLabelCard(card: PipelineStep | null | undefined): boolean {
+  return Boolean(card && card.op_id === 'label')
+}
+
+/** Labeler is always the last node: every pipeline ends in a taxonomy tree. */
+export function pinLabelLast(steps: PipelineStep[]): PipelineStep[] {
+  const labels = steps.filter(isLabelCard)
+  if (!labels.length) return steps
+  const rest = steps.filter((s) => !isLabelCard(s))
+  return [...rest, labels[labels.length - 1]]
+}
+
+export function duplicateSourceTitleError(steps: PipelineStep[]): string | null {
+  const seen = new Set<string>()
+  for (const card of steps) {
+    if (!isSourceCard(card)) continue
+    const title = String(card.title || card.key || '').trim()
+    if (!title) return '请填写数据源名称'
+    const key = title.toLowerCase()
+    if (seen.has(key)) return '数据源名称不能重复'
+    seen.add(key)
+  }
+  return null
+}
+
 export function newSourceCard(args: {
   key: string
   title: string
@@ -392,6 +417,28 @@ export function hydrateRecipeToSteps(
     })
   }
 
+  if (recipe.stages?.embed?.enabled) {
+    const op = getOp(operators, 'embed')
+    steps.push({
+      key: 'stage-embed',
+      op_id: 'embed',
+      role: 'stage',
+      required: false,
+      when_kind: null,
+      produces: defaultProduces(op),
+      params: {},
+      bindings: stageBindings(
+        op,
+        recipe.stages.embed.inputs,
+        slots,
+        produceIndex,
+        [...sourceCards, ...steps],
+        operators,
+        typeProvides,
+      ),
+      bbox_enabled: false,
+    })
+  }
   if (recipe.stages?.label?.enabled) {
     const op = getOp(operators, 'label')
     const model = recipe.stages.label.model
@@ -415,29 +462,7 @@ export function hydrateRecipeToSteps(
       bbox_enabled: false,
     })
   }
-  if (recipe.stages?.embed?.enabled) {
-    const op = getOp(operators, 'embed')
-    steps.push({
-      key: 'stage-embed',
-      op_id: 'embed',
-      role: 'stage',
-      required: false,
-      when_kind: null,
-      produces: defaultProduces(op),
-      params: {},
-      bindings: stageBindings(
-        op,
-        recipe.stages.embed.inputs,
-        slots,
-        produceIndex,
-        [...sourceCards, ...steps],
-        operators,
-        typeProvides,
-      ),
-      bbox_enabled: false,
-    })
-  }
-  return [...sourceCards, ...steps]
+  return pinLabelLast([...sourceCards, ...steps])
 }
 
 function compileOneBind(bind: PipelineBinding, byKey: Map<string, PipelineStep>, operators: PlatformOperator[]): string | null {

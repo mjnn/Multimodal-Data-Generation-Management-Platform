@@ -1,7 +1,7 @@
 """DataType 配方校验与内置种子。
 
 种子：oms_cabin（舱内 OMS）、ivi_ui_stub（IVI 占位）、audio_array_spec（阵列 NVH）。
-`audio_array_spec.stages.label.model` 现为 nvh_sem_heuristic；taxonomy audio_nvh-v2 保持 draft，禁止 publish。
+`audio_array_spec.stages.label.model` 现为 nvh_sem_ast；taxonomy audio_nvh-v2 保持 draft，禁止 publish。
 bbox 检测器只允许 opencv/yolo，拒绝 vl。
 """
 
@@ -117,7 +117,7 @@ def validate_recipe(recipe: dict[str, Any]) -> dict[str, Any]:
         title = str(slot.get("title") or slot_id).strip() or slot_id
         title_key = title.casefold()
         if title_key in seen_titles:
-            raise ValueError("duplicate slot title")
+            raise ValueError("数据源名称不能重复")
         seen_titles.add(title_key)
         norm_slots.append(
             {
@@ -267,6 +267,23 @@ def validate_recipe(recipe: dict[str, Any]) -> dict[str, Any]:
         "detector": detector,
         "yolo_classes": str(bbox.get("yolo_classes") or ""),
     }
+    graph_in = out.get("graph")
+    if isinstance(graph_in, dict) and graph_in.get("nodes"):
+        from hmi.platform.recipe_graph import project_graph, validate_graph
+
+        g = validate_graph(graph_in)
+        proj = project_graph(g)
+        out["graph"] = g
+        out["slots"] = proj["slots"]
+        out["preprocess"] = proj["preprocess"]
+        out["products"] = proj["products"]
+        out["stages"] = proj["stages"]
+        # keep label.model from original stages if projected enabled
+        prev_model = ((recipe.get("stages") or {}).get("label") or {}).get("model")
+        if prev_model and out["stages"]["label"].get("enabled"):
+            out["stages"]["label"]["model"] = prev_model
+        out["bbox"] = proj["bbox"]
+        out["require_any_kinds"] = proj["require_any_kinds"]
     out["overview"] = hydrate_overview(out)
     if not str(out.get("overview", {}).get("preset") or "").strip():
         out["overview"]["preset"] = view
@@ -286,10 +303,10 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
             ".bag", *sorted(VIDEO_EXTS), *sorted(IMAGE_EXTS), *sorted(AUDIO_EXTS)
         ),
         "slots": [
-            {"id": "rosbag", "kinds": [".bag"], "cardinality_min": 1, "cardinality_max": 8, "role": "bag", "required": False},
-            {"id": "video", "kinds": sorted(VIDEO_EXTS), "cardinality_min": 1, "cardinality_max": 4, "role": "video", "required": False},
-            {"id": "image", "kinds": sorted(IMAGE_EXTS), "cardinality_min": 1, "cardinality_max": 64, "role": "frame", "required": False},
-            {"id": "audio", "kinds": sorted(AUDIO_EXTS), "cardinality_min": 1, "cardinality_max": 4, "role": "audio", "required": False},
+            {"id": "rosbag", "title": "舱内 bag", "kinds": [".bag"], "cardinality_min": 1, "cardinality_max": 8, "role": "bag", "required": False},
+            {"id": "video", "title": "舱内视频", "kinds": sorted(VIDEO_EXTS), "cardinality_min": 1, "cardinality_max": 4, "role": "video", "required": False},
+            {"id": "image", "title": "舱内图片", "kinds": sorted(IMAGE_EXTS), "cardinality_min": 1, "cardinality_max": 64, "role": "frame", "required": False},
+            {"id": "audio", "title": "舱内音频", "kinds": sorted(AUDIO_EXTS), "cardinality_min": 1, "cardinality_max": 4, "role": "audio", "required": False},
         ],
         "preprocess": [
             {"op_id": "parse_bag", "when_kind": ".bag", "required": False, "produces": ["frames_audio_topics"]},
@@ -320,6 +337,7 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
         "slots": [
             {
                 "id": "ui_media",
+                "title": "IVI 画面",
                 "kinds": sorted(VIDEO_EXTS | IMAGE_EXTS),
                 "cardinality_min": 1,
                 "cardinality_max": 32,
@@ -332,7 +350,7 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
             {"op_id": "detect_bbox", "when_kind": None, "required": True, "produces": ["bboxes_jsonl"]},
         ],
         "products": [{"id": "bboxes_jsonl", "from_op": "detect_bbox", "reusable": True}],
-        "stages": {"label": {"enabled": False}, "embed": {"enabled": False}},
+        "stages": {"label": {"enabled": True, "model": "default"}, "embed": {"enabled": False}},
         "bbox": {"enabled": True, "detector": "opencv", "yolo_classes": ""},
     },
     "audio_array_spec": {
@@ -340,7 +358,7 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
         "title": "麦克风阵列频谱",
         "purpose": (
             "四通道同步声压频谱（STFT / 梅尔 / 1/3 倍频程 / SPL）；"
-            "客观 NVH 由 deriver；L6 语义由 stages.label（默认 nvh_sem_heuristic，可选 nvh_sem_vl）；"
+            "客观 NVH 由 deriver；L6 语义由 stages.label（nvh_sem_ast AudioSet，heuristic 填等级）；"
             "绑定 draft audio_nvh-v2，勿全局 publish"
         ),
         "owner": "platform",
@@ -352,6 +370,7 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
         "slots": [
             {
                 "id": "audio_primary",
+                "title": "阵列音频",
                 "kinds": sorted(AUDIO_EXTS),
                 "cardinality_min": 1,
                 "cardinality_max": 1,
@@ -371,7 +390,7 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
             {"id": "spl_timeline", "from_op": "spl_timeline", "reusable": True},
         ],
         "stages": {
-            "label": {"enabled": True, "model": "nvh_sem_heuristic"},
+            "label": {"enabled": True, "model": "nvh_sem_ast"},
             "embed": {"enabled": False},
         },
         "bbox": {"enabled": False, "detector": "opencv", "yolo_classes": ""},

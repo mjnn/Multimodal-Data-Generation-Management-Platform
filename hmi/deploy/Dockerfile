@@ -1,4 +1,7 @@
-# Monorepo context: docker build -f hmi/deploy/Dockerfile .
+# HMI 生产镜像。必须在仓库根构建：
+#   docker build -f hmi/deploy/Dockerfile --build-arg APP_REVISION=<tag> -t rosbag-to-labels-hmi:<tag> .
+# 一键 save：powershell -File hmi/deploy/save-image.ps1 -Tag <tag>
+# 域内 POC load/run：docs/deploy-intranet-cicd.md
 # Pin digest so rebuilds reuse apt/ffmpeg layers when Debian CDN is flaky.
 FROM m.daocloud.io/docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 

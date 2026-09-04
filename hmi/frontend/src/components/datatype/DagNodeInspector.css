@@ -1,0 +1,33 @@
+.dag-inspector {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 8;
+  pointer-events: auto;
+  width: min(300px, calc(100% - 16px));
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  padding: 12px 14px;
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  box-shadow: 0 10px 28px color-mix(in srgb, #0d0f17 18%, transparent);
+}
+
+.dag-inspector__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dag-inspector__preds {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dag-inspector__pred {
+  width: 100%;
+}

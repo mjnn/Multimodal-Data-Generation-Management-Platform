@@ -3,7 +3,7 @@
 - 算子目录、DataType 配方 CRUD
 - 源湖 sources（POST 仅 local）
 - 开跑：preflight + runs（可带 source_ids，内部自动 Sample）
-- 产物 lookup / lineage
+- 产物 lookup / 列表 / lineage
 
 Sample 是内部实体，UI 主路径不要手搓组样本。勿在此 publish audio_nvh-v2。
 """
@@ -30,6 +30,7 @@ from hmi.platform.store import (
     lineage_for_product,
     lineage_for_source,
     list_data_types,
+    list_products,
     list_sources,
     lookup_or_record_product,
     preflight_sample,
@@ -239,6 +240,14 @@ def api_create_run(
         return create_run(body.sample_id, body.data_type_id)
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.get("/products")
+def api_list_products(
+    limit: int = 200,
+    _user: dict[str, Any] = Depends(require_overview_access),
+) -> dict[str, Any]:
+    return {"items": list_products(limit=limit)}
 
 
 @router.post("/products/lookup")

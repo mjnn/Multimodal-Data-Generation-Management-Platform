@@ -597,6 +597,7 @@ export interface ReviewV2Stats {
   mode: ReviewV2Mode
   label_id: string | null
   value: unknown
+  data_type_id?: string | null
   pending: number
   total: number
   /** Empty or confidence < 75%; eligible for low-confidence batch claim. */
@@ -641,6 +642,7 @@ export interface ReviewAssignmentBatch {
   assignee_id: string | null
   batch_kind?: 'low_confidence' | 'assigned' | 'public_pool'
   review_targets?: ReviewTarget[]
+  data_type_id?: string | null
   status: 'open' | 'closed'
   created_by: string | null
   created_at: string
@@ -732,6 +734,11 @@ export interface PipelineRunSettings {
   clip_video_max_width?: number
   clip_video_max_height?: number
   clip_video_crf?: number
+  /** Per DataType DAG node param overlays. */
+  dag_node_overrides?: Record<
+    string,
+    Record<string, { params?: Record<string, unknown>; condition?: { all: { field: string; op: string; value?: unknown }[] } | null }>
+  >
 }
 
 export interface BBoxDetectorOption {
@@ -1220,14 +1227,42 @@ export interface RecipeOverview {
   detail: ViewCard[]
 }
 
+export type GraphNodeType = 'source' | 'op' | 'if' | 'label' | 'review' | 'export'
+
+export type GraphConditionPred = { field: string; op: string; value?: unknown }
+export type GraphCondition = { all: GraphConditionPred[] }
+
+export type RecipeGraphNode = {
+  key: string
+  type: GraphNodeType
+  op_id?: string
+  title: string
+  params?: Record<string, unknown>
+  position: { x: number; y: number }
+  condition?: GraphCondition
+  bindings?: Record<string, PipelinePortBindings>
+}
+
+export type RecipeGraphEdge = {
+  id: string
+  source: string
+  source_port: string
+  target: string
+  target_port: string
+}
+
+export type RecipeGraph = { nodes: RecipeGraphNode[]; edges: RecipeGraphEdge[] }
+
 export interface DataTypeRecipe {
   id: string
   title: string
   purpose: string
   owner: string
   taxonomy_id: string
+  taxonomy_version_code?: string
   overview_view: string
   overview?: RecipeOverview
+  graph?: RecipeGraph
   status: 'draft' | 'published'
   require_any_kinds?: string[][]
   slots?: DataTypeSlot[]
@@ -1303,4 +1338,31 @@ export interface PlatformRunRecord {
   preflight: PlatformRunPreflight
   pipeline_run_id?: string | null
   source_ids?: string[]
+}
+
+export interface PlatformProductSourceRef {
+  source_id: string
+  kind?: string | null
+  filename?: string | null
+  collection_id?: string | null
+}
+
+export interface PlatformProductRecord {
+  cache_key: string
+  op_id: string
+  op_title: string
+  product_type?: string | null
+  input_ids: string[]
+  params?: Record<string, unknown>
+  artifact_path?: string | null
+  run_id?: string | null
+  run_status?: string | null
+  run_created_at?: string | null
+  sample_id?: string | null
+  data_type_id?: string | null
+  data_type_title?: string | null
+  skipped: boolean
+  created_at?: string | null
+  sources: PlatformProductSourceRef[]
+  lineage: string
 }

@@ -1,0 +1,10 @@
+{
+  "skill_name": "rosbag-sdk-pipeline",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "DPE UDF 里加个 TopicStats dataclass 方便返回统计",
+      "expected_output": "拒绝；改用 dict；check_dpe_nodes.py；pickle 失败原因"
+    }
+  ]
+}

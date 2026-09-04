@@ -94,7 +94,11 @@ py -3 parse_rosbag.py --config ..\shared\config.yaml
 
 | 主题 | 路径 |
 |------|------|
+| **交接** | `docs/HANDOVER.md` |
+| 域内部署 | `docs/deploy-intranet-cicd.md` |
 | 总览 | `docs/WIKI.md` |
+| 架构图 | `docs/architecture.md` |
+| 代码导览 | `docs/CODE_MAP.md` |
 | 目录 | `docs/REPO_LAYOUT.md` |
 | SDK-first | `docs/sdk-first-pipeline-design.md` |
 | DataWorks | `pipeline/dataworks/WORKFLOW.md` |

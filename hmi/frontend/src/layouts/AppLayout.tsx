@@ -5,6 +5,7 @@ import {
   DatabaseOutlined,
   DeploymentUnitOutlined,
   FolderOpenOutlined,
+  InboxOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   SettingOutlined,
@@ -34,9 +35,9 @@ const { Header, Sider, Content } = Layout
 
 const ROUTE_LABELS: Record<string, string> = {
   '/': '数据类型',
-  '/lake': '源湖入库',
+  '/lake': '数据源',
   '/pipeline': '管线管理',
-  '/oss': '源湖入库',
+  '/oss': '数据源',
   '/review': '校核任务',
   '/review/confidence': '置信度校核',
   '/review/disputes': '置信度校核',
@@ -128,7 +129,7 @@ export function AppLayout() {
 
     const workflow: MenuProps['items'] = []
     if (canAccessPipeline(roles)) {
-      workflow.push({ key: '/lake', icon: <DatabaseOutlined />, label: '源湖入库' })
+      workflow.push({ key: '/lake', icon: <InboxOutlined />, label: '数据源' })
       workflow.push({ key: '/pipeline', icon: <DeploymentUnitOutlined />, label: '管线管理' })
     }
     if (canAccessReview(roles)) {

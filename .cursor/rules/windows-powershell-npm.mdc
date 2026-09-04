@@ -1,0 +1,32 @@
+---
+description: Windows PowerShell 禁止跑 npm.ps1；前端/Node 命令必须用 npm.cmd 或 cmd /c
+alwaysApply: true
+---
+
+# Windows PowerShell：禁止直接跑 npm / npx
+
+本机 ExecutionPolicy 会拦截 Node 的 `.ps1` shim（如 `C:\Users\svw\Tools\node\npm.ps1`），报 `PSSecurityException` / `UnauthorizedAccess`。`npx` / `yarn` / `pnpm` 同样。
+
+## 必须
+
+PowerShell / Cursor Shell 里 **第一次** 就用 `.cmd` 或 `cmd /c`，不要先试 `npm` 再改。
+
+```powershell
+# working_directory 已是目标目录时
+npm.cmd run dev
+npx.cmd playwright test
+cmd /c "npm run dev"
+```
+
+HMI 前端：`hmi/frontend` + `npm.cmd run dev` → `:5174`（`.env.development`）。
+
+## 禁止
+
+- 直接执行 `npm` / `npx` / `yarn` / `pnpm`（会命中 `.ps1`）
+- 同一条命令失败后原样重试
+- `Set-ExecutionPolicy` 改用户策略来绕过
+- 把本条当成「仅 HMI」：任意 npm script / Playwright 都适用
+
+## 来源
+
+沉淀自 session 2026-09-02（本地启动前端被 `npm.ps1` 拦截）

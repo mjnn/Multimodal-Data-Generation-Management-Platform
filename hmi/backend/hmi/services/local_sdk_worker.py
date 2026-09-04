@@ -1,4 +1,11 @@
-"""Poll local rosbags/ queue and run OMS SDK pipeline into runtime artifacts."""
+"""本地轮询 rosbags/ 队列并写入 runtime 产物。
+
+仅 data_source=local 时启用。按 DataType：
+- oms_cabin → OMS Multimodal SDK（sdk_v1 jsonl + preview）
+- audio_array_spec → 频谱 / NVH deriver / nvh_sem_ast，再写 platform_product
+
+完成后镜像到本地 oss/clips/ 并更新 pipeline/dispatch/latest.json。
+"""
 
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ from hmi.data_source import LOCAL_OSS_ROOT, LOCAL_ROOT, REPO_ROOT, is_local_mode
 from hmi.db import cache_clear
 from hmi.local import bag_upload, pipeline_run as pr, store
 from hmi.local.bag_upload import resolve_local_bag_path
+from hmi.platform.file_kinds import modality_of
 
 logger = logging.getLogger(__name__)
 
@@ -198,12 +206,12 @@ def _build_platform_media_manifest(
 ) -> dict[str, Any] | None:
     by_kind: dict[str, dict[str, Any]] = {}
     for src in sample_sources:
-        kind = str(src.get("kind") or "").strip().lower()
-        if kind in {"video", "audio", "text"}:
-            by_kind.setdefault(kind, src)
+        mod = modality_of(str(src.get("kind") or ""))
+        if mod in {"video", "audio", "text"}:
+            by_kind.setdefault(mod, src)
     if not by_kind:
         return None
-    if "image" in {str(src.get("kind") or "").strip().lower() for src in sample_sources}:
+    if any(modality_of(str(src.get("kind") or "")) == "image" for src in sample_sources):
         raise RuntimeError("image-only lake samples are not executable in this slice")
     run_dir = _platform_manifest_dir(run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -258,7 +266,7 @@ def _compile_platform_run(run_id: str) -> dict[str, Any]:
         data_type_id=str(plat["data_type_id"]),
     )
 
-    rosbag_sources = [s for s in sample_sources if str(s.get("kind") or "") == "rosbag"]
+    rosbag_sources = [s for s in sample_sources if modality_of(str(s.get("kind") or "")) == "rosbag"]
     media_manifest = _build_platform_media_manifest(
         run_id=run_id,
         sample_id=str(plat["sample_id"]),
@@ -552,6 +560,40 @@ def _run_audio_array_spec(
     cache_clear()
 
 
+def _maybe_create_graph_review(*, clip_id: str, run_id: str, taken: list[str]) -> None:
+    if "review" not in taken:
+        return
+    from hmi.review_db import get_or_create_review
+
+    labels: dict[str, Any] = {}
+    try:
+        rows = store.query(
+            """
+            SELECT labels_json FROM fact_clip_label
+            WHERE clip_id = ? AND run_id = ?
+            LIMIT 1
+            """,
+            (clip_id, run_id),
+        )
+        if rows:
+            raw = rows[0].get("labels_json")
+            if isinstance(raw, dict):
+                labels = raw
+            elif isinstance(raw, str) and raw.strip() and raw not in ("{}", "[]"):
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    labels = parsed
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("graph review labels lookup failed clip=%s run=%s: %s", clip_id, run_id, exc)
+        labels = {}
+    get_or_create_review(
+        clip_id,
+        run_id,
+        labels_json=labels,
+        review_status="pending_review",
+    )
+
+
 def _run_sdk_and_ingest(
     *,
     bag_path: Path | None,
@@ -591,13 +633,14 @@ def _run_sdk_and_ingest(
     recipe: dict[str, Any] | None = None
     try:
         from hmi.local.pipeline_execution import get_execution_data_type_id
-        from hmi.platform.run_bind import overlay_pipeline_settings
+        from hmi.platform.run_bind import overlay_pipeline_settings, recipe_with_dag_overrides
         from hmi.platform.store import get_data_type
 
         dt_id = get_execution_data_type_id(run_id)
         if dt_id:
             recipe = get_data_type(dt_id)
             if recipe:
+                recipe = recipe_with_dag_overrides(recipe, settings, dt_id)
                 settings = overlay_pipeline_settings(settings, recipe)
                 logger.info(
                     "local SDK data_type overlay clip=%s run=%s type=%s label=%s embed=%s bbox=%s",
@@ -696,7 +739,32 @@ def _run_sdk_and_ingest(
     )
     clip_cfg = _clip_config_from_settings()
     recipe_req: dict[str, Any] = {}
-    if recipe is not None:
+    graph = (recipe or {}).get("graph") if recipe else None
+    graph_taken: list[str] = []
+    if isinstance(graph, dict) and graph.get("nodes"):
+        from hmi.platform.graph_runtime import (
+            apply_graph_to_run_request,
+            assert_runnable_locally,
+            preview_taken_op_ids,
+        )
+
+        try:
+            assert_runnable_locally(graph)
+            recipe_req = apply_graph_to_run_request(graph, recipe, settings)
+            graph_taken = preview_taken_op_ids(graph, {})
+        except RuntimeError as exc:
+            pr.set_step(
+                run_id=run_id,
+                clip_id=clip_id,
+                ds=ds,
+                step_id="sdk_infer",
+                status="failed",
+                error_message=str(exc),
+            )
+            pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="failed")
+            cache_clear()
+            raise
+    elif recipe is not None:
         from hmi.platform.run_bind import overlay_run_request
 
         recipe_req = overlay_run_request(recipe, settings)
@@ -789,6 +857,11 @@ def _run_sdk_and_ingest(
         cache_clear()
         return
     pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_mc_write", status="success")
+
+    try:
+        _maybe_create_graph_review(clip_id=clip_id, run_id=run_id, taken=graph_taken)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("graph review node failed clip=%s run=%s: %s", clip_id, run_id, exc)
 
     pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_upload", status="running")
     try:

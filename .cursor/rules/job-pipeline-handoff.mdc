@@ -39,8 +39,8 @@ MC：五步 `success`；`fact_frame`=1817；`fact_image_label`=39；`fact_embedd
 ```powershell
 # 终端 1（务必 .venv；见 hmi-web-stack.mdc「重启」）
 cd hmi/backend; ..\.venv\Scripts\python.exe -m uvicorn hmi.main:app --host 127.0.0.1 --port 8000
-# 终端 2
-cd hmi/frontend; npm run dev
+# 终端 2（PowerShell 必须用 npm.cmd，见 windows-powershell-npm.mdc）
+cd hmi/frontend; npm.cmd run dev
 # 健康检查
 curl http://127.0.0.1:8000/api/health
 ```

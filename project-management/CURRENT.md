@@ -1,7 +1,7 @@
 # 当前进度指针（跨会话权威入口）
 
-> 最后更新：2026-09-02  
-> 更新人：Agent（UI-DTYPE-SOURCE-NODES Task 8 收工）
+> 最后更新：2026-09-03  
+> 更新人：Agent（UI-DTYPE-DAG-CANVAS A+A-E2E 收工）
 
 ---
 
@@ -10,10 +10,10 @@
 | 字段 | 当前值 |
 |------|--------|
 | 当前里程碑 | **平台内核重构进行中** |
-| 刚完成 | **UI-DTYPE-SOURCE-NODES**（Task 8）：切片 B Playwright **7/7**（editor 3 + lake 4）；开跑分源勾选验收闭合 |
-| 推荐下一个工单 | **UI-NVH-REVIEW-SAVE**（语义 L6 人工写回）；勿 publish `audio_nvh-v2` |
+| 刚完成 | **UI-DTYPE-DAG-CANVAS**（A + A-E2E）— `acceptance/UI-DTYPE-DAG-CANVAS.md` |
+| 推荐下一个工单 | **UI-NVH-REVIEW-SAVE**（语义 L6 人工写回） |
 | M9.3 | A-C 基本闭合；**H-2 暂停，不排期** |
-| 禁止抢跑 | 勿做 HMI 在线 H-2；勿 **publish** `audio_nvh-v2`；勿宣称 IVI 业务打标已完成；勿用 VL 打 bbox；勿改 DataWorks |
+| 禁止抢跑 | 勿做 HMI 在线 H-2；勿 **publish** `audio_nvh-v2`；勿宣称 IVI 业务打标已完成；勿用 VL 打 bbox；勿改 DataWorks 节点/Job 顺序 |
 
 ---
 
@@ -22,11 +22,10 @@
 ```text
 当前重点是重构平台内核，不要做 HMI 在线 H-2。
 
-刚完成 UI-DTYPE-SOURCE-NODES（Task 8 Playwright 7/7）：源槽位表已删；数据源在编排卡内（可多行）；开跑 POST assignments 按 slot 分块勾选。
+刚完成 UI-DTYPE-DAG-CANVAS（A + A-E2E）：acceptance/UI-DTYPE-DAG-CANVAS.md
+推荐下一工单 UI-NVH-REVIEW-SAVE：语义 L6 人工写回。
 不要 publish audio_nvh-v2。不要改 DataWorks。
-
-规格：docs/superpowers/specs/2026-09-02-datatype-source-nodes-design.md
-下一工单：UI-NVH-REVIEW-SAVE
+ASR/标签 if 本地仍 RuntimeError「本地尚未拆分 plan_and_run：不能在 ASR/打标之后分支」（Task 11 护栏）。
 ```
 
 ---
@@ -56,6 +55,7 @@
 | UI-DTYPE-PIPELINE-ORCH | 管线编排组件卡 | **done（A + A-E2E）** — `acceptance/UI-DTYPE-PIPELINE-ORCH.md` |
 | UI-DTYPE-OVERVIEW-COMPOSE | 总览列表+详情组件拼版 | **done（A + A-E2E）** — `acceptance/UI-DTYPE-OVERVIEW-COMPOSE.md` |
 | UI-DTYPE-SOURCE-NODES | 数据源节点 + 开跑分源勾选 | **done（A + A-E2E）** — `acceptance/UI-DTYPE-SOURCE-NODES.md` |
+| UI-DTYPE-DAG-CANVAS | 执行 DAG 画板 + 产物橱窗锁标签树 | **done（A + A-E2E）** — `acceptance/UI-DTYPE-DAG-CANVAS.md` |
 | PLAT-AUDIO-AST-LABEL | AST AudioSet 填 L6 category/sources | **done（A）** — `acceptance/PLAT-AUDIO-AST-LABEL.md` |
 | PLAT-DTYPE-LAKE-REUSE | 列表/多选复用已入库 Source | **done**（已被开跑绑定 UX 替代主路径组 Sample） |
 | DOC-HANDOVER | 交接 Wiki / 架构图 / 技能包 / 压缩脚本 | **done（A）** — `acceptance/DOC-HANDOVER.md` |

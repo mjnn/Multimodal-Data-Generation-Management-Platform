@@ -107,14 +107,16 @@ def enqueue_pipeline_sources_batch(
         raise ValueError("at least one file required")
 
     from hmi.local.source_upload import classify_source_filename, save_uploaded_sources
+    from hmi.platform.file_kinds import modality_of
 
     bags: list[tuple[str, bytes]] = []
     media: list[tuple[str, bytes]] = []
     for filename, data in files:
         kind = classify_source_filename(filename)
-        if kind == "bag":
+        mod = modality_of(kind)
+        if mod == "rosbag":
             bags.append((filename, data))
-        elif kind in {"video", "audio", "text"}:
+        elif mod in {"video", "audio", "text"}:
             media.append((filename, data))
         else:
             raise ValueError(f"unsupported upload file: {filename}")

@@ -1,4 +1,8 @@
-"""Taxonomy version tree REST API."""
+"""Taxonomy 版本树 REST（M10 Hub）。
+
+CRUD / publish / clone / import-yaml，以及 context、coverage、diff、impact、lineage、proposals。
+提案只合入 draft，不得自动 publish。洞察只读，禁止写回 clip 标签或批量重打标。
+"""
 
 from __future__ import annotations
 

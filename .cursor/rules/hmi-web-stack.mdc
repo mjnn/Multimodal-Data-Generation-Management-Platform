@@ -9,7 +9,7 @@ alwaysApply: false
 ## 栈
 
 - **后端** `hmi/backend/`：FastAPI · `python run.py` → `:8000`
-- **前端** `hmi/frontend/`：Vite+React+AntD · `npm run dev` → **`:5174`**（`.env.development` · 代理 `/api` → **`http://127.0.0.1:8000`**）
+- **前端** `hmi/frontend/`：Vite+React+AntD · **`npm.cmd run dev`** → **`:5174`**（`.env.development` · 代理 `/api` → **`http://127.0.0.1:8000`**）
 - Mock：仅 `VITE_USE_MOCK=true`；默认对接后端
 
 ## 云端性能（MC 慢在作业非 RTT）
@@ -42,7 +42,7 @@ alwaysApply: false
   cd hmi/backend
   py -3 run.py   # 或 .venv python -m uvicorn hmi.main:app --host 127.0.0.1 --port 8000
   ```
-- 前端 PowerShell 若拦截 npm：`cmd /c "cd hmi/frontend && npm run dev"`
+- 前端：**禁止** PowerShell 直接 `npm`（拦 `npm.ps1`）。必须 `npm.cmd run dev` 或 `cmd /c "npm run dev"`（alwaysApply：`windows-powershell-npm.mdc`）
 - 验收：`GET /api/health` 含 `data_source`、`local_sdk_poller`；本地 OSS 管理 bucket 为 **本地磁盘**
 
 ## 验收

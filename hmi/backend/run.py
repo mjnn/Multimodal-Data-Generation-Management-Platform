@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Start HMI API: uvicorn hmi.main:app --reload --port 8000"""
+"""启动 HMI API：uvicorn hmi.main:app --reload --port 8000。
+
+在 `hmi/backend` 执行 `py -3 run.py`。前端 Vite 默认把 /api 代理到本端口。
+若 Windows 上 health 像旧进程，先结束残留 python 再启动。
+"""
 
 from __future__ import annotations
 

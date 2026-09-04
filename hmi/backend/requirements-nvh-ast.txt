@@ -1,0 +1,3 @@
+# Optional local AST (YuanGongND) for audio_array_spec L6.
+# Not required for default HMI install; missing deps fall back to heuristic.
+torchaudio>=2.1.0

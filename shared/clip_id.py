@@ -1,4 +1,8 @@
-"""Compute content-addressed clip_id from rosbag files."""
+"""由 bag 文件内容计算内容寻址 clip_id。
+
+格式固定 `sha256:{hex}`，与 OSS 目录名、本地文件夹名无关。
+Job0/SDK discover、HMI sync、dispatch 都以该 id 为键。
+"""
 
 from __future__ import annotations
 

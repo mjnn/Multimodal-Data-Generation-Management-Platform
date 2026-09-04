@@ -1,4 +1,9 @@
-"""HMI data source: cloud (MaxCompute+OSS) or local (SQLite + on-disk OSS mirror)."""
+"""HMI 数据源开关：cloud（MaxCompute+真 OSS）或 local（hmi.db + 磁盘 oss/ 模拟桶）。
+
+LOCAL_ROOT 优先 HMI_RUNTIME_ROOT，否则兼容旧 hmi_local。
+UI POST /api/config/data-source；生产无 HMI_TEST_MODE 时强制 cloud。
+源湖上传与 local_sdk_worker 仅 local。
+"""
 
 from __future__ import annotations
 

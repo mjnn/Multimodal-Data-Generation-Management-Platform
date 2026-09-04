@@ -1,5 +1,35 @@
 # 进度变更日志（倒序）
 
+## 2026-09-03 — UI-DTYPE-DAG-CANVAS done（Playwright 收口）
+
+- **工单**：编辑器 DAG 画板 + 本地按图执行 + 橱窗锁 `labels_tree`；Task 12 A-E2E 收工
+- **验收**：`acceptance/UI-DTYPE-DAG-CANVAS.md`；recipe_graph **24/24**；graph_runtime **8/8**；editor **26/26**；kernel **19/19**；`tsc -b` ok；Playwright editor **3/3 (13.3s)**
+- **护栏**：ASR/标签 if 本地仍 RuntimeError「本地尚未拆分 plan_and_run：不能在 ASR/打标之后分支」，符合计划 Task 11
+- **未改**：DataWorks；勿 publish audio_nvh-v2；无 git commit
+- **下一**：UI-NVH-REVIEW-SAVE
+
+## 2026-09-03 — UI-DTYPE-DAG-CANVAS 实现计划
+
+- **计划**：`docs/superpowers/plans/2026-09-03-dtype-dag-canvas.md`（Task 1–12；A 图校验/投影 → B 画板 → C 锁树 → D runtime 护栏 → E 黄警告）
+- **缺口（写进计划）：** 本地尚未拆 `plan_and_run`；ASR/标签 if 保存允许、开跑会 RuntimeError
+- **未写**：业务代码；未 git commit
+
+## 2026-09-03 — UI-DTYPE-DAG-CANVAS spec 拍板落盘
+
+- **诉求**：编辑器做成 Coze/LangGraph/Airflow 式 DAG；逻辑 if/else；`/w/:id` 橱窗必展示标签树
+- **文档**：`docs/superpowers/specs/2026-09-03-dtype-dag-canvas-design.md`（D1–D12）；源节点 spec S8 改为被本文件取代
+- **范围**：本地按图执行；DataWorks 只跑公共前缀；不 publish audio_nvh-v2
+- **未写**：业务代码；未 git commit spec
+- **下一**：审 spec → 实现计划；UI-NVH-REVIEW-SAVE 排后
+
+## 2026-09-03 — UI-DTYPE-SOURCE-NODES 编辑器 polish（打标器固定最后）
+
+- **诉求**：评审偏差 1–5 + 打标器永远是最后一个节点（管线输出标签树）
+- **实现**：首页去掉「源槽位」文案；「允许后缀」；种子 `title`（舱内 bag 等）；保存前中文重名校验；`pinLabelLast`；新算子插到打标器前；打标器不可拖/删
+- **验收**：editor **26/26**；kernel **19/19**；`tsc -b` ok；Playwright editor **3/3**
+- **未改**：DataWorks；勿 publish audio_nvh-v2
+- **下一**：UI-NVH-REVIEW-SAVE
+
 ## 2026-09-02 — UI-DTYPE-SOURCE-NODES Task 8（切片 B Playwright 收工）
 
 - **命令**：`cd hmi/frontend && cmd /c "npx.cmd playwright test e2e/platform-dtype-editor.spec.ts e2e/platform-lake.spec.ts"`

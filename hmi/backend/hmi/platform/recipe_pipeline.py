@@ -88,6 +88,19 @@ def is_source_card(card: dict[str, Any] | None) -> bool:
     return card.get("card_kind") == "source" or card.get("op_id") == "source"
 
 
+def is_label_card(card: dict[str, Any] | None) -> bool:
+    return isinstance(card, dict) and card.get("op_id") == "label"
+
+
+def pin_label_last(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ensure a label card exists; do not force it last (DAG may place successors after label)."""
+    out = list(steps)
+    if any(is_label_card(s) for s in out):
+        return out
+    out.append({"op_id": "label"})
+    return out
+
+
 def new_source_card(
     *,
     key: str,
@@ -335,6 +348,23 @@ def hydrate_recipe_to_steps(recipe: dict[str, Any]) -> list[dict[str, Any]]:
         prior_all = source_cards + steps
 
     stages = recipe.get("stages") or {}
+    embed = stages.get("embed") or {}
+    if bool(embed.get("enabled", False)):
+        op = get_operator("embed")
+        steps.append(
+            {
+                "key": "stage-embed",
+                "op_id": "embed",
+                "role": "stage",
+                "required": False,
+                "when_kind": None,
+                "produces": default_produces(op),
+                "params": {},
+                "bindings": _stage_bindings(op, embed.get("inputs"), slots, produce_index, prior_all),
+                "bbox_enabled": False,
+            }
+        )
+        prior_all = source_cards + steps
     label = stages.get("label") or {}
     if bool(label.get("enabled", False)):
         op = get_operator("label")
@@ -355,24 +385,7 @@ def hydrate_recipe_to_steps(recipe: dict[str, Any]) -> list[dict[str, Any]]:
                 "bbox_enabled": False,
             }
         )
-        prior_all = source_cards + steps
-    embed = stages.get("embed") or {}
-    if bool(embed.get("enabled", False)):
-        op = get_operator("embed")
-        steps.append(
-            {
-                "key": "stage-embed",
-                "op_id": "embed",
-                "role": "stage",
-                "required": False,
-                "when_kind": None,
-                "produces": default_produces(op),
-                "params": {},
-                "bindings": _stage_bindings(op, embed.get("inputs"), slots, produce_index, prior_all),
-                "bbox_enabled": False,
-            }
-        )
-    return source_cards + steps
+    return pin_label_last(source_cards + steps)
 
 
 def _stage_bindings(

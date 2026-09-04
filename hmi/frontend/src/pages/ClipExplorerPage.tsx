@@ -11,8 +11,10 @@ import { ClipLabelTreeView } from '../components/ClipLabelTreeView'
 import { RunSelector } from '../components/RunSelector'
 import { SimilarDrawer } from '../components/SimilarDrawer'
 import { BackLink, ContentCard, PageStack } from '../components/ui'
+import { useDataTypeRecipe } from '../context/DataTypeWorkspaceContext'
 import { clipDisplayName } from '../utils/clipDisplay'
 import { resolveSceneDescriptionText } from '../utils/labelDisplay'
+import { resolveDetailCards } from '../utils/overviewLayout'
 
 export function ClipExplorerPage() {
   const { clipId: rawId } = useParams()
@@ -25,6 +27,14 @@ export function ClipExplorerPage() {
   const [loading, setLoading] = useState(true)
   const [timelineState, setTimelineState] = useState<ClipTimelineState | null>(null)
   const [mediaMode, setMediaMode] = useState<'cabin' | 'audio_nvh' | null>(null)
+  const recipe = useDataTypeRecipe()
+  const detailIds = resolveDetailCards(recipe).map((c) => c.widget_id)
+  const layoutNvh = detailIds.includes('nvh_spectrum')
+  const layoutCabin = detailIds.includes('cabin_multicam') || detailIds.includes('frame_gallery_bbox')
+  const layoutJson = detailIds.includes('json_tree')
+  const layoutLabelsTree = detailIds.includes('labels_tree')
+  const layoutAsr = detailIds.includes('asr_panel')
+  const isAudioNvh = layoutNvh || (!detailIds.length && mediaMode === 'audio_nvh')
   const [similarCompositeId, setSimilarCompositeId] = useState<string | null>(null)
   const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
   const [clipLabelMeta, setClipLabelMeta] = useState<ClipLabelView | null>(null)
@@ -69,7 +79,7 @@ export function ClipExplorerPage() {
   // load bootstrap (nvh_labels.json) for the label tree.
   useEffect(() => {
     if (!clipId || !runId) return
-    if (mediaMode !== 'audio_nvh') return
+    if (!isAudioNvh) return
     const timelineReady = Boolean(clipLabelMeta?.clip_label_ready)
     const timelineHasLabels = Boolean(clipLabelMeta?.labels_json && Object.keys(clipLabelMeta.labels_json).length > 0)
     if (timelineReady && timelineHasLabels) return
@@ -77,7 +87,7 @@ export function ClipExplorerPage() {
       .getAudioNvhBootstrap(clipId, runId)
       .then((boot) => setAudioNvhBootstrap(boot))
       .catch(() => setAudioNvhBootstrap(null))
-  }, [clipId, runId, mediaMode, clipLabelMeta?.clip_label_ready, clipLabelMeta?.labels_json])
+  }, [clipId, runId, isAudioNvh, clipLabelMeta?.clip_label_ready, clipLabelMeta?.labels_json])
 
   useEffect(() => {
     const versionId = clipLabelMeta?.taxonomy_version_id
@@ -89,7 +99,7 @@ export function ClipExplorerPage() {
       return
     }
     // Default fallback should avoid accidentally picking OMS published taxonomy.
-    if (mediaMode === 'audio_nvh') {
+    if (isAudioNvh) {
       const targetVersionCode = clipLabelMeta?.taxonomy_version_code ?? 'audio_nvh-v2'
       void api
         .listTaxonomyVersions()
@@ -116,7 +126,7 @@ export function ClipExplorerPage() {
         return api.getTaxonomyTree(published.id).then((tree) => setTaxonomyNodes(tree.nodes))
       })
       .catch(() => setTaxonomyNodes([]))
-  }, [clipLabelMeta?.taxonomy_version_id, clipLabelMeta?.taxonomy_version_code, mediaMode])
+  }, [clipLabelMeta?.taxonomy_version_id, clipLabelMeta?.taxonomy_version_code, isAudioNvh])
 
   const sceneDescription = useMemo(() => {
     const clipLabel = timelineState?.meta.clip_label ?? clipLabelMeta
@@ -156,8 +166,6 @@ export function ClipExplorerPage() {
       </div>
     )
   }
-
-  const isAudioNvh = mediaMode === 'audio_nvh'
 
   return (
     <PageStack className="clip-explorer">
@@ -204,9 +212,26 @@ export function ClipExplorerPage() {
         selectedBoxKey={selectedBoxKey}
         onSelectedBoxChange={setSelectedBoxKey}
         onOverlaySaved={() => setBboxRefreshToken((n) => n + 1)}
+        detailWidgetIds={detailIds}
       />
 
-      {isAudioNvh ? (
+      {layoutLabelsTree ? (
+        <ContentCard title="标签树">
+          <pre data-testid="overview-runtime-labels_tree" style={{ maxHeight: 360, overflow: 'auto', fontSize: 12 }}>
+            {JSON.stringify(nvhLabelsJsonForTree, null, 2)}
+          </pre>
+        </ContentCard>
+      ) : null}
+
+      {layoutJson ? (
+        <ContentCard title="JSON 结构">
+          <pre data-testid="overview-runtime-json_tree" style={{ maxHeight: 360, overflow: 'auto', fontSize: 12 }}>
+            {JSON.stringify(nvhLabelsJsonForTree, null, 2)}
+          </pre>
+        </ContentCard>
+      ) : null}
+
+      {isAudioNvh && !layoutCabin ? (
         <ContentCard title="Clip 详情">
           <div data-testid="clip-explorer-nvh-detail">
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
@@ -219,24 +244,26 @@ export function ClipExplorerPage() {
             </div>
           </div>
         </ContentCard>
-      ) : timelineState ? (
-        <MomentDetailPanel
-          clip={timelineState.clip}
-          runId={runId}
-          cursorNs={timelineState.cursorNs}
-          clipLabel={timelineState.meta.clip_label}
-          sceneDescription={sceneDescription}
-          asrSegments={timelineState.meta.asr_segments}
-          events={timelineState.meta.events}
-          selectedBoxKey={selectedBoxKey}
-          onSelectBox={setSelectedBoxKey}
-          bboxRefreshToken={bboxRefreshToken}
-        />
-      ) : (
-        <ContentCard title="Clip 详情">
-          <Spin />
-        </ContentCard>
-      )}
+      ) : layoutAsr || layoutCabin || !detailIds.length ? (
+        timelineState ? (
+          <MomentDetailPanel
+            clip={timelineState.clip}
+            runId={runId}
+            cursorNs={timelineState.cursorNs}
+            clipLabel={timelineState.meta.clip_label}
+            sceneDescription={sceneDescription}
+            asrSegments={timelineState.meta.asr_segments}
+            events={timelineState.meta.events}
+            selectedBoxKey={selectedBoxKey}
+            onSelectBox={setSelectedBoxKey}
+            bboxRefreshToken={bboxRefreshToken}
+          />
+        ) : (
+          <ContentCard title="Clip 详情">
+            <Spin />
+          </ContentCard>
+        )
+      ) : null}
 
       <SimilarDrawer
         open={!!similarCompositeId}

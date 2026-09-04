@@ -30,6 +30,8 @@ export type ClipMediaPanelProps = {
   mediaMode?: 'auto' | 'cabin' | 'audio_nvh'
   /** Fires when resolved media mode is known (after auto-detect). */
   onMediaModeChange?: (mode: 'cabin' | 'audio_nvh') => void
+  /** From recipe.overview.detail. Empty/undefined → auto-detect fallback. */
+  detailWidgetIds?: string[]
 }
 
 export function ClipMediaPanel({
@@ -49,10 +51,13 @@ export function ClipMediaPanel({
   onOverlaySaved,
   mediaMode = 'auto',
   onMediaModeChange,
+  detailWidgetIds,
 }: ClipMediaPanelProps) {
+  const composed = (detailWidgetIds || []).filter(Boolean)
+  const useLayout = composed.length > 0
   const [clipOverview, setClipOverview] = useState<ClipOverview | null>(null)
   const [mode, setMode] = useState<'pending' | 'cabin' | 'audio_nvh'>(
-    mediaMode === 'auto' ? 'pending' : mediaMode,
+    useLayout ? (composed.includes('nvh_spectrum') ? 'audio_nvh' : 'cabin') : mediaMode === 'auto' ? 'pending' : mediaMode,
   )
 
   const handleClipReady = useCallback((clip: ClipOverview) => {
@@ -61,6 +66,12 @@ export function ClipMediaPanel({
 
   useEffect(() => {
     setClipOverview(null)
+    if (useLayout) {
+      const next = composed.includes('nvh_spectrum') ? 'audio_nvh' : 'cabin'
+      setMode(next)
+      onMediaModeChange?.(next)
+      return
+    }
     if (mediaMode !== 'auto') {
       setMode(mediaMode)
       onMediaModeChange?.(mediaMode)
@@ -85,7 +96,7 @@ export function ClipMediaPanel({
     return () => {
       cancelled = true
     }
-  }, [clipId, runId, mediaMode, onMediaModeChange])
+  }, [clipId, runId, mediaMode, onMediaModeChange, useLayout, composed.join('|')])
 
   const onAudioReady = useCallback((_boot: AudioNvhBootstrap) => {
     /* reserved for explorer scene text */
@@ -100,46 +111,68 @@ export function ClipMediaPanel({
         )
       : null
 
+  const renderMediaWidget = (widgetId: string) => {
+    if (widgetId === 'nvh_spectrum') {
+      return (
+        <div key={widgetId} className="review-clip-card__media" data-testid="overview-runtime-nvh_spectrum">
+          <AudioNvhTimelinePanel
+            clipId={clipId}
+            runId={runId}
+            previewContext={previewContext}
+            testId="audio-nvh-timeline"
+            onReady={onAudioReady}
+          />
+          <Typography.Text type="secondary" className="review-clip-card__media-hint">
+            四通道梅尔频谱 + SPL + 波形共用时间轴 · 点击谱图/曲线跳转
+          </Typography.Text>
+        </div>
+      )
+    }
+    if (widgetId === 'cabin_multicam' || widgetId === 'frame_gallery_bbox') {
+      return (
+        <div
+          key={widgetId}
+          className="review-clip-card__media review-clip-card__media--cameras-top"
+          data-testid={`overview-runtime-${widgetId}`}
+        >
+          <ClipTimelinePanel
+            key={`${clipId}:${runId}:${initialTimestampNs ?? ''}:${widgetId}`}
+            clipId={clipId}
+            runId={runId}
+            initialTimestampNs={initialTimestampNs}
+            camerasFirst
+            previewContext={previewContext}
+            onClipReady={handleClipReady}
+            onTimelineStateChange={onTimelineStateChange}
+            selectedBoxKey={selectedBoxKey}
+            onSelectedBoxChange={onSelectedBoxChange}
+            onOverlaySaved={onOverlaySaved}
+          />
+          <Typography.Text type="secondary" className="review-clip-card__media-hint">
+            <VideoCameraOutlined /> Clip 级 MP4 预览 · 空格播放（含音频）
+          </Typography.Text>
+        </div>
+      )
+    }
+    return null
+  }
+
+  const mediaBody = useLayout
+    ? composed.map(renderMediaWidget)
+    : mode === 'pending'
+      ? (
+        <div style={{ textAlign: 'center', padding: 48 }}>
+          <Spin />
+        </div>
+      )
+      : mode === 'audio_nvh'
+        ? renderMediaWidget('nvh_spectrum')
+        : renderMediaWidget('cabin_multicam')
+
   return (
     <div className={`clip-media-panel ${className ?? ''}`.trim()} data-testid={testId}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        {mode === 'pending' ? (
-          <div style={{ textAlign: 'center', padding: 48 }}>
-            <Spin />
-          </div>
-        ) : mode === 'audio_nvh' ? (
-          <div className="review-clip-card__media">
-            <AudioNvhTimelinePanel
-              clipId={clipId}
-              runId={runId}
-              previewContext={previewContext}
-              testId="audio-nvh-timeline"
-              onReady={onAudioReady}
-            />
-            <Typography.Text type="secondary" className="review-clip-card__media-hint">
-              四通道梅尔频谱 + SPL + 波形共用时间轴 · 点击谱图/曲线跳转
-            </Typography.Text>
-          </div>
-        ) : (
-          <div className="review-clip-card__media review-clip-card__media--cameras-top">
-            <ClipTimelinePanel
-              key={`${clipId}:${runId}:${initialTimestampNs ?? ''}`}
-              clipId={clipId}
-              runId={runId}
-              initialTimestampNs={initialTimestampNs}
-              camerasFirst
-              previewContext={previewContext}
-              onClipReady={handleClipReady}
-              onTimelineStateChange={onTimelineStateChange}
-              selectedBoxKey={selectedBoxKey}
-              onSelectedBoxChange={onSelectedBoxChange}
-              onOverlaySaved={onOverlaySaved}
-            />
-            <Typography.Text type="secondary" className="review-clip-card__media-hint">
-              <VideoCameraOutlined /> Clip 级 MP4 预览 · 空格播放（含音频）
-            </Typography.Text>
-          </div>
-        )}
+        {mediaBody}
 
         {showMetaBelow ? (
           <div className="review-clip-card__meta review-clip-card__meta--below">

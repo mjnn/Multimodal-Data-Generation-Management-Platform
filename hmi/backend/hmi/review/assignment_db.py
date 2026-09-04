@@ -79,6 +79,10 @@ def _ensure_batch_kind_column(conn: sqlite3.Connection) -> None:
             ADD COLUMN review_targets_json TEXT NOT NULL DEFAULT '["labels"]'
             """
         )
+    if "data_type_id" not in cols:
+        conn.execute(
+            "ALTER TABLE review_assignment_batch ADD COLUMN data_type_id TEXT"
+        )
 
 
 def _parse_review_targets(raw: str | None) -> list[str]:
@@ -141,6 +145,7 @@ def _batch_row(row: sqlite3.Row, *, stats: dict[str, int] | None = None) -> dict
         "review_targets": _parse_review_targets(
             row["review_targets_json"] if "review_targets_json" in keys else None
         ),
+        "data_type_id": row["data_type_id"] if "data_type_id" in keys else None,
         "status": row["status"],
         "created_by": row["created_by"],
         "created_at": row["created_at"],
@@ -161,6 +166,7 @@ def create_batch(
     items: list[dict[str, Any]],
     batch_kind: str = "public_pool",
     review_targets: list[str] | None = None,
+    data_type_id: str | None = None,
 ) -> dict[str, Any]:
     if batch_kind not in BATCH_KINDS:
         raise ValueError(f"无效任务类型: {batch_kind}")
@@ -181,8 +187,8 @@ def create_batch(
             """
             INSERT INTO review_assignment_batch (
               id, name, label_ids_json, queue_limit, assignee_id, batch_kind,
-              review_targets_json, status, created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+              review_targets_json, data_type_id, status, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
             """,
             (
                 batch_id,
@@ -192,6 +198,7 @@ def create_batch(
                 assignee_id,
                 batch_kind,
                 json.dumps(targets, ensure_ascii=False),
+                (str(data_type_id).strip() or None) if data_type_id else None,
                 created_by,
                 now,
                 now,

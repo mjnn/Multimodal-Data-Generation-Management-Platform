@@ -105,3 +105,54 @@ test('pipeline lake-run: text source filtered out for ivi_ui_stub', async ({ pag
   await expect(page.getByTestId('lake-run-sources-table').getByText(name)).toHaveCount(0)
   await expect(page.getByTestId('lake-run-slot-ui_media').getByText(name)).toHaveCount(0)
 })
+
+test('lake products tab shows lineage for run step and source file', async ({ page }) => {
+  await loginAsAdmin(page)
+  await page.goto('/lake')
+  await expect(page.getByTestId('lake-page')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByRole('heading', { name: '数据源' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '产物浏览' })).toBeVisible()
+
+  const name = `prod-${Date.now()}.wav`
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name,
+    mimeType: 'audio/wav',
+    buffer: Buffer.from(`RIFF....WAVEfmt ${name}`),
+  })
+  await page.locator('button').filter({ hasText: '入湖' }).click()
+  await expect(page.getByText(/已入湖 1 个源文件/)).toBeVisible()
+
+  const sourcesRes = await page.request.get('/api/platform/sources?limit=200')
+  expect(sourcesRes.ok(), await sourcesRes.text()).toBeTruthy()
+  const sourcesBody = (await sourcesRes.json()) as { items: { source_id: string; filename?: string }[] }
+  const src = sourcesBody.items.find((item) => item.filename === name)
+  expect(src).toBeTruthy()
+
+  const runRes = await page.request.post('/api/platform/runs', {
+    data: { data_type_id: 'audio_array_spec', source_ids: [src!.source_id] },
+  })
+  expect(runRes.ok(), await runRes.text()).toBeTruthy()
+  const run = (await runRes.json()) as { run_id: string }
+
+  const lookupRes = await page.request.post('/api/platform/products/lookup', {
+    data: {
+      input_ids: [src!.source_id],
+      op_id: 'mel_spectrogram',
+      params: { n_mels: 64 },
+      artifact_path: `runs/e2e/${name}/mel.png`,
+      run_id: run.run_id,
+    },
+  })
+  expect(lookupRes.ok(), await lookupRes.text()).toBeTruthy()
+
+  await page.getByRole('tab', { name: '产物浏览' }).click()
+  await expect(page.getByTestId('lake-products-table')).toBeVisible()
+  await page.getByTestId('lake-products-refresh').click()
+  const row = page.getByTestId('lake-products-table').locator('.ant-table-row').filter({ hasText: run.run_id })
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  await expect(row.getByText(name, { exact: true })).toBeVisible()
+  await expect(row.getByText('梅尔频谱').first()).toBeVisible()
+  await expect(row.getByText(/来自管线运行/)).toBeVisible()
+  await expect(row.getByText(/步骤「梅尔频谱」/)).toBeVisible()
+  await expect(row.getByText(new RegExp(`数据源 ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))).toBeVisible()
+})

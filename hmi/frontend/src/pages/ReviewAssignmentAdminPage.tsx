@@ -6,6 +6,7 @@ import {
   InputNumber,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
   Tree,
@@ -17,6 +18,7 @@ import type { DataNode } from 'antd/es/tree'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import type {
+  DataTypeRecipe,
   LabelTaxonomyNode,
   ReviewAssignmentAssigneeSummary,
   ReviewAssignmentBatch,
@@ -69,9 +71,11 @@ function AssigneeSummaryCell({ summaries }: { summaries: ReviewAssignmentAssigne
 
 export function ReviewAssignmentAdminPage() {
   const [taxonomy, setTaxonomy] = useState<LabelTaxonomyNode[]>([])
+  const [dataTypes, setDataTypes] = useState<DataTypeRecipe[]>([])
   const [reviewers, setReviewers] = useState<ReviewAssignmentReviewer[]>([])
   const [batches, setBatches] = useState<ReviewAssignmentBatch[]>([])
   const [loading, setLoading] = useState(false)
+  const [taxonomyLoading, setTaxonomyLoading] = useState(false)
   const [previewCount, setPreviewCount] = useState<number | null>(null)
   const [checkedKeys, setCheckedKeys] = useState<string[]>([])
   const [itemCache, setItemCache] = useState<Record<string, ReviewAssignmentItem[]>>({})
@@ -81,23 +85,27 @@ export function ReviewAssignmentAdminPage() {
     queue_limit: number
     assignee_id?: string
     review_targets: ReviewTarget[]
+    data_type_id?: string
   }>()
 
   const treeData = useMemo(() => buildCheckableTree(taxonomy), [taxonomy])
+  const expandedKeys = useMemo(() => treeData.map((n) => String(n.key)), [treeData])
   const reviewTargets = Form.useWatch('review_targets', form) as ReviewTarget[] | undefined
+  const dataTypeId = Form.useWatch('data_type_id', form) as string | undefined
   const needsLabels = (reviewTargets ?? ['labels']).includes('labels')
+  const selectedType = dataTypes.find((dt) => dt.id === dataTypeId)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [tax, rev, batchRes] = await Promise.all([
-        api.getLabelTaxonomy(),
+      const [rev, batchRes, types] = await Promise.all([
         api.listReviewAssignmentReviewers(),
         api.listReviewAssignmentBatches(),
+        api.listDataTypes(),
       ])
-      setTaxonomy(tax)
       setReviewers(rev)
       setBatches(batchRes.items)
+      setDataTypes((types.items || []).filter((item) => item.status === 'published'))
     } catch {
       message.error('加载任务数据失败')
     } finally {
@@ -109,11 +117,46 @@ export function ReviewAssignmentAdminPage() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    setCheckedKeys([])
+    setPreviewCount(null)
+    setTaxonomy([])
+    const dtId = String(dataTypeId || '').trim()
+    if (!dtId) {
+      setTaxonomyLoading(false)
+      return
+    }
+    let cancelled = false
+    setTaxonomyLoading(true)
+    void api
+      .getLabelTaxonomy({ dataTypeId: dtId })
+      .then((tax) => {
+        if (!cancelled) setTaxonomy(tax)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTaxonomy([])
+          message.error('加载该类型绑定的标签树失败')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTaxonomyLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [dataTypeId])
+
   const labelIds = useMemo(() => collectLeafKeys(checkedKeys), [checkedKeys])
 
   const handlePreview = async () => {
     const queueLimit = form.getFieldValue('queue_limit') ?? 50
     const targets = (form.getFieldValue('review_targets') as ReviewTarget[] | undefined) ?? ['labels']
+    const dtId = String(form.getFieldValue('data_type_id') || '').trim()
+    if (!dtId) {
+      message.warning('请先选择校核任务的数据类型')
+      return
+    }
     if (targets.includes('labels') && !labelIds.length) {
       message.warning('校核目标含「标签」时请至少选择一个标签')
       return
@@ -123,6 +166,7 @@ export function ReviewAssignmentAdminPage() {
         label_ids: labelIds,
         queue_limit: queueLimit,
         review_targets: targets,
+        data_type_id: dtId,
       })
       setPreviewCount(res.count)
     } catch {
@@ -133,6 +177,7 @@ export function ReviewAssignmentAdminPage() {
   const handleDispatch = async () => {
     const values = await form.validateFields()
     const targets = values.review_targets?.length ? values.review_targets : (['labels'] as ReviewTarget[])
+    const dtId = String(values.data_type_id || '').trim()
     if (targets.includes('labels') && !labelIds.length) {
       message.warning('校核目标含「标签」时请至少选择一个标签')
       return
@@ -144,11 +189,13 @@ export function ReviewAssignmentAdminPage() {
         queue_limit: values.queue_limit,
         assignee_id: values.assignee_id || null,
         review_targets: targets,
+        data_type_id: dtId,
       })
       message.success('校核任务已派发')
       form.resetFields()
       setCheckedKeys([])
       setPreviewCount(null)
+      setTaxonomy([])
       await load()
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : '派发失败')
@@ -180,6 +227,13 @@ export function ReviewAssignmentAdminPage() {
 
   const columns: ColumnsType<ReviewAssignmentBatch> = [
     { title: '任务名称', dataIndex: 'name', width: 180 },
+    {
+      title: '数据类型',
+      dataIndex: 'data_type_id',
+      width: 160,
+      render: (v: string | null | undefined) =>
+        v ? <Tag>{dataTypes.find((dt) => dt.id === v)?.title ?? v}</Tag> : <Typography.Text type="secondary">—</Typography.Text>,
+    },
     {
       title: '标签范围',
       key: 'labels',
@@ -290,6 +344,22 @@ export function ReviewAssignmentAdminPage() {
             <Input placeholder="例如：时段标签专项校核" maxLength={120} />
           </Form.Item>
           <Form.Item
+            name="data_type_id"
+            label="校核任务数据类型"
+            rules={[{ required: true, message: '请选择数据类型' }]}
+            extra="先选类型，标签范围会切换为该类型绑定的标签树"
+          >
+            <Select
+              allowClear
+              placeholder="选择 published 数据类型"
+              options={dataTypes.map((item) => ({
+                value: item.id,
+                label: `${item.title}（${item.id}）`,
+              }))}
+              data-testid="review-assignment-data-type-select"
+            />
+          </Form.Item>
+          <Form.Item
             name="review_targets"
             label="校核目标"
             rules={[{ required: true, message: '请选择校核目标' }]}
@@ -308,20 +378,39 @@ export function ReviewAssignmentAdminPage() {
           <Form.Item
             label="标签范围（可多选）"
             required={needsLabels}
-            extra={needsLabels ? undefined : '当前校核目标不含「标签」，可不选'}
+            extra={
+              !dataTypeId
+                ? '请先选择数据类型'
+                : needsLabels
+                  ? selectedType
+                    ? `当前类型绑定标签树：${selectedType.taxonomy_id}${selectedType.taxonomy_version_code ? ` · ${selectedType.taxonomy_version_code}` : ''}`
+                    : undefined
+                  : '当前校核目标不含「标签」，可不选'
+            }
           >
-            <Tree
-              checkable
-              selectable={false}
-              treeData={treeData}
-              checkedKeys={checkedKeys}
-              onCheck={(keys) => {
-                const list = Array.isArray(keys) ? keys : keys.checked
-                setCheckedKeys(collectLeafKeys(list.map(String)))
-              }}
-              height={280}
-              style={{ border: '1px solid var(--color-hairline)', borderRadius: 8, padding: 8 }}
-            />
+            {!dataTypeId ? (
+              <Typography.Text type="secondary" data-testid="review-assignment-pick-type-first">
+                请先选择校核任务的数据类型，再勾选对应标签树
+              </Typography.Text>
+            ) : (
+              <Spin spinning={taxonomyLoading}>
+                <div data-testid="review-assignment-label-tree">
+                  <Tree
+                    checkable
+                    selectable={false}
+                    expandedKeys={expandedKeys}
+                    treeData={treeData}
+                    checkedKeys={checkedKeys}
+                    onCheck={(keys) => {
+                      const list = Array.isArray(keys) ? keys : keys.checked
+                      setCheckedKeys(collectLeafKeys(list.map(String)))
+                    }}
+                    height={280}
+                    style={{ border: '1px solid var(--color-hairline)', borderRadius: 8, padding: 8 }}
+                  />
+                </div>
+              </Spin>
+            )}
           </Form.Item>
           <Space wrap align="start">
             <Form.Item name="queue_limit" label="队列数量上限" rules={[{ required: true }]}>
@@ -340,7 +429,10 @@ export function ReviewAssignmentAdminPage() {
             </Form.Item>
           </Space>
           <Space>
-            <Button onClick={() => void handlePreview()} disabled={!labelIds.length}>
+            <Button
+              onClick={() => void handlePreview()}
+              disabled={!dataTypeId || (needsLabels && !labelIds.length)}
+            >
               预览可派发数量
             </Button>
             {previewCount != null ? (

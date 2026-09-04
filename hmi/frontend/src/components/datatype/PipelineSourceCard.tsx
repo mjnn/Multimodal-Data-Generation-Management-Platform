@@ -35,7 +35,7 @@ export function PipelineSourceCard({ sources, kindOptions, onChangeRow, onRemove
             ))}
           </span>
         ) : (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>未选 kinds</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>未选后缀</Typography.Text>
         )
       }
       extra={
@@ -105,7 +105,7 @@ function SourceRowFields({
           />
         </div>
         <div className="pipe-step__field" style={{ minWidth: 220, flex: 1 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>允许 kinds</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>允许后缀</Typography.Text>
           <Select
             mode="multiple"
             allowClear

@@ -19,16 +19,6 @@ function kindLabel(kind: string): string {
   return normalizeSourceKind(kind) || kind
 }
 
-function mergeSources(prev: PlatformSourceRecord[], next: PlatformSourceRecord[]): PlatformSourceRecord[] {
-  const byId = new Map<string, PlatformSourceRecord>()
-  for (const item of [...next, ...prev]) {
-    byId.set(item.source_id, item)
-  }
-  return Array.from(byId.values()).sort((a, b) =>
-    String(b.created_at || '').localeCompare(String(a.created_at || '')),
-  )
-}
-
 function collectionKey(row: PlatformSourceRecord): string {
   return String(row.collection_id || row.source_id)
 }
@@ -73,7 +63,7 @@ type LakeRunBindPanelProps = {
   onDataTypeIdChange?: (id: string) => void
 }
 
-/** 管线管理 · 源湖开跑：选类型 → 按数据源分块勾选 → 预检 → 自动 Sample+Run */
+/** 管线管理 · 数据选择：先选类型 → 再勾选湖中符合要求的文件 → 预检 → 自动 Sample+Run */
 export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: LakeRunBindPanelProps) {
   const navigate = useNavigate()
   const [sources, setSources] = useState<PlatformSourceRecord[]>([])
@@ -130,12 +120,16 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
   }
 
   const loadSources = async (eligibleFor?: string) => {
+    if (!eligibleFor) {
+      setSources([])
+      return
+    }
     setLoadingSources(true)
     try {
       const res = await api.listPlatformSources(200, {
-        eligibleFor: eligibleFor || undefined,
+        eligibleFor,
       })
-      setSources((prev) => mergeSources(prev, res.items || []))
+      setSources(res.items || [])
     } catch (e: unknown) {
       message.error(apiErrorMessage(e, '加载已入库源失败'))
     } finally {
@@ -144,7 +138,6 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
   }
 
   useEffect(() => {
-    void loadSources()
     void loadDataTypes()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount once
   }, [])
@@ -154,10 +147,13 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
   }, [initialDataTypeId, dataTypeId])
 
   useEffect(() => {
-    if (!dataTypeId) return
-    void loadSources(dataTypeId)
     setSelectedBySlot({})
     setPreflight(null)
+    if (!dataTypeId) {
+      setSources([])
+      return
+    }
+    void loadSources(dataTypeId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataTypeId])
 
@@ -271,13 +267,13 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }} data-testid="lake-run-bind-panel">
       <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-        选择 published 数据类型后，按数据源分块勾选入湖文件（仍按采集批展示）。预检通过后创建运行；Sample
-        由系统自动生成。入湖请前往「源湖入库」。
+        先选择数据类型，再勾选湖里符合该类型数据源要求的文件。预检通过后创建运行；Sample
+        由系统自动生成。入湖请前往「数据源」。
       </Typography.Paragraph>
 
       <Select
         data-testid="lake-run-data-type-select"
-        placeholder="选择 published 数据类型"
+        placeholder="先选择数据类型"
         style={{ width: '100%', maxWidth: 480 }}
         value={dataTypeId}
         options={dataTypes.map((item) => ({
@@ -297,11 +293,13 @@ export function LakeRunBindPanel({ initialDataTypeId, onDataTypeIdChange }: Lake
           </Button>
           <Typography.Text type="secondary">
             已选 {selectedIds.length} 个
-            {dataTypeId ? '（按数据源分块）' : '（未选类型时显示全部；请先选类型再开跑）'}
+            {dataTypeId ? '（仅显示符合当前类型的入湖文件）' : '（请先选数据类型）'}
           </Typography.Text>
         </Space>
         {!dataTypeId ? (
-          <Typography.Text type="secondary">请先选择数据类型，再按数据源勾选文件</Typography.Text>
+          <Typography.Text type="secondary" data-testid="lake-run-pick-type-first">
+            请先选择数据类型，再勾选湖中符合要求的数据
+          </Typography.Text>
         ) : slots.length === 0 ? (
           <Typography.Text type="secondary">该类型没有数据源节点</Typography.Text>
         ) : (

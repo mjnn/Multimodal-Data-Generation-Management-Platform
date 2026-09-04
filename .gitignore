@@ -25,6 +25,7 @@ hmi/data/hmi_local/
 hmi/data/hmi_runtime/**
 !hmi/data/hmi_runtime/README.md
 hmi/data/*.db
+hmi/data/models/
 hmi/frontend/node_modules/
 hmi/frontend/dist/
 
@@ -43,3 +44,7 @@ Thumbs.db
 archive/workspace-scratch/
 reset-cloud-env/
 *.zip
+
+# Offline Docker image packs (large; keep README only)
+hmi/deploy/offline/*.tar
+hmi/deploy/offline/*.tar.gz

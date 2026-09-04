@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import type { PlatformSourceRecord } from '../api/types'
+import { ProductBrowsePanel } from '../components/lake/ProductBrowsePanel'
 import { OssBrowserPanel } from '../components/oss/OssBrowserPanel'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useAuth } from '../auth/AuthContext'
@@ -63,9 +64,10 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary)
 }
 
-type LakeTab = 'sources' | 'oss'
+type LakeTab = 'sources' | 'products' | 'oss'
 
 function parseLakeTab(raw: string | null, allowOss: boolean): LakeTab {
+  if (raw === 'products') return 'products'
   if (raw === 'oss' && allowOss) return 'oss'
   return 'sources'
 }
@@ -155,7 +157,7 @@ export function LakeManagePage() {
   const sourcesPanel = (
     <ContentCard>
       <Typography.Paragraph type="secondary">
-        上传入湖并按采集批查看；同批不自动绑定。选类型、筛源、预检与开跑请到「管线管理 → 源湖开跑」。
+        上传源文件并按采集批查看；同批不自动绑定。选类型、筛源、预检与开跑请到「管线管理 → 数据选择」。
       </Typography.Paragraph>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Upload.Dragger
@@ -256,7 +258,8 @@ export function LakeManagePage() {
   )
 
   const tabItems = [
-    { key: 'sources', label: '源文件入库', children: sourcesPanel },
+    { key: 'sources', label: '源文件', children: sourcesPanel },
+    { key: 'products', label: '产物浏览', children: <ProductBrowsePanel /> },
     ...(allowOss
       ? [
           {
@@ -271,8 +274,8 @@ export function LakeManagePage() {
   return (
     <PageStack data-testid="lake-page">
       <PageHeader
-        title="源湖入库"
-        description="上传源文件与浏览 OSS 产物；管线执行在「管线管理」。"
+        title="数据源"
+        description="管理入湖源文件、浏览管线产物血缘，以及 OSS 对象；管线执行在「管线管理」。"
       />
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
     </PageStack>

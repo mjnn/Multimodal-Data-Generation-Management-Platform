@@ -1,0 +1,10 @@
+{
+  "skill_name": "rosbag-hmi-dev",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "改了总览页布局，怎么验收？",
+      "expected_output": "Playwright A-E2E，不要只写 H；说明 5173/8000 与 data_source"
+    }
+  ]
+}

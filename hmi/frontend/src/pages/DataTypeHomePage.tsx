@@ -58,7 +58,7 @@ export function DataTypeHomePage() {
       <ContentCard>
         <Typography.Paragraph type="secondary">
           先进入一个数据类型工作区。总览、检索和校核都只在该类型内，不会和其他类型的标签混在一起。
-          {canEdit ? ' 管理员可新建配方：绑定源槽位，并用 SDK 组件编排管线。' : ''}
+          {canEdit ? ' 管理员可新建配方：在数据源卡里加源，再用 SDK 组件编排管线。' : ''}
         </Typography.Paragraph>
         {loading ? (
           <div style={{ textAlign: 'center', padding: 48 }}>

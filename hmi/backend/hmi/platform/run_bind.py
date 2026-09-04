@@ -213,6 +213,23 @@ def overlay_pipeline_settings(settings: dict[str, Any], recipe: dict[str, Any]) 
     return out
 
 
+def recipe_with_dag_overrides(
+    recipe: dict[str, Any],
+    settings: dict[str, Any],
+    data_type_id: str,
+) -> dict[str, Any]:
+    """Apply execution-tab DAG param overlays onto a recipe copy."""
+    from hmi.platform.recipe_graph import apply_node_param_overrides, hydrate_graph
+
+    ov_all = settings.get("dag_node_overrides") if isinstance(settings, dict) else None
+    ov = (ov_all or {}).get(str(data_type_id).strip()) if isinstance(ov_all, dict) else None
+    if not ov:
+        return recipe
+    rec = dict(recipe)
+    rec["graph"] = apply_node_param_overrides(hydrate_graph(rec), ov)
+    return validate_recipe(rec)
+
+
 def record_execution_platform_run(
     *,
     files: list[tuple[str, bytes]],

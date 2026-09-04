@@ -1,6 +1,6 @@
 import { Navigate, useSearchParams } from 'react-router-dom'
 
-/** Legacy `/oss` → 源湖入库 · OSS 浏览 */
+/** Legacy `/oss` → 数据源 · OSS 浏览 */
 export function OssManagePage() {
   const [searchParams] = useSearchParams()
   const next = new URLSearchParams()

@@ -1,12 +1,12 @@
 # 进度看板
 
-> 最后更新：2026-09-02
+> 最后更新：2026-09-03
 
 ## Todo
 
 | ID | 标题 | 里程碑 |
 |----|------|--------|
-| UI-NVH-REVIEW-SAVE | 语义 L6 人工写回 | platform |
+| UI-NVH-REVIEW-SAVE | 语义 L6 人工写回（**推荐下一**） | platform |
 | M9.3-H-2 | HMI 在线主观（**暂停不排期**） | M9 |
 | M7.5-E2E | Parquet 全链 zip E2E | M7.5 |
 
@@ -20,7 +20,8 @@
 
 | ID | 标题 | 完成日 |
 |----|------|--------|
-| **UI-DTYPE-SOURCE-NODES** | 数据源节点 + 开跑分源勾选（Task 8 e2e 7/7） | 2026-09-02 |
+| **UI-DTYPE-DAG-CANVAS** | 执行 DAG 画板 + 本地 graph runtime + 橱窗锁标签树；e2e editor 3/3 | 2026-09-03 |
+| **UI-DTYPE-SOURCE-NODES** | 数据源节点 + 开跑分源；2026-09-03 polish：打标器固定最后，e2e editor 3/3 | 2026-09-03 |
 | **UI-DTYPE-OVERVIEW-COMPOSE** | 总览列表 + 详情组件拼版 | 2026-09-02 |
 | **UI-DTYPE-PIPELINE-ORCH** | DataType 管线编排（SDK 组件卡） | 2026-09-02 |
 | **FIX-SPA-PREFIX** | 直连 :8012 子路径空白页（剥 UI 前缀） | 2026-08-28 |

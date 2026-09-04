@@ -43,6 +43,19 @@ function defaultCard(widgetId: string, prefix: string): ViewCard {
   return { key: `${prefix}-${widgetId}`, widget_id: widgetId, bindings: {} }
 }
 
+/** Mirror backend `hydrate_overview`: detail always has a locked labels_tree card. */
+export function ensureLabelsTree(detail: ViewCard[]): ViewCard[] {
+  if (detail.some((c) => c.widget_id === 'labels_tree')) return detail
+  return [
+    {
+      key: 'locked-labels_tree',
+      widget_id: 'labels_tree',
+      bindings: { in: { kind: 'upstream', step_key: 'stage-label', port_id: 'labels_tree' } },
+    },
+    ...detail,
+  ]
+}
+
 export function cardsFromPreset(
   presetId: string,
   views?: PlatformViewTemplate[] | null,
@@ -54,7 +67,7 @@ export function cardsFromPreset(
   return {
     preset: presetId,
     list: list.map((id) => defaultCard(id, 'list')),
-    detail: detail.map((id) => defaultCard(id, 'detail')),
+    detail: ensureLabelsTree(detail.map((id) => defaultCard(id, 'detail'))),
   }
 }
 
@@ -71,7 +84,7 @@ export function hydrateOverview(
     return {
       preset: raw.preset || preset,
       list: Array.isArray(raw.list) ? raw.list.map(cloneCard) : [],
-      detail: Array.isArray(raw.detail) ? raw.detail.map(cloneCard) : [],
+      detail: ensureLabelsTree(Array.isArray(raw.detail) ? raw.detail.map(cloneCard) : []),
     }
   }
   return cardsFromPreset(preset, views)

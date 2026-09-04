@@ -1,11 +1,12 @@
-"""AI / heuristic fill for audio_nvh L6 semantic fields (nvh.sem.*).
+"""阵列 NVH 的 L6 语义字段填充（nvh.sem.*）。
 
-Keeps objective deriver leaves intact. Binds runs to draft ``audio_nvh-v2`` by
-version_code without calling global ``publish_version`` (which would archive OMS).
+不改动客观 deriver 叶子。按 version_code 绑定 draft ``audio_nvh-v2``，
+**禁止**调用会 archive OMS 的全局 ``publish_version``。
 
-Models (recipe ``stages.label.model``):
-- ``nvh_sem_heuristic`` (default): offline rules from L2 objective metrics
-- ``nvh_sem_vl``: optional DashScope VL on mel.png; falls back to heuristic
+配方 ``stages.label.model``：
+- ``nvh_sem_heuristic``：由 L2 客观指标离线规则
+- ``nvh_sem_ast``：YuanGongND AST + AudioSet-527，top-k → category/sources
+- ``nvh_sem_vl``：可选百炼 VL 看 mel.png，失败回退 heuristic
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 AI_LABEL_VERSION = "nvh_ai_label-v1"
 DEFAULT_MODEL = "nvh_sem_heuristic"
+AST_MODEL = "nvh_sem_ast"
 
 # AI may write these; never invent objective metrics.
 SEMANTIC_KEYS = frozenset(
@@ -262,20 +264,10 @@ def _find_mel_png(run_root: Path) -> Path | None:
 
 
 def vl_nvh_semantic(run_root: Path, labels: dict[str, Any], *, model: str) -> dict[str, Any] | None:
-    """Optional DashScope VL fill; returns None when unavailable."""
-    api_key = (os.getenv("DASHSCOPE_API_KEY") or "").strip()
-    if not api_key:
-        logger.info("nvh_sem_vl skipped: DASHSCOPE_API_KEY unset")
-        return None
+    """Optional VL fill via DashScope or AIGW OpenAI-compatible chat; None when unavailable."""
     mel = _find_mel_png(run_root)
     if mel is None:
         logger.info("nvh_sem_vl skipped: no mel.png under %s", run_root)
-        return None
-    try:
-        import dashscope
-        from dashscope import MultiModalConversation
-    except ImportError:
-        logger.warning("nvh_sem_vl skipped: dashscope not installed")
         return None
 
     leq = labels.get("nvh.clip.spl.leq_db_mean")
@@ -294,40 +286,88 @@ def vl_nvh_semantic(run_root: Path, labels: dict[str, Any], *, model: str) -> di
     vl_model = model if model and model != "nvh_sem_vl" else (
         os.getenv("HMI_NVH_VL_MODEL") or "qwen-vl-plus"
     ).strip()
-    dashscope.api_key = api_key
-    try:
-        resp = MultiModalConversation.call(
-            model=vl_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"image": str(mel.resolve())},
-                        {"text": prompt},
-                    ],
-                }
-            ],
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("nvh_sem_vl call failed: %s", exc)
-        return None
 
+    provider = (os.getenv("OMNI_PROVIDER") or os.getenv("LLM_PROVIDER") or "dashscope").strip().lower()
     text = ""
-    try:
-        text = resp["output"]["choices"][0]["message"]["content"][0]["text"]
-    except Exception:  # noqa: BLE001
+    if provider in {"aigw", "openai", "openai_compat", "gateway"}:
         try:
-            content = resp["output"]["choices"][0]["message"]["content"]
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                text = " ".join(
-                    str(x.get("text") or "") for x in content if isinstance(x, dict)
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("nvh_sem_vl parse failed: %s", exc)
+            from oms_multimodal.llm_provider import load_aigw_settings, make_openai_client
+        except ImportError:
+            logger.warning("nvh_sem_vl aigw skipped: oms_multimodal not importable")
             return None
-    text = (text or "").strip()
+        try:
+            aigw = load_aigw_settings()
+            client = make_openai_client(
+                base_url=aigw.base_url, api_key=aigw.api_key, timeout_sec=aigw.timeout_sec
+            )
+            use_model = (aigw.omni_model or vl_model).strip()
+            import base64
+
+            b64 = base64.b64encode(mel.read_bytes()).decode("utf-8")
+            data_uri = f"data:image/png;base64,{b64}"
+            completion = client.chat.completions.create(
+                model=use_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_uri}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+                stream=False,
+            )
+            content = completion.choices[0].message.content if completion.choices else ""
+            text = str(content or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("nvh_sem_vl aigw call failed: %s", exc)
+            return None
+    else:
+        api_key = (os.getenv("DASHSCOPE_API_KEY") or "").strip()
+        if not api_key:
+            logger.info("nvh_sem_vl skipped: DASHSCOPE_API_KEY unset")
+            return None
+        try:
+            import dashscope
+            from dashscope import MultiModalConversation
+        except ImportError:
+            logger.warning("nvh_sem_vl skipped: dashscope not installed")
+            return None
+        dashscope.api_key = api_key
+        try:
+            resp = MultiModalConversation.call(
+                model=vl_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"image": str(mel.resolve())},
+                            {"text": prompt},
+                        ],
+                    }
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("nvh_sem_vl call failed: %s", exc)
+            return None
+
+        try:
+            text = resp["output"]["choices"][0]["message"]["content"][0]["text"]
+        except Exception:  # noqa: BLE001
+            try:
+                content = resp["output"]["choices"][0]["message"]["content"]
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    text = " ".join(
+                        str(x.get("text") or "") for x in content if isinstance(x, dict)
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("nvh_sem_vl parse failed: %s", exc)
+                return None
+        text = (text or "").strip()
+
     if not text:
         return None
     # Strip markdown fences if present
@@ -357,6 +397,47 @@ def vl_nvh_semantic(run_root: Path, labels: dict[str, Any], *, model: str) -> di
     return cleaned if cleaned else None
 
 
+def infer_audioset_probs(run_root: Path, labels: dict[str, Any]) -> list[float] | None:
+    """Return 527 AudioSet sigmoid probs, or None when AST is unavailable."""
+    try:
+        from hmi.local.nvh_ast.infer import infer_audioset_probs as _infer
+
+        return _infer(run_root, labels)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("nvh_sem_ast infer skipped: %s", exc)
+        return None
+
+
+def _semantic_from_ast(
+    run_root: Path,
+    labels: dict[str, Any],
+    _model_name: str,
+) -> tuple[dict[str, Any], str]:
+    heuristic = heuristic_nvh_semantic(labels, run_root=run_root)
+    probs = infer_audioset_probs(run_root, labels)
+    if not probs:
+        return heuristic, "heuristic_fallback"
+    from hmi.local.nvh_ast.labels import format_ast_hypothesis, map_audioset_topk
+
+    mapped = map_audioset_topk(probs)
+    semantic = dict(heuristic)
+    if mapped.get("mapped") and mapped.get("noise_category"):
+        semantic["nvh.sem.noise_category"] = mapped["noise_category"]
+    if mapped.get("noise_sources"):
+        semantic["nvh.sem.noise_sources"] = list(mapped["noise_sources"])
+    leq = labels.get("nvh.clip.spl.leq_db_mean")
+    try:
+        leq_f = float(leq) if leq is not None else None
+    except (TypeError, ValueError):
+        leq_f = None
+    semantic["nvh.sem.ai_hypothesis"] = format_ast_hypothesis(
+        mapped,
+        heuristic_leq=leq_f,
+        heuristic_quality=str(heuristic.get("nvh.sem.quality_grade") or ""),
+    )
+    return semantic, "ast"
+
+
 def fill_nvh_semantic_labels(
     run_root: Path,
     labels: dict[str, Any],
@@ -376,6 +457,8 @@ def fill_nvh_semantic_labels(
         else:
             semantic = heuristic_nvh_semantic(labels, run_root=run_root)
             used = "heuristic_fallback"
+    elif model_name == AST_MODEL or model_name.startswith("nvh_sem_ast"):
+        semantic, used = _semantic_from_ast(run_root, labels, model_name)
     else:
         semantic = heuristic_nvh_semantic(labels, run_root=run_root)
         used = "heuristic"

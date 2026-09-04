@@ -1,0 +1,15 @@
+{
+  "skill_name": "rosbag-onboarding",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我是新来的，这个 rosbag 项目怎么上手？下一张工单是什么？",
+      "expected_output": "指向 HANDOVER.md 和 CURRENT.md；说明推荐工单 UI-NVH-REVIEW-SAVE；列出禁止 publish audio_nvh-v2 / 勿改 DataWorks / 勿做 H-2"
+    },
+    {
+      "id": 2,
+      "prompt": "新 bag 应该走 Job3 节点还是 SDK？",
+      "expected_output": "新数据走 SDK v1 + aig_sdk__ + bundled sdk_pipeline_driver；Job1–4 仅维护"
+    }
+  ]
+}

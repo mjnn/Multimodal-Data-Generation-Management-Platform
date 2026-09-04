@@ -938,7 +938,7 @@ def yaml_document() -> dict[str, Any]:
             "json_ref_root": "relative to runs/{run_id}/",
             "level_class_thresholds_db": [70, 85, 100],
             "label_stage": (
-                "derive_nvh_labels + stages.label (nvh_sem_heuristic|nvh_sem_vl); "
+                "derive_nvh_labels + stages.label (nvh_sem_ast|nvh_sem_heuristic|nvh_sem_vl); "
                 "binds draft audio_nvh-v2; do not global-publish"
             ),
         },

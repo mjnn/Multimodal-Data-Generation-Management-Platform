@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.2.5",
+    "@xyflow/react": "^12.11.6",
     "antd": "^6.4.3",
     "axios": "^1.17.0",
     "dayjs": "^1.11.21",

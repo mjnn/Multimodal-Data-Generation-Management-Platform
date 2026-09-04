@@ -38,12 +38,14 @@ class CreateBatchBody(BaseModel):
     queue_limit: int = Field(ge=1, le=500)
     assignee_id: str | None = None
     review_targets: list[str] = Field(default_factory=lambda: ["labels"])
+    data_type_id: str | None = None
 
 
 class PreviewBatchBody(BaseModel):
     label_ids: list[str] = Field(default_factory=list)
     queue_limit: int = Field(ge=1, le=500)
     review_targets: list[str] = Field(default_factory=lambda: ["labels"])
+    data_type_id: str | None = None
 
 
 class ClaimBody(BaseModel):
@@ -54,6 +56,7 @@ class ClaimBody(BaseModel):
 class ClaimLowConfidenceBody(BaseModel):
     limit: int = Field(default=20, ge=1, le=500)
     review_targets: list[str] = Field(default_factory=lambda: ["labels"])
+    data_type_id: str = Field(min_length=1)
 
 
 class SaveWorkbenchSessionBody(BaseModel):
@@ -100,6 +103,7 @@ def api_preview_batch(
             body.label_ids,
             body.queue_limit,
             review_targets=body.review_targets,
+            data_type_id=body.data_type_id,
         )
     except ValueError as exc:
         raise _validation_error(str(exc)) from exc
@@ -126,6 +130,7 @@ def api_create_batch(
             assignee_id=body.assignee_id,
             created_by=admin["id"],
             review_targets=body.review_targets,
+            data_type_id=body.data_type_id,
         )
     except ValueError as exc:
         raise _validation_error(str(exc)) from exc
@@ -141,6 +146,7 @@ def api_create_batch(
             "queue_limit": body.queue_limit,
             "assignee_id": body.assignee_id,
             "review_targets": body.review_targets,
+            "data_type_id": body.data_type_id,
             "item_total": batch.get("item_total"),
         },
     )
@@ -248,6 +254,7 @@ def api_claim_low_confidence(
             limit=body.limit,
             created_by=user["id"],
             review_targets=body.review_targets,
+            data_type_id=body.data_type_id,
         )
     except ValueError as exc:
         raise _validation_error(str(exc)) from exc
@@ -256,7 +263,7 @@ def api_claim_low_confidence(
         action="review.assignment.claim_low_confidence",
         resource_type="review_assignment_batch",
         resource_id=batch["id"],
-        detail={"limit": body.limit, "item_total": batch.get("item_total"), "review_targets": body.review_targets},
+        detail={"limit": body.limit, "item_total": batch.get("item_total"), "review_targets": body.review_targets, "data_type_id": body.data_type_id},
     )
     return batch
 
@@ -269,7 +276,7 @@ def api_batch_work_queue(
     batch = get_batch(batch_id)
     if not batch:
         raise _not_found("任务不存在")
-    all_tasks = build_pending_tasks("confidence")
+    all_tasks = build_pending_tasks("confidence", data_type_id=batch.get("data_type_id"))
     tasks = filter_tasks_for_batch(all_tasks, batch_id=batch_id, assignee_id=user["id"])
     return {
         "batch": batch,

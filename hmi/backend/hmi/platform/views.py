@@ -103,6 +103,13 @@ VIEW_WIDGETS: dict[str, dict[str, Any]] = {
         "description": "结构化产物 / labels",
         "needs": ["structured_json", ".json"],
     },
+    "labels_tree": {
+        "id": "labels_tree",
+        "surface": "detail",
+        "title": "标签树",
+        "description": "必选产物：当前 run 的 labels_json",
+        "needs": ["labels_tree"],
+    },
 }
 
 VIEW_WIDGET_IDS = frozenset(VIEW_WIDGETS)
@@ -244,6 +251,15 @@ def hydrate_overview(recipe: dict[str, Any]) -> dict[str, Any]:
     detail_cards = _normalize_card_list(
         raw.get("detail") if has_lists else filled["detail"], surface="detail"
     )
+    if not any(str(c.get("widget_id")) == "labels_tree" for c in detail_cards):
+        detail_cards.insert(
+            0,
+            {
+                "key": "locked-labels_tree",
+                "widget_id": "labels_tree",
+                "bindings": {"in": {"kind": "upstream", "step_key": "stage-label", "port_id": "labels_tree"}},
+            },
+        )
     return {"preset": stored_preset, "list": list_cards, "detail": detail_cards}
 
 

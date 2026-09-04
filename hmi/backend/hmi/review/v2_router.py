@@ -111,11 +111,12 @@ def api_review_v2_stats(
     label_id: str | None = Query(default=None),
     value: str | None = Query(default=None),
     dtype: str | None = Query(default=None),
+    data_type_id: str | None = Query(default=None),
     _user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     mode = _parse_mode(mode)
     lid, filter_value = _parse_comprehensive_params(mode, label_id, value, dtype=dtype)
-    return task_stats(mode, label_id=lid, filter_value=filter_value)
+    return task_stats(mode, label_id=lid, filter_value=filter_value, data_type_id=data_type_id)
 
 
 @router.get("/next")

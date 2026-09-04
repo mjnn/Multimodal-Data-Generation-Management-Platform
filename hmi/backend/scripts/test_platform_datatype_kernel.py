@@ -21,7 +21,7 @@ class TestRecipeValidation(unittest.TestCase):
         self.assertEqual(seeds["oms_cabin"]["taxonomy_id"], "oms")
         self.assertEqual(seeds["ivi_ui_stub"]["taxonomy_id"], "ivi_ui_stub")
         self.assertNotEqual(seeds["oms_cabin"]["taxonomy_id"], seeds["ivi_ui_stub"]["taxonomy_id"])
-        self.assertFalse(seeds["ivi_ui_stub"]["stages"]["label"]["enabled"])
+        self.assertTrue(seeds["ivi_ui_stub"]["stages"]["label"]["enabled"])
         self.assertTrue(seeds["ivi_ui_stub"]["bbox"]["enabled"])
         self.assertEqual(seeds["ivi_ui_stub"]["bbox"]["detector"], "opencv")
 
@@ -59,12 +59,15 @@ class TestRecipeValidation(unittest.TestCase):
         oms = seeds["oms_cabin"]["overview"]
         self.assertEqual(oms["preset"], "cabin_timeline")
         self.assertEqual([c["widget_id"] for c in oms["list"]], ["clip_metrics", "label_search", "clip_table"])
-        self.assertEqual([c["widget_id"] for c in oms["detail"]], ["cabin_multicam", "asr_panel"])
+        self.assertEqual(
+            [c["widget_id"] for c in oms["detail"]],
+            ["labels_tree", "cabin_multicam", "asr_panel"],
+        )
         nvh = seeds["audio_array_spec"]["overview"]
         self.assertEqual([c["widget_id"] for c in nvh["list"]], ["clip_metrics", "nvh_spl_column", "clip_table"])
-        self.assertEqual([c["widget_id"] for c in nvh["detail"]], ["nvh_spectrum"])
+        self.assertEqual([c["widget_id"] for c in nvh["detail"]], ["labels_tree", "nvh_spectrum"])
         ivi = seeds["ivi_ui_stub"]["overview"]
-        self.assertEqual([c["widget_id"] for c in ivi["detail"]], ["frame_gallery_bbox"])
+        self.assertEqual([c["widget_id"] for c in ivi["detail"]], ["labels_tree", "frame_gallery_bbox"])
 
     def test_unknown_overview_widget_rejected(self) -> None:
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
@@ -103,7 +106,10 @@ class TestRecipeValidation(unittest.TestCase):
         }
         out = validate_recipe(rec)
         self.assertEqual([c["widget_id"] for c in out["overview"]["list"]], ["clip_table"])
-        self.assertEqual([c["widget_id"] for c in out["overview"]["detail"]], ["nvh_spectrum"])
+        self.assertEqual(
+            [c["widget_id"] for c in out["overview"]["detail"]],
+            ["labels_tree", "nvh_spectrum"],
+        )
 
     def test_vl_bbox_rejected(self) -> None:
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
@@ -131,7 +137,7 @@ class TestPreflight(unittest.TestCase):
         result = preflight(SEED_RECIPES["ivi_ui_stub"], ["image"])
         self.assertTrue(result["ok"])
         self.assertIn("detect_bbox", result["ops"])
-        self.assertNotIn("label", result["ops"])
+        self.assertIn("label", result["ops"])
 
     def test_text_only_ivi_fails(self) -> None:
         from hmi.platform.preflight import preflight

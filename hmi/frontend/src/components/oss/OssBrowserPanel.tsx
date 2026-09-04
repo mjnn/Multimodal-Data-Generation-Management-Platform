@@ -44,7 +44,7 @@ type OssBrowserPanelProps = {
   showTitleExtra?: boolean
 }
 
-/** OSS browser body (no page chrome). Used under 源湖入库 / legacy /oss. */
+/** OSS browser body (no page chrome). Used under 数据源 / legacy /oss. */
 export function OssBrowserPanel({ showTitleExtra = true }: OssBrowserPanelProps) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()

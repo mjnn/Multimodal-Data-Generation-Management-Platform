@@ -128,6 +128,7 @@ const API_MESSAGE_ZH: Array<[RegExp, string | ((m: RegExpMatchArray) => string)]
   [/^Only \.bag files are accepted$/i, '仅支持 .bag 文件'],
   [/^retry only allowed for failed or cancelled runs$/i, '仅失败或已中止的运行可重试'],
   [/^rosbag file missing on disk; re-upload$/i, '本地 bag 文件缺失，请重新上传'],
+  [/^duplicate slot title$/i, '数据源名称不能重复'],
 ]
 
 export function localizeApiMessage(message: string): string {

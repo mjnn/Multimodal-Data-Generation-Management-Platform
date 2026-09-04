@@ -16,7 +16,7 @@ from typing import Any
 from hmi.app_db import _utc_now_iso, db_conn
 from hmi.platform.cache import product_cache_key
 from hmi.platform.file_kinds import modality_of, resolve_source_kind
-from hmi.platform.operators import SOURCE_KINDS
+from hmi.platform.operators import SOURCE_KINDS, get_operator
 from hmi.platform.preflight import preflight
 from hmi.platform.recipe import eligible_kinds_for_recipe, seed_recipes, validate_recipe
 
@@ -748,6 +748,152 @@ def lookup_or_record_product(
         run_id=run_id,
     )
     return {"cache_key": key, "skipped": False}
+
+
+_FALLBACK_OP_TITLES = {
+    "label": "打标器",
+    "embed": "向量化",
+    "source": "数据源",
+}
+
+
+def _op_title(op_id: str) -> str:
+    spec = get_operator(op_id) or {}
+    title = spec.get("title")
+    if title:
+        return str(title)
+    return _FALLBACK_OP_TITLES.get(op_id, op_id)
+
+
+def _walk_source_refs(
+    input_ids: list[str],
+    *,
+    sources_by_id: dict[str, dict[str, Any]],
+    products_by_key: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve input ids to leaf lake sources (walk nested products)."""
+    out: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    found: set[str] = set()
+    queue = [str(i) for i in input_ids if str(i).strip()]
+    while queue:
+        iid = queue.pop()
+        if not iid or iid in seen_ids:
+            continue
+        seen_ids.add(iid)
+        bare = iid[5:] if iid.startswith("prod:") else iid
+        src = sources_by_id.get(iid) or sources_by_id.get(bare)
+        if src is not None:
+            sid = str(src["source_id"])
+            if sid not in found:
+                found.add(sid)
+                out.append(
+                    {
+                        "source_id": sid,
+                        "kind": src.get("kind"),
+                        "filename": src.get("filename"),
+                        "collection_id": src.get("collection_id"),
+                    }
+                )
+            continue
+        prod = products_by_key.get(iid) or products_by_key.get(bare)
+        if prod is not None:
+            queue.extend(str(x) for x in (prod.get("input_ids") or []) if str(x).strip())
+    return out
+
+
+def _lineage_sentence(item: dict[str, Any]) -> str:
+    step = str(item.get("op_title") or item.get("op_id") or "未知步骤")
+    op_id = str(item.get("op_id") or "")
+    run_id = str(item.get("run_id") or "").strip()
+    dtype_id = str(item.get("data_type_id") or "").strip()
+    dtype_title = str(item.get("data_type_title") or "").strip()
+    if run_id:
+        if dtype_title and dtype_id:
+            dtype_bit = f"（数据类型「{dtype_title}」/{dtype_id}）"
+        elif dtype_id:
+            dtype_bit = f"（数据类型 {dtype_id}）"
+        else:
+            dtype_bit = ""
+        origin = f"管线运行 {run_id}{dtype_bit} 的步骤「{step}」（{op_id}）"
+    else:
+        origin = f"未关联管线运行；步骤「{step}」（{op_id}）"
+    sources = item.get("sources") or []
+    if sources:
+        names = [str(s.get("filename") or s.get("source_id") or "未知") for s in sources]
+        src_clause = f"数据源 {'、'.join(names)}"
+    else:
+        src_clause = "数据源未知"
+    extra = "；缓存命中未重算" if item.get("skipped") else ""
+    return f"来自{origin}，{src_clause}{extra}"
+
+
+def list_products(*, limit: int = 200) -> list[dict[str, Any]]:
+    """Newest products with run/step/source lineage for the lake browser."""
+    ensure_platform_schema()
+    lim = max(1, min(int(limit or 200), 500))
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.cache_key, p.op_id, p.input_ids_json, p.params_json, p.artifact_path,
+                   p.run_id, p.skipped, p.created_at,
+                   r.data_type_id, r.status AS run_status, r.created_at AS run_created_at,
+                   r.sample_id
+            FROM platform_product p
+            LEFT JOIN platform_run r ON r.run_id = p.run_id
+            ORDER BY p.created_at DESC
+            LIMIT ?
+            """,
+            (lim,),
+        ).fetchall()
+        src_rows = conn.execute(
+            "SELECT source_id, kind, filename, collection_id FROM platform_source"
+        ).fetchall()
+        prod_walk_rows = conn.execute(
+            "SELECT cache_key, input_ids_json FROM platform_product"
+        ).fetchall()
+    sources_by_id = {str(r["source_id"]): dict(r) for r in src_rows}
+    products_by_key = {
+        str(r["cache_key"]): {"input_ids": json.loads(r["input_ids_json"] or "[]")}
+        for r in prod_walk_rows
+    }
+    dtype_title_cache: dict[str, str | None] = {}
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        input_ids = json.loads(row["input_ids_json"] or "[]")
+        op_id = str(row["op_id"])
+        spec = get_operator(op_id) or {}
+        dtype_id = row["data_type_id"]
+        dtype_key = str(dtype_id) if dtype_id else ""
+        if dtype_key and dtype_key not in dtype_title_cache:
+            rec = get_data_type(dtype_key)
+            title = (rec or {}).get("title")
+            dtype_title_cache[dtype_key] = str(title) if title else None
+        item: dict[str, Any] = {
+            "cache_key": row["cache_key"],
+            "op_id": op_id,
+            "op_title": _op_title(op_id),
+            "product_type": spec.get("product"),
+            "input_ids": input_ids,
+            "params": json.loads(row["params_json"] or "{}"),
+            "artifact_path": row["artifact_path"],
+            "run_id": row["run_id"],
+            "run_status": row["run_status"],
+            "run_created_at": row["run_created_at"],
+            "sample_id": row["sample_id"],
+            "data_type_id": dtype_id,
+            "data_type_title": dtype_title_cache.get(dtype_key) if dtype_key else None,
+            "skipped": bool(row["skipped"]),
+            "created_at": row["created_at"],
+            "sources": _walk_source_refs(
+                input_ids,
+                sources_by_id=sources_by_id,
+                products_by_key=products_by_key,
+            ),
+        }
+        item["lineage"] = _lineage_sentence(item)
+        items.append(item)
+    return items
 
 
 def get_product(cache_key: str) -> dict[str, Any] | None:

@@ -8,7 +8,7 @@ import { hydrateOverview, overviewCustomized } from '../utils/overviewLayout'
 
 function workspaceBanner(recipe: DataTypeRecipe): string {
   const ov = hydrateOverview(recipe)
-  const custom = overviewCustomized(ov) ? ' · 自定义拼版' : ''
+  const custom = overviewCustomized(ov) ? ' · 自定义展示页排版' : ''
   return `标签树 ${recipe.taxonomy_id} · 视图 ${recipe.overview_view}${custom}`
 }
 

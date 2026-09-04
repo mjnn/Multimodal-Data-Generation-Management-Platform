@@ -34,7 +34,7 @@
 **执行记录**
 - 2026-09-02（切片 A）：`Ran 18 tests in 5.409s OK`
 - 2026-09-02（切片 B 回归）：`Ran 23 tests in 5.565s OK`
-- 2026-09-02（Task 5 切片 A 复验）：`Ran 23 tests in 4.704s OK`
+- 2026-09-03 polish：`Ran 26 tests in 5.330s OK`（种子中文 title；`pin_label_last`；hydrate 先 embed 后 label）
 
 #### A-2 · 内核配方回归
 
@@ -51,6 +51,7 @@
 - 2026-09-02（切片 A）：`Ran 15 tests in 4.850s OK`
 - 2026-09-02（切片 B 回归）：`Ran 19 tests in 5.031s OK`
 - 2026-09-02（Task 5 切片 A 复验）：`Ran 19 tests in 3.733s OK`
+- 2026-09-03 polish：`Ran 19 tests in 4.755s OK`
 
 #### A-3 · 开跑 assignments（切片 B）
 
@@ -108,7 +109,7 @@
 - 2026-09-02（切片 A）：`3 passed (13.4s)`
 - 2026-09-02（切片 B 回归）：`3 passed`（含在 7 passed / 51.2s 中）
 - 2026-09-02（Task 5 切片 A 复验）：`3 passed (13.6s)` — 覆盖：无「源槽位」标题；`pipe-add-source`→`pipe-source-row` 增而 `pipe-source-card`=1；oms_cabin card=1 / row=4（rosbag）；解析「连续帧」；ASR「ROSBAG 解析器 · .wav」；编码器「ROSBAG 解析器 · 连续帧」
-- 2026-09-02（Task 8 切片 B 收工）：`3 passed`（含在 **7 passed / 48.2s** 中）
+- 2026-09-03 polish：`3 passed (35.4s)` — 新建点选梅尔插在打标器上方；无 `pipe-remove-label`；oms_cabin 源名「舱内 bag」；「允许后缀」
 
 #### A-E2E-2 · 开跑按数据源分块勾选（切片 B）
 
