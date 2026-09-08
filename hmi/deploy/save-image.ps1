@@ -30,17 +30,18 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 $frontend = Join-Path $RepoRoot "hmi\frontend"
 $dist = Join-Path $frontend "dist"
 if (-not $SkipFrontend) {
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        throw "找不到 npm。构建前端需要 Node.js。"
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        throw "找不到 npm.cmd。构建前端需要 Node.js（Windows 请用 npm.cmd，勿直接 npm）。"
     }
     Push-Location $frontend
     try {
         if (Test-Path (Join-Path $frontend "package-lock.json")) {
-            npm ci
+            & npm.cmd ci
         } else {
-            npm install
+            & npm.cmd install
         }
-        npm run build
+        & npm.cmd run build
     } finally {
         Pop-Location
     }

@@ -14,6 +14,7 @@ import {
   stripOutputLabels,
   typeLabel,
 } from '../../utils/recipePipeline'
+import { LabelModelParamFields } from './DagNodeInspector'
 import { PipelineCardShell } from './PipelineCardShell'
 
 const DOT: Record<string, string> = {
@@ -51,12 +52,6 @@ function dotColor(t: string): string {
   if (t.includes('label') || t.includes('embed') || t.includes('bbox')) return '#828fff'
   return '#5e6ad2'
 }
-
-const LABEL_MODELS = [
-  { value: 'default', label: 'default（SDK Omni）' },
-  { value: 'nvh_sem_ast', label: 'nvh_sem_ast' },
-  { value: 'nvh_sem_heuristic', label: 'nvh_sem_heuristic' },
-]
 
 type Props = {
   step: PipelineStep
@@ -287,15 +282,11 @@ export function PipelineStepCard({
           </div>
         ) : null}
         {step.op_id === 'label' ? (
-            <div className="pipe-step__field" data-testid="pipe-label-model">
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>打标模型</Typography.Text>
-              <Select
-                style={{ width: 220, display: 'block' }}
-                value={String(step.params?.model || 'default')}
-                options={LABEL_MODELS}
-                onChange={(v) => setParam('model', v)}
-              />
-            </div>
+          <LabelModelParamFields
+            params={step.params || {}}
+            operators={operators}
+            onSetParam={setParam}
+          />
         ) : null}
         {step.op_id === 'detect_bbox' ? (
           <>

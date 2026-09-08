@@ -30,7 +30,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
             "purpose": "编辑器创建的 draft 配方",
             "owner": "qa",
             "taxonomy_id": "audio_nvh",
-            "overview_view": "audio_nvh_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [["audio"]],
             "slots": [
@@ -66,6 +66,101 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
         self.assertEqual(loaded["slots"][0]["id"], "audio_primary")
         self.assertEqual(loaded["preprocess"][0]["op_id"], "mel_spectrogram")
 
+    def test_get_legacy_prep_graph_catalogized(self) -> None:
+        from hmi.platform.store import get_data_type, upsert_data_type
+
+        recipe = {
+            "id": "legacy_prep_canvas",
+            "title": "旧 hydrate 图",
+            "purpose": "GET 应把 prep-N 键改成目录算子 id",
+            "owner": "qa",
+            "taxonomy_id": "oms",
+            "overview_view": "custom",
+            "status": "draft",
+            "require_any_kinds": [[".mp4"]],
+            "slots": [
+                {
+                    "id": "ui_media",
+                    "title": "IVI 画面",
+                    "kinds": [".mp4"],
+                    "cardinality_min": 1,
+                    "cardinality_max": 1,
+                    "role": "primary",
+                    "required": True,
+                }
+            ],
+            "preprocess": [
+                {"op_id": "text_to_json", "produces": ["structured_json"]},
+                {"op_id": "detect_bbox", "required": True, "produces": ["bboxes_jsonl"]},
+            ],
+            "products": [],
+            "stages": {"label": {"enabled": True, "model": "default"}, "embed": {"enabled": True}},
+            "bbox": {"enabled": True, "detector": "opencv", "yolo_classes": ""},
+            "graph": {
+                "nodes": [
+                    {
+                        "key": "ui_media",
+                        "type": "source",
+                        "op_id": "source",
+                        "title": "IVI 画面",
+                        "params": {"kinds": [".mp4"], "required": True, "cardinality_min": 1, "cardinality_max": 1},
+                        "position": {"x": 80, "y": 0},
+                    },
+                    {
+                        "key": "prep-5-text_to_json",
+                        "type": "op",
+                        "op_id": "text_to_json",
+                        "title": "prep-5-text_to_json",
+                        "params": {},
+                        "position": {"x": 80, "y": 96},
+                    },
+                    {
+                        "key": "prep-6-detect_bbox",
+                        "type": "op",
+                        "op_id": "detect_bbox",
+                        "title": "prep-6-detect_bbox",
+                        "params": {},
+                        "position": {"x": 80, "y": 192},
+                    },
+                    {
+                        "key": "stage-embed",
+                        "type": "op",
+                        "op_id": "embed",
+                        "title": "stage-embed",
+                        "params": {},
+                        "position": {"x": 80, "y": 288},
+                    },
+                    {
+                        "key": "stage-label",
+                        "type": "label",
+                        "op_id": "label",
+                        "title": "打标器",
+                        "params": {"model": "default"},
+                        "position": {"x": 80, "y": 384},
+                    },
+                ],
+                "edges": [
+                    {"id": "a", "source": "ui_media", "source_port": "out", "target": "prep-5-text_to_json", "target_port": "in"},
+                    {"id": "b", "source": "prep-5-text_to_json", "source_port": "out", "target": "prep-6-detect_bbox", "target_port": "in"},
+                    {"id": "c", "source": "prep-6-detect_bbox", "source_port": "out", "target": "stage-embed", "target_port": "in"},
+                    {"id": "d", "source": "stage-embed", "source_port": "out", "target": "stage-label", "target_port": "in"},
+                ],
+            },
+        }
+        upsert_data_type(recipe)
+        loaded = get_data_type("legacy_prep_canvas")
+        assert loaded is not None
+        keys = [n["key"] for n in (loaded.get("graph") or {}).get("nodes") or []]
+        self.assertFalse(any(k.startswith("prep-") for k in keys), keys)
+        self.assertNotIn("stage-embed", keys)
+        self.assertIn("text_to_json", keys)
+        self.assertIn("detect_bbox", keys)
+        self.assertIn("embed", keys)
+        titles = {n["op_id"]: n["title"] for n in loaded["graph"]["nodes"] if n["type"] == "op"}
+        self.assertEqual(titles["text_to_json"], "文本结构化")
+        self.assertEqual(titles["detect_bbox"], "BBox 检测器")
+        self.assertEqual(titles["embed"], "向量化器")
+
     def test_reject_unknown_operator(self) -> None:
         from hmi.platform.store import upsert_data_type
 
@@ -74,7 +169,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
             "title": "x",
             "purpose": "y",
             "taxonomy_id": "oms",
-            "overview_view": "cabin_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [["video"]],
             "slots": [{"id": "v", "kinds": ["video"], "cardinality_min": 1, "cardinality_max": 1}],
@@ -94,7 +189,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
             "title": "x",
             "purpose": "y",
             "taxonomy_id": "oms",
-            "overview_view": "cabin_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [["video"]],
             "slots": [{"id": "v", "kinds": ["video"], "cardinality_min": 1, "cardinality_max": 1}],
@@ -115,7 +210,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
             "title": "x",
             "purpose": "y",
             "taxonomy_id": "oms",
-            "overview_view": "cabin_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [["video"]],
             "slots": [{"id": "v", "kinds": ["video"], "cardinality_min": 1, "cardinality_max": 1}],
@@ -142,7 +237,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
             "title": "x",
             "purpose": "y",
             "taxonomy_id": "oms",
-            "overview_view": "cabin_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [["video"]],
             "slots": [{"id": "v", "kinds": ["video"], "cardinality_min": 1, "cardinality_max": 1}],
@@ -168,6 +263,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
 
         rec = dict(SEED_RECIPES["oms_cabin"])
+        rec.pop("graph", None)
         rec = validate_recipe(rec)
         rec["slots"][0]["title"] = "舱内 bag"
         parse = next(s for s in rec["preprocess"] if s["op_id"] == "parse_bag")
@@ -182,6 +278,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
 
         rec = dict(validate_recipe(SEED_RECIPES["oms_cabin"]))
+        rec.pop("graph", None)
         parse = next(s for s in rec["preprocess"] if s["op_id"] == "parse_bag")
         parse["produces"] = ["frames", ".wav", ".json"]
         parse["output_labels"] = {"not_a_port": "x"}
@@ -197,7 +294,7 @@ class TestDataTypeEditorUpsert(unittest.TestCase):
             "title": "x",
             "purpose": "y",
             "taxonomy_id": "oms",
-            "overview_view": "cabin_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [["video"], ["audio"]],
             "slots": [
@@ -237,6 +334,11 @@ class TestRecipePipelineCompile(unittest.TestCase):
         self.assertIn("parse_bag", op_ids)
         self.assertIn("label", op_ids)
         self.assertIn("embed", op_ids)
+        keys = [s["key"] for s in steps]
+        self.assertFalse(any(k.startswith("prep-") for k in keys), keys)
+        self.assertNotIn("stage-embed", keys)
+        self.assertIn("parse_bag", keys)
+        self.assertIn("embed", keys)
         compiled = compile_steps(steps, rec["slots"])
         self.assertTrue(compiled["stages"]["label"]["enabled"])
         self.assertTrue(compiled["stages"]["embed"]["enabled"])
@@ -274,7 +376,7 @@ class TestRecipePipelineCompile(unittest.TestCase):
             "purpose": "卡编译",
             "owner": "qa",
             "taxonomy_id": "audio_nvh",
-            "overview_view": "audio_nvh_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [["audio"]],
             "slots": slots,
@@ -282,6 +384,33 @@ class TestRecipePipelineCompile(unittest.TestCase):
         }
         norm = validate_recipe(recipe)
         self.assertEqual(norm["preprocess"][0]["op_id"], "mel_spectrogram")
+
+    def test_compile_keeps_omni_label_prompt(self) -> None:
+        from hmi.platform.recipe import validate_recipe
+        from hmi.platform.recipe_pipeline import compile_steps, new_source_card, new_step_from_op
+
+        src = new_source_card(key="src", title="源", kinds=[".mp4"])
+        label = new_step_from_op("label", key="stage-label", slots=[], upstream=[src])
+        label["params"] = {
+            "model": "default",
+            "omni_label_prompt": {"system_role": "舱内标注助手"},
+        }
+        compiled = compile_steps([src, label])
+        self.assertEqual(compiled["stages"]["label"]["omni_label_prompt"]["system_role"], "舱内标注助手")
+        recipe = {
+            "id": "orch_omni",
+            "title": "Omni extras",
+            "purpose": "compile keep prompt",
+            "owner": "qa",
+            "taxonomy_id": "oms",
+            "overview_view": "custom",
+            "status": "draft",
+            "require_any_kinds": [[".mp4"]],
+            "slots": compiled["slots"],
+            **{k: compiled[k] for k in ("preprocess", "products", "stages", "bbox")},
+        }
+        norm = validate_recipe(recipe)
+        self.assertEqual(norm["stages"]["label"]["omni_label_prompt"]["system_role"], "舱内标注助手")
 
     def test_stft_not_compatible_with_video_slot(self) -> None:
         from hmi.platform.recipe_pipeline import binding_options
@@ -297,7 +426,20 @@ class TestRecipePipelineCompile(unittest.TestCase):
         self.assertIn("label", ids)
         self.assertIn("embed", ids)
         self.assertIn("parse_bag", ids)
+        self.assertIn("json_extract", ids)
+        self.assertIn("label_tree_input", ids)
         self.assertEqual(STAGE_OPERATORS["label"]["role"], "stage")
+        self.assertEqual(STAGE_OPERATORS["label"]["title"], "AI打标器")
+        catalog = {op["op_id"]: op for op in list_operators()}
+        self.assertEqual(catalog["json_extract"]["title"], "JSON 值提取")
+        self.assertEqual(catalog["label_tree_input"]["title"], "标签树输入")
+        self.assertIn("path_keys", catalog["json_extract"]["params_schema"])
+        self.assertIn("assignments", catalog["label_tree_input"]["params_schema"])
+        self.assertEqual(catalog["json_extract"]["product"], "json_value")
+        self.assertEqual(catalog["label_tree_input"]["product"], "labels_tree")
+        self.assertIn("call_fields_by_model", catalog["label"])
+        self.assertIn("nvh_sem_vl", catalog["label"]["params_schema"]["model"]["enum"])
+        self.assertTrue(catalog["label"]["omni_prompt_fields"])
 
     def test_parse_bag_emits_selected_modalities(self) -> None:
         from hmi.platform.recipe import validate_recipe
@@ -325,7 +467,7 @@ class TestRecipePipelineCompile(unittest.TestCase):
                 "title": "x",
                 "purpose": "y",
                 "taxonomy_id": "oms",
-                "overview_view": "cabin_timeline",
+                "overview_view": "custom",
                 "status": "draft",
                 "require_any_kinds": [["rosbag"]],
                 "slots": slots,
@@ -344,6 +486,43 @@ class TestRecipePipelineCompile(unittest.TestCase):
         compiled2 = compile_steps([parse, asr], slots)
         trans = next(p for p in compiled2["preprocess"] if p["op_id"] == "transcribe")
         self.assertEqual(trans["inputs"], [".wav"])
+
+    def test_compile_strips_card_fields_from_parse_bag_params(self) -> None:
+        from hmi.platform.recipe import validate_recipe
+        from hmi.platform.recipe_pipeline import compile_steps, new_source_card
+
+        bag = new_source_card(key="rosbag", title="bag", kinds=[".bag"])
+        parse = {
+            "key": "parse_bag",
+            "op_id": "parse_bag",
+            "required": True,
+            "params": {
+                "required": True,
+                "when_kind": ".bag",
+                "produces": ["frames", ".wav"],
+                "emit_modalities": ["frames", ".wav"],
+            },
+        }
+        compiled = compile_steps([bag, parse])
+        params = compiled["preprocess"][0]["params"]
+        self.assertEqual(params.get("emit_modalities"), ["frames", ".wav"])
+        self.assertNotIn("required", params)
+        self.assertNotIn("when_kind", params)
+        self.assertNotIn("produces", params)
+        self.assertTrue(compiled["preprocess"][0]["required"])
+        validate_recipe(
+            {
+                "id": "parse_req_strip",
+                "title": "x",
+                "purpose": "y",
+                "taxonomy_id": "oms",
+                "overview_view": "custom",
+                "status": "draft",
+                "require_any_kinds": [[".bag"]],
+                "slots": compiled["slots"],
+                **compiled,
+            }
+        )
 
     def test_hydrate_legacy_parse_bag_multimodal(self) -> None:
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
@@ -433,6 +612,7 @@ class TestRecipePipelineCompile(unittest.TestCase):
         from hmi.platform.recipe_pipeline import compile_steps, hydrate_recipe_to_steps, new_source_card
 
         rec = dict(validate_recipe(SEED_RECIPES["oms_cabin"]))
+        rec.pop("graph", None)
         parse = next(s for s in rec["preprocess"] if s["op_id"] == "parse_bag")
         parse["produces"] = ["frames", ".wav", ".json"]
         parse["output_labels"] = {"frames": "cabin frames"}
@@ -497,7 +677,7 @@ class TestRecipePipelineCompile(unittest.TestCase):
             "title": "x",
             "purpose": "y",
             "taxonomy_id": "oms",
-            "overview_view": "cabin_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [[".bag"]],
             **compiled,
@@ -525,6 +705,7 @@ class TestRecipePipelineCompile(unittest.TestCase):
         from hmi.platform.recipe_pipeline import hydrate_recipe_to_steps
 
         rec = dict(validate_recipe(SEED_RECIPES["oms_cabin"]))
+        rec.pop("graph", None)
         rec["stages"] = dict(rec["stages"])
         rec["stages"]["label"] = {**rec["stages"]["label"], "inputs": ["asr_jsonl"]}
         rec = validate_recipe(rec)
@@ -562,6 +743,7 @@ class TestRecipePipelineCompile(unittest.TestCase):
         from hmi.platform.recipe_pipeline import compile_steps, hydrate_recipe_to_steps
 
         rec = dict(validate_recipe(SEED_RECIPES["oms_cabin"]))
+        rec.pop("graph", None)
         parse = next(s for s in rec["preprocess"] if s["op_id"] == "parse_bag")
         parse["produces"] = ["frames", ".wav", ".json"]
         parse["params"] = {"emit_modalities": ["frames", ".wav", ".json"]}
@@ -580,7 +762,7 @@ class TestRecipePipelineCompile(unittest.TestCase):
             "title": "x",
             "purpose": "y",
             "taxonomy_id": "oms",
-            "overview_view": "cabin_timeline",
+            "overview_view": "custom",
             "status": "draft",
             "require_any_kinds": [[".bag"]],
             **compiled,
@@ -613,6 +795,17 @@ class TestRecipePipelineCompile(unittest.TestCase):
         out = pin_label_last(steps)
         self.assertTrue(any(s.get("op_id") == "label" for s in out))
         # label may sit before parse_bag (DAG successor)
+
+    def test_pin_label_last_keeps_label_tree_input_without_ai(self) -> None:
+        from hmi.platform.recipe_pipeline import pin_label_last
+
+        steps = [
+            {"op_id": "source", "card_kind": "source"},
+            {"op_id": "label_tree_input"},
+        ]
+        out = pin_label_last(steps)
+        self.assertTrue(any(s.get("op_id") == "label_tree_input" for s in out))
+        self.assertFalse(any(s.get("op_id") == "label" for s in out))
 
 
 if __name__ == "__main__":

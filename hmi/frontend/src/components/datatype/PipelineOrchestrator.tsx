@@ -220,7 +220,7 @@ export function PipelineOrchestrator({
           ),
         )}
         <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
-          打标器固定在最后一个节点（管线最终输出标签树），不能拖走或删除。点选其他算子会插到打标器前面。打标 / 向量化保存为 stages，不进入 preprocess。
+          AI打标器固定在最后一个节点（管线最终输出标签树），不能拖走或删除。点选其他算子会插到AI打标器前面。打标 / 向量化保存为 stages，不进入 preprocess。
         </Typography.Paragraph>
       </div>
     </div>

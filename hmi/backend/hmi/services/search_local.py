@@ -373,18 +373,29 @@ def query_overview_clips(
         }
 
     text_floor = float(min_score) if min_score is not None else DEFAULT_MIN_TEXT_SCORE
-    pairs = store.query(
-        """
-        SELECT d.clip_id, d.active_run_id AS run_id
-        FROM dim_clip d
-        WHERE d.active_run_id IS NOT NULL AND d.active_run_id != ''
-        """
-    )
+    from hmi.services.clips_local import _all_pipeline_run_pairs, _oms_eligible_run_ids
+
+    all_pairs = _all_pipeline_run_pairs()
+    if all_pairs:
+        eligible = _oms_eligible_run_ids([rid for _, rid in all_pairs])
+        pair_rows = [
+            {"clip_id": cid, "run_id": rid}
+            for cid, rid in all_pairs
+            if rid in eligible
+        ]
+    else:
+        pair_rows = store.query(
+            """
+            SELECT d.clip_id, d.active_run_id AS run_id
+            FROM dim_clip d
+            WHERE d.active_run_id IS NOT NULL AND d.active_run_id != ''
+            """
+        )
     query_vec = try_embed_query_text(query) if query else None
 
     pending: list[dict[str, Any]] = []
     doc_texts: list[str] = []
-    for pair in pairs:
+    for pair in pair_rows:
         clip_id = str(pair["clip_id"])
         run_id = str(pair["run_id"])
         try:

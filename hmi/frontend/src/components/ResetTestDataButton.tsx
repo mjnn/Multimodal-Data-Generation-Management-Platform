@@ -90,6 +90,21 @@ export function ResetTestDataButton({ collapsed = false, block = false, danger =
             <li>删除除 admin 以外的所有用户</li>
             <li>
               标签树仅保留已发布版本 <strong>label_tree_baseline</strong>
+              （IVI / NVH / 问题音频草稿树会按种子重建，不发布 audio_nvh-v2）
+            </li>
+            <li data-testid="reset-confirm-datatypes">
+              DataType 仅保留内置：<code>oms_cabin</code>、
+              <code>ivi_ui_stub</code>、<code>audio_array_spec</code>、
+              <code>audio_defect</code>
+              （用户新建类型删除，配方恢复为种子）
+            </li>
+            <li data-testid="reset-confirm-lake">
+              源湖：清空 OSS 前缀 <code>sources/</code>、<code>lake_images/</code>、
+              <code>platform_runs/</code> 及源湖登记
+            </li>
+            <li data-testid="reset-confirm-products">
+              产物预览：清空管线产物血缘（<code>platform_product</code>）与本机
+              <code>work/sdk_runs</code>、<code>artifacts</code>
             </li>
             {localMode ? (
               <li>
@@ -98,7 +113,8 @@ export function ResetTestDataButton({ collapsed = false, block = false, danger =
               </li>
             ) : (
               <li>
-                云端：清空 OSS（rosbags / clips / pipeline / datasets / reviews / config）与 MaxCompute
+                云端：清空 OSS（rosbags / clips / pipeline / datasets / reviews / config /
+                sources / lake_images / platform_runs）与 MaxCompute
                 表数据（aig_sdk__* / aig_rosbag__*），并重新导出 baseline 标签树
               </li>
             )}

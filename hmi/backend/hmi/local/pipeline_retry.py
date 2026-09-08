@@ -83,8 +83,6 @@ def reset_local_pipeline_to_post_upload(*, clip_id: str, run_id: str | None = No
     dim = store.query_one("SELECT active_run_id, bag_oss_key FROM dim_clip WHERE clip_id=?", (cid,))
     if not dim:
         raise ValueError("clip not found")
-    if str(dim.get("active_run_id") or "") != rid:
-        raise ValueError("retry only supported for the clip active_run_id")
 
     bag_key = str(dim.get("bag_oss_key") or "")
     if not resolve_local_bag_path(bag_key):

@@ -129,6 +129,8 @@ const API_MESSAGE_ZH: Array<[RegExp, string | ((m: RegExpMatchArray) => string)]
   [/^retry only allowed for failed or cancelled runs$/i, '仅失败或已中止的运行可重试'],
   [/^rosbag file missing on disk; re-upload$/i, '本地 bag 文件缺失，请重新上传'],
   [/^duplicate slot title$/i, '数据源名称不能重复'],
+  [/^version_code already exists: (.+)$/i, (m) => `版本号「${m[1]}」已被占用`],
+  [/^版本 (.+) 已存在，请更换版本号$/, (m) => `版本号「${m[1]}」已被占用，请更换版本号`],
 ]
 
 export function localizeApiMessage(message: string): string {

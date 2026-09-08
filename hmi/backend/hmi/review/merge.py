@@ -8,13 +8,14 @@ from typing import Any
 from hmi.clip_facts import get_clip_label_row, get_clip_label_view, resolve_clip_labels_for_enqueue
 from hmi.labels_util import labels_to_clip_dict
 from hmi.local.clip_context import resolve_ds_for_run
+from hmi.review.enum_tree import assert_enum_tree_review_complete
 from hmi.review.field_review_db import (
     FIELD_REVIEW_ACTIONS,
     list_field_review_label_ids,
     upsert_field_review,
 )
 from hmi.review_db import get_or_create_review, get_review, update_review
-from hmi.taxonomy_db import get_published_version
+from hmi.taxonomy_db import get_published_version, list_nodes
 
 
 def _flatten_label_id_map(raw: Any) -> dict[str, Any]:
@@ -70,7 +71,9 @@ def merge_label_into_clip_dict(
 
 
 def all_ai_labels_field_reviewed(clip_id: str, run_id: str) -> bool:
-    ai_ids = get_ai_label_ids(clip_id, run_id)
+    from hmi.review.nvh_writeback import rollup_label_ids
+
+    ai_ids = rollup_label_ids(clip_id, run_id)
     if not ai_ids:
         return False
     reviewed = set(list_field_review_label_ids(clip_id, run_id))
@@ -95,6 +98,47 @@ def resolve_field_review_value(
     raise ValueError(f"unsupported action: {action}")
 
 
+def _lookup_label_schema(
+    clip_id: str,
+    run_id: str,
+    label_id: str,
+    taxonomy_version_id: str | None,
+) -> tuple[Any, str | None]:
+    candidates: list[str] = []
+    for raw in (
+        taxonomy_version_id,
+        (get_review(clip_id, run_id) or {}).get("taxonomy_version_id"),
+        (get_published_version() or {}).get("id"),
+    ):
+        version_id = str(raw or "").strip()
+        if version_id and version_id not in candidates:
+            candidates.append(version_id)
+    for version_id in candidates:
+        for node in list_nodes(version_id, active_only=False):
+            if str(node.get("label_id") or "") == label_id:
+                dtype = node.get("dtype")
+                return node.get("value_schema"), str(dtype) if dtype is not None else None
+    return None, None
+
+
+def enforce_enum_tree_field_value(
+    *,
+    clip_id: str,
+    run_id: str,
+    label_id: str,
+    action: str,
+    stored_value: Any,
+    taxonomy_version_id: str | None,
+) -> Any:
+    """Confirm/correct must reach a leaf (parent + every required child). Uncertain skips."""
+    if action not in {"confirm", "correct"}:
+        return stored_value
+    schema, dtype = _lookup_label_schema(clip_id, run_id, label_id, taxonomy_version_id)
+    if schema is None and not dtype:
+        return stored_value
+    return assert_enum_tree_review_complete(schema, stored_value, dtype=dtype)
+
+
 def ensure_clip_review_for_field_merge(clip_id: str, run_id: str) -> dict[str, Any]:
     """Ensure clip_label_review exists before merging field reviews."""
     existing = get_review(clip_id, run_id)
@@ -102,10 +146,15 @@ def ensure_clip_review_for_field_merge(clip_id: str, run_id: str) -> dict[str, A
         return existing
 
     payload = resolve_clip_labels_for_enqueue(clip_id, run_id)
-    published = get_published_version()
-    taxonomy_version_id = payload.get("taxonomy_version_id") or (
-        published["id"] if published else None
+    from hmi.review.nvh_writeback import prefer_nvh_taxonomy_id
+
+    taxonomy_version_id = prefer_nvh_taxonomy_id(
+        payload.get("labels_json") if isinstance(payload.get("labels_json"), dict) else {},
+        payload.get("taxonomy_version_id"),
     )
+    if not taxonomy_version_id:
+        published = get_published_version()
+        taxonomy_version_id = published["id"] if published else None
     review, _created = get_or_create_review(
         clip_id,
         run_id,
@@ -149,13 +198,28 @@ def apply_field_review(
         value=value,
     )
 
-    if taxonomy_version_id is None:
-        published = get_published_version()
-        taxonomy_version_id = published["id"] if published else None
-
     clip_review = ensure_clip_review_for_field_merge(clip_id, run_id)
+    if taxonomy_version_id is None:
+        from hmi.review.nvh_writeback import prefer_nvh_taxonomy_id
+
+        taxonomy_version_id = prefer_nvh_taxonomy_id(
+            clip_review.get("labels_json") if isinstance(clip_review.get("labels_json"), dict) else {},
+            clip_review.get("taxonomy_version_id"),
+        )
+        if not taxonomy_version_id:
+            published = get_published_version()
+            taxonomy_version_id = published["id"] if published else None
     if expected_clip_updated_at and clip_review["updated_at"] != expected_clip_updated_at:
         raise ValueError("review updated_at conflict")
+
+    stored_value = enforce_enum_tree_field_value(
+        clip_id=clip_id,
+        run_id=run_id,
+        label_id=label_id,
+        action=action,
+        stored_value=stored_value,
+        taxonomy_version_id=clip_review.get("taxonomy_version_id") or taxonomy_version_id,
+    )
 
     field_review = upsert_field_review(
         clip_id,
@@ -185,6 +249,11 @@ def apply_field_review(
         reviewer_id=reviewer_id if rolled_up else clip_review.get("reviewer_id"),
         expected_updated_at=clip_review["updated_at"],
     )
+
+    if str(label_id).startswith("nvh.sem."):
+        from hmi.review.nvh_writeback import writeback_nvh_l6
+
+        writeback_nvh_l6(clip_id=clip_id, run_id=run_id, labels_json=merged_labels)
 
     return {
         "field_review": field_review,

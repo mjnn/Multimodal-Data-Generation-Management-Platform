@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import type { TaxonomyCoverageItem, TaxonomyVersion } from '../api/types'
 import { FilterBar } from './ui'
+import { buildClipExplorerHref } from '../utils/clipExplorerHref'
 import { formatTaxonomyVersionLabel } from '../utils/taxonomyDisplay'
 
 type CoverageFilter = 'all' | 'gap' | 'empty' | 'covered'
@@ -280,7 +281,7 @@ export function TaxonomyInsightsPanel() {
             </Typography.Text>
             {usageDetail.clip_samples.map((s) => (
               <div key={`${s.clip_id}:${s.run_id}`}>
-                <Link to={`/clips/${encodeURIComponent(s.clip_id)}`}>
+                <Link to={buildClipExplorerHref(s.clip_id, { runId: s.run_id })}>
                   {s.clip_id.slice(0, 24)}…
                 </Link>
                 <Typography.Text type="secondary"> = {s.value}</Typography.Text>

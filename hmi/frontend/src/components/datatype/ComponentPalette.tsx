@@ -1,6 +1,8 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { CATEGORY_ORDER, CATEGORY_TITLES } from '../../utils/recipePipeline'
 import type { PlatformOperator } from '../../api/types'
+
+export const PALETTE_OP_MIME = 'application/hmi-dag-op'
 
 const CAT_COLOR: Record<string, string> = {
   parse: '#5e6ad2',
@@ -16,7 +18,7 @@ type ExtraGroup = { id: string; groupTitle: string; items: PaletteExtra[] }
 type Props = {
   operators: PlatformOperator[]
   categoryTitles?: Record<string, string>
-  onAdd: (opId: string) => void
+  onAdd: (opId: string, position?: { x: number; y: number }) => void
   hideOpIds?: string[]
   extras?: ExtraGroup[]
 }
@@ -53,6 +55,12 @@ function PaletteGroup({
   )
 }
 
+function matchesQuery(query: string, ...parts: Array<string | undefined>): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  return parts.some((p) => String(p || '').toLowerCase().includes(q))
+}
+
 export function ComponentPalette({ operators, categoryTitles, onAdd, hideOpIds, extras }: Props) {
   const hidden = new Set(hideOpIds || [])
   const titles = categoryTitles && Object.keys(categoryTitles).length ? categoryTitles : CATEGORY_TITLES
@@ -62,6 +70,9 @@ export function ComponentPalette({ operators, categoryTitles, onAdd, hideOpIds, 
     ops: operators.filter((op) => (op.category || 'detect_ai') === cat && !hidden.has(op.op_id)),
   })).filter((g) => g.ops.length)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const [query, setQuery] = useState('')
+  const skipClickRef = useRef(false)
+  const searching = query.trim().length > 0
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -72,47 +83,87 @@ export function ComponentPalette({ operators, categoryTitles, onAdd, hideOpIds, 
     })
   }
 
+  const startDrag = (opId: string) => (e: DragEvent) => {
+    skipClickRef.current = true
+    e.dataTransfer.setData(PALETTE_OP_MIME, opId)
+    e.dataTransfer.setData('text/plain', opId)
+    e.dataTransfer.effectAllowed = 'copy'
+  }
+
+  const clickAdd = (opId: string) => {
+    if (skipClickRef.current) {
+      skipClickRef.current = false
+      return
+    }
+    onAdd(opId)
+  }
+
+  const renderOp = (opId: string, title: string, testId: string, color: string, desc?: string) => (
+    <button
+      key={opId}
+      type="button"
+      className="pipe-orch__op"
+      data-testid={testId}
+      title={desc || title}
+      draggable
+      onDragStart={startDrag(opId)}
+      onDragEnd={() => {
+        window.setTimeout(() => {
+          skipClickRef.current = false
+        }, 0)
+      }}
+      onClick={() => clickAdd(opId)}
+    >
+      <span className="pipe-orch__op-dot" style={{ background: color }} />
+      <span className="pipe-orch__op-text">
+        <span className="pipe-orch__op-title">{title}</span>
+        {desc ? <span className="pipe-orch__op-desc">{desc}</span> : null}
+      </span>
+    </button>
+  )
+
   return (
     <aside className="pipe-orch__palette" data-testid="pipeline-palette">
       <p className="pipe-orch__palette-kicker">管线组件</p>
-      {groups.map((g) => (
-        <PaletteGroup key={g.cat} id={g.cat} title={g.title} collapsed={!expanded.has(g.cat)} onToggle={toggle}>
-          {g.ops.map((op) => (
-            <button
-              key={op.op_id}
-              type="button"
-              className="pipe-orch__op"
-              data-testid={`palette-op-${op.op_id}`}
-              onClick={() => onAdd(op.op_id)}
-            >
-              <span className="pipe-orch__op-dot" style={{ background: CAT_COLOR[g.cat] || '#5e6ad2' }} />
-              {op.title}
-            </button>
-          ))}
-        </PaletteGroup>
-      ))}
-      {(extras || []).map((g) => (
-        <PaletteGroup
-          key={g.id}
-          id={g.id}
-          title={g.groupTitle}
-          collapsed={!expanded.has(g.id)}
-          onToggle={toggle}
-        >
-          {g.items.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="pipe-orch__op"
-              data-testid={item.testId}
-              onClick={() => onAdd(item.id)}
-            >
-              <span className="pipe-orch__op-dot" style={{ background: '#828fff' }} />
-              {item.title}
-            </button>
-          ))}
-        </PaletteGroup>
-      ))}
+      <input
+        className="pipe-orch__palette-search"
+        data-testid="palette-search"
+        placeholder="搜索组件"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {groups.map((g) => {
+        const ops = searching
+          ? g.ops.filter((op) => matchesQuery(query, op.title, op.op_id, op.description))
+          : g.ops
+        if (!ops.length) return null
+        const collapsed = searching ? false : !expanded.has(g.cat)
+        return (
+          <PaletteGroup key={g.cat} id={g.cat} title={g.title} collapsed={collapsed} onToggle={toggle}>
+            {ops.map((op) =>
+              renderOp(op.op_id, op.title, `palette-op-${op.op_id}`, CAT_COLOR[g.cat] || '#5e6ad2', op.description),
+            )}
+          </PaletteGroup>
+        )
+      })}
+      {(extras || []).map((g) => {
+        const items = searching
+          ? g.items.filter((item) => matchesQuery(query, item.title, item.id))
+          : g.items
+        if (!items.length) return null
+        const collapsed = searching ? false : !expanded.has(g.id)
+        return (
+          <PaletteGroup
+            key={g.id}
+            id={g.id}
+            title={g.groupTitle}
+            collapsed={collapsed}
+            onToggle={toggle}
+          >
+            {items.map((item) => renderOp(item.id, item.title, item.testId, '#828fff'))}
+          </PaletteGroup>
+        )
+      })}
     </aside>
   )
 }

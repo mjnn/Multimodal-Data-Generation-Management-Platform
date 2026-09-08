@@ -10,6 +10,7 @@ import { OssBrowserPanel } from '../components/oss/OssBrowserPanel'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useAuth } from '../auth/AuthContext'
 import { canAccessOss } from '../auth/roles'
+import { useDataSourceMode } from '../context/DataSourceModeContext'
 import { apiErrorMessage } from '../utils/apiError'
 import { TEXT_EXTS, kindFromFilename, normalizeSourceKind } from '../utils/fileKinds'
 
@@ -74,6 +75,7 @@ function parseLakeTab(raw: string | null, allowOss: boolean): LakeTab {
 
 export function LakeManagePage() {
   const { user } = useAuth()
+  const { dataRevision } = useDataSourceMode()
   const allowOss = canAccessOss(user?.roles)
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = parseLakeTab(searchParams.get('tab'), allowOss)
@@ -95,7 +97,7 @@ export function LakeManagePage() {
     setLoadingSources(true)
     try {
       const res = await api.listPlatformSources(200)
-      setSources((prev) => mergeSources(prev, res.items || []))
+      setSources(res.items || [])
     } catch (e: unknown) {
       message.error(apiErrorMessage(e, '加载已入库源失败'))
     } finally {
@@ -105,7 +107,7 @@ export function LakeManagePage() {
 
   useEffect(() => {
     void loadSources()
-  }, [])
+  }, [dataRevision])
 
   const setActiveTab = (tab: string) => {
     const next = new URLSearchParams(searchParams)

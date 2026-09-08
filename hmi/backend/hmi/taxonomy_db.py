@@ -172,6 +172,50 @@ def _node_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _is_name_occupying_row(status: str, archive_reason: str | None) -> bool:
+    """True if this row should block creating another version with the same code.
+
+    User-deleted rows stay for lineage but must not keep the display name.
+    Superseded published versions still appear in the hub list and keep theirs.
+    """
+    if status != "archived":
+        return True
+    return str(archive_reason or "") == "superseded"
+
+
+def _vacate_user_archived_version_code(conn: sqlite3.Connection, version_code: str) -> None:
+    """Rename user-deleted rows so UNIQUE(version_code) can be reused."""
+    rows = conn.execute(
+        """
+        SELECT id FROM label_taxonomy_version
+        WHERE version_code = ?
+          AND status = 'archived'
+          AND IFNULL(archive_reason, '') != 'superseded'
+        """,
+        (version_code,),
+    ).fetchall()
+    now = _utc_now_iso()
+    for row in rows:
+        vid = str(row["id"])
+        suffix = vid.replace("-", "")[:10]
+        alias = f"{version_code}__archived_{suffix}"
+        n = 0
+        while conn.execute(
+            "SELECT 1 FROM label_taxonomy_version WHERE version_code = ?",
+            (alias,),
+        ).fetchone():
+            n += 1
+            alias = f"{version_code}__archived_{suffix}{n}"
+        conn.execute(
+            """
+            UPDATE label_taxonomy_version
+            SET version_code = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (alias, now, vid),
+        )
+
+
 def create_version(
     version_code: str,
     *,
@@ -188,12 +232,16 @@ def create_version(
     version_id = str(uuid.uuid4())
     now = _utc_now_iso()
     with db_conn() as conn:
-        dup = conn.execute(
-            "SELECT 1 FROM label_taxonomy_version WHERE version_code = ?",
+        occupants = conn.execute(
+            """
+            SELECT status, archive_reason FROM label_taxonomy_version
+            WHERE version_code = ?
+            """,
             (version_code,),
-        ).fetchone()
-        if dup:
+        ).fetchall()
+        if any(_is_name_occupying_row(str(r["status"]), r["archive_reason"]) for r in occupants):
             raise ValueError(f"version_code already exists: {version_code}")
+        _vacate_user_archived_version_code(conn, version_code)
 
         conn.execute(
             """
@@ -219,9 +267,17 @@ def get_version(version_id: str) -> dict[str, Any] | None:
 
 
 def get_version_by_code(version_code: str) -> dict[str, Any] | None:
+    """Resolve a live (or superseded) version by code. User-deleted names are free."""
     with db_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM label_taxonomy_version WHERE version_code = ?",
+            """
+            SELECT * FROM label_taxonomy_version
+            WHERE version_code = ?
+              AND NOT (
+                status = 'archived'
+                AND IFNULL(archive_reason, '') != 'superseded'
+              )
+            """,
             (version_code.strip(),),
         ).fetchone()
         return _version_row(row) if row else None

@@ -44,7 +44,9 @@ CLI：`python -m oms_multimodal run --bag ...` · 仅本地：`--extract-only`
 - 产物对齐 **sdk_v1** 后接 upload / `ingest_sdk_run_to_mc` / `publish_sdk_dispatch`
 
 ## 与本 HMI 仓
-- 导入本地：`hmi/hmi/scripts/import_real_data_clips.py`
+- 导入本地：`hmi/scripts/import_real_data_clips.py`
+- **有 DAG 的本地 run**：按节点调 `run_plan` 单步（见 `capability-runtime-kernel.mdc`），不要默认 `infer_full` / 整包 `plan_and_run`
+- **不要**把本包装成「一编排组件一个 PyPI 包」；新能力加 `capabilities/` 或 HMI `OP_PLUGINS`
 
 ## 来源
-沉淀自 session 2026-07-27
+沉淀自 session 2026-07-27；HMI kernel 补充 2026-09-04

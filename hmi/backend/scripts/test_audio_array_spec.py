@@ -64,7 +64,7 @@ class TestAudioArraySpecRecipe(unittest.TestCase):
         seeds = seed_recipes()
         self.assertIn("audio_array_spec", seeds)
         rec = seeds["audio_array_spec"]
-        self.assertEqual(rec["overview_view"], "audio_nvh_timeline")
+        self.assertEqual(rec["overview_view"], "custom")
         self.assertTrue(rec["stages"]["label"]["enabled"])
         self.assertEqual(rec["stages"]["label"]["model"], "nvh_sem_ast")
         self.assertEqual(rec.get("taxonomy_version_code"), "audio_nvh-v2")

@@ -11,7 +11,9 @@ import type { AiLabelHint, TaxonomyNodeDetail } from '../api/types'
 import { AiLabelHintReference } from './AiLabelHintReference'
 
 import { isLowConfidence } from '../utils/reviewConfidence'
+import { inspectEnumReviewValue, isNestedEnumSchema } from '../utils/enumTree'
 import { schemaEnumValues } from '../utils/labelDisplay'
+import { EnumCascadeSelect } from './EnumCascadeSelect'
 
 type LevelGroup = {
 
@@ -116,6 +118,40 @@ function LabelField({ node, lowConfidence, hint }: LabelFieldProps) {
       <Form.Item name={node.label_id} label={label} valuePropName="checked">
 
         <Switch checkedChildren="是" unCheckedChildren="否" />
+
+      </Form.Item>
+
+    )
+
+  } else if (isNestedEnumSchema(node.value_schema, node.dtype)) {
+
+    field = (
+
+      <Form.Item
+
+        name={node.label_id}
+
+        label={label}
+
+        rules={[
+
+          {
+
+            validator: async (_, value) => {
+
+              const info = inspectEnumReviewValue(node.value_schema, value, node.dtype)
+
+              if (!info.complete) return Promise.reject(new Error(info.message ?? '嵌套枚举未完成'))
+
+            },
+
+          },
+
+        ]}
+
+      >
+
+        <EnumCascadeSelect schema={node.value_schema} dtype={node.dtype} />
 
       </Form.Item>
 

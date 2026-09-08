@@ -13,6 +13,7 @@ import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { useDataSourceMode } from '../context/DataSourceModeContext'
 import { peekRememberedDataTypeId, rememberDataTypeId } from '../context/DataTypeWorkspaceContext'
 import { clipDisplayName } from '../utils/clipDisplay'
+import { buildClipExplorerHref } from '../utils/clipExplorerHref'
 import { formatDateTime } from '../utils/format'
 
 import type { AxiosError } from 'axios'
@@ -218,7 +219,9 @@ export function PipelineManagePage() {
     }
   }
 
-  const clipColumns: ColumnsType<PipelineExecutionClip & { run_id: string }> = useMemo(
+  const clipColumns: ColumnsType<
+    PipelineExecutionClip & { run_id: string; data_type_id?: string | null }
+  > = useMemo(
     () => [
       {
         title: 'Clip',
@@ -272,8 +275,16 @@ export function PipelineManagePage() {
               type="link"
               size="small"
               icon={<EyeOutlined />}
+              data-testid="pipeline-clip-preview"
               disabled={r.clip_id.startsWith('pending:')}
-              onClick={() => navigate(`/clips/${encodeURIComponent(r.clip_id)}`)}
+              onClick={() =>
+                navigate(
+                  buildClipExplorerHref(r.clip_id, {
+                    runId: r.run_id,
+                    dataTypeId: r.data_type_id,
+                  }),
+                )
+              }
             >
               预览
             </Button>
@@ -387,7 +398,7 @@ export function PipelineManagePage() {
     <PageStack>
       <PageHeader
         title="管线管理"
-        description="选择湖中数据开跑、按 DAG 节点调整参数，并按执行批次查看 SDK 进度（最新在前）。"
+        description="选择湖中数据开跑、按 DAG 节点调整参数，并按数据类型管线 DAG 查看执行进度（最新在前）。"
         icon={<ApartmentOutlined />}
         extra={
           activeTab === 'queue' ? (
@@ -469,13 +480,17 @@ export function PipelineManagePage() {
                       onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
                       expandedRowRender: (ex) => (
                         <div className="pipeline-clip-table-wrap">
-                          <Table<PipelineExecutionClip & { run_id: string }>
+                          <Table<PipelineExecutionClip & { run_id: string; data_type_id?: string | null }>
                             className="pipeline-clip-table"
                             rowKey="clip_id"
                             size="small"
                             pagination={false}
                             columns={clipColumns}
-                            dataSource={ex.clips.map((c) => ({ ...c, run_id: ex.run_id }))}
+                            dataSource={ex.clips.map((c) => ({
+                              ...c,
+                              run_id: ex.run_id,
+                              data_type_id: ex.data_type_id,
+                            }))}
                             rowClassName={(r) =>
                               r.clip_id === focusClipId && ex.run_id === focusRunId
                                 ? 'pipeline-clip-focus'

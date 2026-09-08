@@ -57,6 +57,7 @@ import { ContentCard, FromAuditBackLink, FROM_AUDIT_PARAM, FROM_AUDIT_VALUE, Pag
 
 import { nodesToPayload, formatEmptyLevelLabels, type TaxonomyLevelMeta } from '../utils/taxonomyTree'
 import { formatTaxonomyImpactWarning } from '../utils/taxonomyDisplay'
+import { apiErrorMessage } from '../utils/apiError'
 
 
 
@@ -108,19 +109,6 @@ function versionStatusColor(row: TaxonomyVersion): string {
   }
   return STATUS_COLOR[row.status] ?? 'default'
 }
-
-
-
-function apiErrorMessage(e: unknown, fallback: string): string {
-
-  const detail = (e as { response?: { data?: { detail?: { message?: string } } } })?.response?.data
-
-    ?.detail?.message
-
-  return detail ?? fallback
-
-}
-
 
 
 export function TaxonomyPage() {

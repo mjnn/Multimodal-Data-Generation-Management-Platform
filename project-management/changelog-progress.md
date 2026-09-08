@@ -1,5 +1,62 @@
 # 进度变更日志（倒序）
 
+## 2026-09-07 — PLAT-RUN-BRANCHES done（run 并列分支）
+
+- **缺口**：`dim_clip.active_run_id` 把总览/检索/Dataset/校核收成每 clip 一行，后跑的 NVH 会藏起舱内分支
+- **实现**：列表粒度 `(clip_id, run_id)`；OMS 枚举所有合格 pipeline_run；检索/Dataset/校核认全部打标分支；失败 run 不限 active 可重试；总览 `rowKey` + `?run_id=`；去掉「当前生效」
+- **验收**：`acceptance/PLAT-RUN-BRANCHES.md`；A run_branches **6/6**、audio_nvh_view **5/5**、dataset m42 OK；A-E2E overview-run-branches **1/1 (10.9s)**
+- **未做**：云端 MC 单指针；DataWorks；publish `audio_nvh-v2`；H-2
+- **未 git commit**；推荐下一工单可选 M7.5-E2E
+
+## 2026-09-07 — PLAT-DAG-IO-CONTRACT done（DAG I/O 契约）
+
+- **缺口**：编排连线/期望产出与 kernel 实际消费不一致；磁盘碰巧有 wav 也会喂 Omni
+- **实现**：`io_contract.py` 诊断最小输入与封闭绑定；全量只吃绑定；缺期望产物在生产者失败；检查器期望输出 + `until_key` 试跑；画板黄叹号
+- **验收**：`acceptance/PLAT-DAG-IO-CONTRACT.md`；A io_contract **14/14**、kernel **10/10**、graph_runtime **9/9**、catalog **9/9**、recipe_graph **33/33**；A-E2E editor **14/14 (50.5s)**
+- **未做**：DataWorks；publish `audio_nvh-v2`；H-2；IVI 业务打标
+- **未 git commit**；推荐下一工单可选 M7.5-E2E
+
+## 2026-09-07 — PLAT-CAPABILITY-KERNEL done（`text_to_json`）
+
+- **缺口**：kernel 本地 catalog 只缺 `text_to_json`，未实现时报 `capability 未实现`
+- **实现**：`graph_runtime._adapt_text_to_json` 读 manifest 文本；`generic_json` / `generic_text`；写 `ctx.structured_json` + `structured.json`；下游 `json_extract` 可接
+- **验收**：`acceptance/PLAT-CAPABILITY-KERNEL.md`；A kernel **10/10**、graph_runtime **9/9**、progress_steps **9/9**、catalog_ops **9/9**
+- **未做**：DataWorks；publish `audio_nvh-v2`；H-2；IVI 业务打标
+- **未 git commit**；推荐下一工单可选 M7.5-E2E
+
+## 2026-09-04 — UI-NVH-REVIEW-SAVE done（语义 L6 人工写回）
+
+- **缺口**：Explorer 标签树只读；`clip_label_review` 不写 `fact_clip_label` / `nvh_labels.json`；rollup/队列把全部客观 NVH 叶子算进去
+- **实现**：`review/nvh_writeback.py` 只 merge `nvh.sem.*`；校核保存与 field review 挂钩；队列/rollup 仅 L6；Explorer 仅 L6 快速校核
+- **验收**：`acceptance/UI-NVH-REVIEW-SAVE.md`；A `test_nvh_review_save` 3/3、`test_review_m61` ok；A-E2E `nvh-label-tree.spec.ts` **2/2 (9.3s)**
+- **未做**：publish `audio_nvh-v2`；H-2；DataWorks
+- **未 git commit**；推荐下一工单 PLAT-CAPABILITY-KERNEL（`text_to_json`）
+
+## 2026-09-04 — FIX-ENCODE-FFMPEG（视频编码器找不到 ffmpeg）
+
+- **现象**：oms_cabin DAG 视频编码器失败，`No ffmpeg exe could be found ... IMAGEIO_FFMPEG_EXE`
+- **根因**：本机 PATH 无 `ffmpeg`；`imageio_ffmpeg.get_ffmpeg_exe()` 的 `_is_valid_exe` 失败时抛 RuntimeError；`clip_video._resolve_ffmpeg` 只 catch `ImportError`
+- **修复**：`resolve_ffmpeg()` 直接用 `imageio_ffmpeg/binaries/ffmpeg*`；worker 开跑前钉 `IMAGEIO_FFMPEG_EXE`；HMI `preview_mp4` 走同一解析
+- **验收 A**：`test_clip_video_ffmpeg` 3/3；bbox 15/15；本机 encode smoke 写出 MP4
+- **未 git commit**；推荐下一工单仍是 UI-NVH-REVIEW-SAVE
+
+## 2026-09-04 — PLAT-CAPABILITY-KERNEL slice-2
+
+- **方向**：`audio_array_spec` 有 graph 时与舱内一样走 capability kernel；本地 NVH 插件接现有 `analyze_pcm_pa` / deriver
+- **实现**：`capability_nvh.py`；worker 去掉「有图仍专用路径」；无 graph 阵列仍 `_run_audio_array_spec`
+- **验收 A**：`test_capability_kernel.py` 5/5；`test_platform_graph_runtime.py` 9/9；`test_platform_progress_steps.py` 9/9
+- **未做**：`text_to_json`；DataWorks；publish `audio_nvh-v2`
+- **未 git commit**；推荐下一工单仍是 UI-NVH-REVIEW-SAVE
+
+## 2026-09-04 — PLAT-CAPABILITY-KERNEL slice-1
+
+- **方向**：一个 runtime kernel + 可插拔 capability，不拆成一组件一 SDK 包
+- **规格**：`docs/superpowers/specs/2026-09-04-capability-runtime-kernel-design.md`
+- **实现**：`capability_kernel.py` 注册表；`capability_sdk.py` 单步 `run_plan`；有 graph 的舱内 run 走 `execute_recipe_graph`；ASR/打标后 if 已放开；进度优先 `dag:{node_key}`
+- **验收 A**：`test_capability_kernel.py` 4/4；`test_platform_graph_runtime.py` 9/9；`test_platform_progress_steps.py` 9/9
+- **未做**：Mel/STFT 等本地音频插件；DataWorks；阵列类型仍专用路径；无 graph 仍 `plan_and_run`
+- **未 git commit**；推荐下一工单仍是 UI-NVH-REVIEW-SAVE
+
 ## 2026-09-03 — UI-DTYPE-DAG-CANVAS done（Playwright 收口）
 
 - **工单**：编辑器 DAG 画板 + 本地按图执行 + 橱窗锁 `labels_tree`；Task 12 A-E2E 收工

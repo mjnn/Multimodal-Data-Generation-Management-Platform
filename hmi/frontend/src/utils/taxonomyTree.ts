@@ -1,5 +1,6 @@
 import type { DataNode } from 'antd/es/tree'
-import type { TaxonomyNodeDetail, TaxonomyNodeInput } from '../api/types'
+import type { TaxonomyNodeDetail, TaxonomyNodeInput, TaxonomyVersion } from '../api/types'
+import { pickByTaxonomyId } from './boundTaxonomy'
 import {
   taxonomyEnumOuterNodes,
   taxonomySchemaDetailNodes,
@@ -186,4 +187,12 @@ export function levelCodes(
   for (const n of nodes) codes.add(n.level_code)
   for (const l of emptyLevels) codes.add(l.level_code)
   return codes
+}
+
+/** Mirror backend data_type_bind.resolve without publishing any tree. */
+export function pickTaxonomyVersion(
+  versions: TaxonomyVersion[],
+  taxonomyId: string,
+): TaxonomyVersion | undefined {
+  return pickByTaxonomyId(versions, taxonomyId) ?? versions.find((v) => v.status === 'published')
 }

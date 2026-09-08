@@ -10,7 +10,7 @@ type WorkspaceValue = {
   recipe: DataTypeRecipe | null
 }
 
-const Ctx = createContext<WorkspaceValue>({ dataTypeId: 'oms_cabin', recipe: null })
+const Ctx = createContext<WorkspaceValue>({ dataTypeId: '', recipe: null })
 
 export function peekRememberedDataTypeId(): string {
   try {

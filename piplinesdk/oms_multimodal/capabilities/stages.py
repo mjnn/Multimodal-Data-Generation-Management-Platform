@@ -184,19 +184,28 @@ def run_plan(
             include_bbox = params.get("include_bbox_context")
             if include_bbox is not None:
                 include_bbox = bool(include_bbox)
+            include_audio = params.get("include_audio")
+            if include_audio is not None:
+                include_audio = bool(include_audio)
+            merge_asr = params.get("merge_asr_file")
+            merge_asr_file = True if merge_asr is None else bool(merge_asr)
             lr = label_clips(
                 ctx,
                 client,
                 run_asr=False,
-                merge_asr_file=True,
+                merge_asr_file=merge_asr_file,
                 include_bbox_context=include_bbox,
+                include_audio=include_audio,
             )
             result.errors.extend(lr.errors)
             result.label_rows = lr.row_count
             result.stages_done.append("label")
 
         elif cap == "embed":
-            er = embed_clips(ctx, client)
+            include_audio = params.get("include_audio")
+            if include_audio is not None:
+                include_audio = bool(include_audio)
+            er = embed_clips(ctx, client, include_audio=include_audio)
             result.errors.extend(er.errors)
             result.embedding_rows = er.row_count
             result.stages_done.append("embed")

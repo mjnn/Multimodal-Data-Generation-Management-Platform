@@ -26,9 +26,17 @@ def _labels_by_clip_id(path: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def embed_clips(ctx: RunContext, client: OmsMultimodalClient) -> EmbedResult:
+def embed_clips(
+    ctx: RunContext,
+    client: OmsMultimodalClient,
+    *,
+    include_audio: bool | None = None,
+) -> EmbedResult:
     """sdk_embed：读 clips_index + labels.jsonl，写 fusion_embeddings.jsonl。"""
     clips = load_clips_from_index(ctx.clips_index_path)
+    if include_audio is False:
+        for clip in clips:
+            clip.audio = None
     labels_map = _labels_by_clip_id(ctx.labels_path)
     embedding_rows: list[dict] = []
     errors: list[dict[str, str]] = []

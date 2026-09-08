@@ -24,6 +24,74 @@ import {
 export { PARSE_BAG_MODALITIES }
 export type { ParseBagModality } from './fileKinds'
 
+const OMNI_PROMPT_KEYS = [
+  'system_role',
+  'output_instruction',
+  'json_format_hint',
+  'labeling_rules',
+  'labels_section_title',
+  'user_task_intro',
+  'user_modality_hint',
+  'user_taxonomy_task',
+  'user_asr_hint',
+  'user_bbox_hint',
+] as const
+
+const EXTRA_KEYS_BY_MODEL: Record<string, readonly string[]> = {
+  default: ['omni_model_id', 'omni_label_prompt', 'bbox_in_label_prompt', 'temperature', 'max_tokens'],
+  nvh_sem_ast: ['ast_top_k', 'reference_constraints'],
+  nvh_sem_heuristic: ['reference_constraints'],
+  nvh_sem_vl: ['vl_prompt', 'vl_model', 'reference_constraints'],
+}
+
+function compactOmniPrompt(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const allowed = new Set<string>(OMNI_PROMPT_KEYS)
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!allowed.has(k) || v == null) continue
+    const text = String(v).trim()
+    if (text) out[k] = text
+  }
+  return out
+}
+
+export function labelStageExtras(params: Record<string, unknown> | undefined): Record<string, unknown> {
+  const p = params || {}
+  const model = String(p.model || '').trim() || 'default'
+  const allowed = new Set(EXTRA_KEYS_BY_MODEL[model] || EXTRA_KEYS_BY_MODEL.default)
+  const out: Record<string, unknown> = {}
+  for (const key of allowed) {
+    if (!(key in p) || p[key] == null) continue
+    const v = p[key]
+    if (key === 'omni_label_prompt') {
+      const nested = compactOmniPrompt(v)
+      if (Object.keys(nested).length) out.omni_label_prompt = nested
+      continue
+    }
+    if (key === 'bbox_in_label_prompt') {
+      if (typeof v === 'boolean') out.bbox_in_label_prompt = v
+      continue
+    }
+    if (key === 'temperature') {
+      const n = typeof v === 'number' ? v : Number(v)
+      if (Number.isFinite(n)) out.temperature = n
+      continue
+    }
+    if (key === 'max_tokens' || key === 'ast_top_k') {
+      const n = typeof v === 'number' ? v : Number(v)
+      if (Number.isFinite(n)) out[key] = Math.trunc(n)
+      continue
+    }
+    if (typeof v === 'string') {
+      const text = v.trim()
+      if (text) out[key] = text
+      continue
+    }
+  }
+  return out
+}
+
 export const CATEGORY_ORDER = ['parse', 'encode', 'audio', 'detect_ai'] as const
 
 export const CATEGORY_TITLES: Record<string, string> = {
@@ -59,6 +127,41 @@ export function outputPorts(op: PlatformOperator | undefined): OperatorPort[] {
   if (!op) return [{ id: 'out', types: [] }]
   if (op.output_ports?.length) return op.output_ports
   return [{ id: 'out', types: op.product ? [op.product] : [] }]
+}
+
+export function channelCountFromParams(params?: Record<string, unknown> | null): number {
+  const raw = params?.channel_count ?? 1
+  const n = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isFinite(n)) return 1
+  return Math.max(1, Math.min(16, Math.trunc(n)))
+}
+
+export function expandOutputPorts(
+  op: PlatformOperator | undefined,
+  params?: Record<string, unknown> | null,
+): OperatorPort[] {
+  const template = outputPorts(op)
+  if (!op || op.expand_outputs_from !== 'channel_count') return template
+  const t0 = template[0] || { id: 'out', types: [] }
+  const titles =
+    params?.port_titles && typeof params.port_titles === 'object' && !Array.isArray(params.port_titles)
+      ? (params.port_titles as Record<string, unknown>)
+      : {}
+  const n = channelCountFromParams(params)
+  const baseTitle = String(t0.title || '').trim()
+  const out: OperatorPort[] = []
+  for (let i = 1; i <= n; i += 1) {
+    const id = `ch${i}`
+    const custom = String(titles[id] ?? '').trim()
+    out.push({
+      ...t0,
+      id,
+      types: [...(t0.types || [])],
+      title: custom || (baseTitle ? `${baseTitle} ${i}` : id),
+      channel_index: i - 1,
+    })
+  }
+  return out
 }
 
 export function asBindingList(raw: PipelinePortBindings | undefined | null): PipelineBinding[] {
@@ -119,7 +222,11 @@ export function isLabelCard(card: PipelineStep | null | undefined): boolean {
   return Boolean(card && card.op_id === 'label')
 }
 
-/** Labeler is always the last node: every pipeline ends in a taxonomy tree. */
+export function isLabelsTreeCard(card: PipelineStep | null | undefined): boolean {
+  return Boolean(card && (card.op_id === 'label' || card.op_id === 'label_tree_input'))
+}
+
+/** If AI打标器 exists, keep it last. Fill-only graphs stay as-is. */
 export function pinLabelLast(steps: PipelineStep[]): PipelineStep[] {
   const labels = steps.filter(isLabelCard)
   if (!labels.length) return steps
@@ -306,7 +413,7 @@ function autoBindings(
       upstream,
       operators,
       typeProvides,
-    })
+    }).filter((o) => o.binding.kind === 'slot')
     if (!options.length) continue
     if (port.multiple) bindings[pid] = options.map((o) => o.binding)
     else bindings[pid] = options[0].binding
@@ -357,11 +464,12 @@ export function hydrateRecipeToSteps(
 
   const steps: PipelineStep[] = []
   const produceIndex = new Map<string, { stepKey: string; portId: string }>()
+  const usedKeys = new Set(sourceCards.map((c) => String(c.key || '')).filter(Boolean))
 
-  ;(recipe.preprocess || []).forEach((raw: DataTypePreprocessStep, idx) => {
+  ;(recipe.preprocess || []).forEach((raw: DataTypePreprocessStep) => {
     const opId = raw.op_id
     const op = getOp(operators, opId)
-    const key = `prep-${idx}-${opId}`
+    const key = uniqueCatalogKey(opId, usedKeys)
     const produces = (raw.produces || []).filter(Boolean)
     let params = { ...(raw.params || {}) }
     let resolved = produces
@@ -374,6 +482,7 @@ export function hydrateRecipeToSteps(
     const card: PipelineStep = {
       key,
       op_id: opId,
+      title: String(op?.title || opId),
       role: 'preprocess',
       required: Boolean(raw.required),
       when_kind: raw.when_kind ?? null,
@@ -401,8 +510,9 @@ export function hydrateRecipeToSteps(
   const hasBboxOp = steps.some((s) => s.op_id === 'detect_bbox')
   if (recipe.bbox?.enabled && !hasBboxOp) {
     const op = getOp(operators, 'detect_bbox')
+    const bboxKey = uniqueCatalogKey('detect_bbox', usedKeys)
     steps.push({
-      key: 'prep-bbox-detect_bbox',
+      key: bboxKey,
       op_id: 'detect_bbox',
       role: 'preprocess',
       required: true,
@@ -420,8 +530,9 @@ export function hydrateRecipeToSteps(
   if (recipe.stages?.embed?.enabled) {
     const op = getOp(operators, 'embed')
     steps.push({
-      key: 'stage-embed',
+      key: uniqueCatalogKey('embed', usedKeys),
       op_id: 'embed',
+      title: String(op?.title || 'embed'),
       role: 'stage',
       required: false,
       when_kind: null,
@@ -445,6 +556,7 @@ export function hydrateRecipeToSteps(
     steps.push({
       key: 'stage-label',
       op_id: 'label',
+      title: String(op?.title || 'label'),
       role: 'stage',
       required: false,
       when_kind: null,
@@ -560,9 +672,11 @@ export function compileSteps(
       bboxCard = card
       delete params.enabled
     }
+    const allowed = new Set(Object.keys(op?.params_schema || {}))
     const clean: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(params)) {
       if (v === undefined || v === null || v === '') continue
+      if (!allowed.has(k)) continue
       clean[k] = v
     }
     if (Object.keys(clean).length) entry.params = clean
@@ -582,7 +696,7 @@ export function compileSteps(
   }
   const model = labelCard?.params?.model
   if (labelCard) {
-    stages.label = { enabled: true }
+    stages.label = { enabled: true, ...labelStageExtras(labelCard.params) }
     if (typeof model === 'string' && model.trim()) {
       stages.label.model = model.trim()
     }
@@ -622,6 +736,54 @@ export type BindingOption = {
 export function encodeBinding(b: PipelineBinding): string {
   if (b.kind === 'slot') return `slot:${b.slot_id}`
   return `up:${b.step_key}:${b.port_id || 'out'}`
+}
+
+function hydrateStepAlias(stepKey: string): string {
+  const prep = stepKey.match(/^prep-\d+-(.+)$/)
+  if (prep?.[1]) return prep[1]
+  if (stepKey.startsWith('stage-')) return stepKey.slice('stage-'.length)
+  return stepKey
+}
+
+/** Chip / selected-value text: never fall back to raw `up:{nodeId}:{port}` ids. */
+export function bindingDisplayLabel(
+  value: string,
+  options: BindingOption[],
+  steps: PipelineStep[],
+  operators: PlatformOperator[],
+): string {
+  const direct = options.find((o) => o.value === value)
+  if (direct?.label) return direct.label
+  const decoded = decodeBinding(value)
+  if (!decoded) return value
+  if (decoded.kind === 'slot') {
+    const hit = options.find((o) => o.binding.kind === 'slot' && o.binding.slot_id === decoded.slot_id)
+    if (hit?.label) return hit.label
+    const src = steps.find((s) => isSourceCard(s) && s.key === decoded.slot_id)
+    const title = String(src?.title || decoded.slot_id || '').trim()
+    return title || value
+  }
+  const portId = decoded.port_id && decoded.port_id !== 'out' ? decoded.port_id : ''
+  const samePort = (o: BindingOption) =>
+    o.binding.kind === 'upstream' && (!portId || o.binding.port_id === portId)
+  const byKey = options.find((o) => samePort(o) && o.binding.kind === 'upstream' && o.binding.step_key === decoded.step_key)
+  if (byKey?.label) return byKey.label
+  const alias = hydrateStepAlias(decoded.step_key)
+  const byAlias = options.find(
+    (o) =>
+      samePort(o) &&
+      o.binding.kind === 'upstream' &&
+      (o.binding.step_key === alias || o.binding.step_key.endsWith(`-${alias}`)),
+  )
+  if (byAlias?.label) return byAlias.label
+  const step =
+    steps.find((s) => s.key === decoded.step_key) ||
+    steps.find((s) => s.op_id === alias || s.key === alias || s.key.endsWith(`-${alias}`))
+  const op = getOp(operators, String(step?.op_id || alias))
+  const title = String(op?.title || step?.title || alias || decoded.step_key || '').trim()
+  const product = portId ? step?.output_labels?.[portId] || typeLabel(portId) : ''
+  if (title && product) return `${title} · ${product}`
+  return title || value
 }
 
 export function decodeBinding(value: string): PipelineBinding | null {
@@ -667,18 +829,20 @@ export function bindingOptions(args: {
       continue
     }
     const op = getOp(operators, card.op_id)
-    const produces = effectiveProduces(card, op)
     const title = op?.title || card.op_id
-    for (const name of produces) {
-      if (!needed.some((need) => typeCompatible(name, need, typeProvides))) continue
+    const ports = expandOutputPorts(op, card.params)
+    for (const port of ports) {
+      const types = (port.types || []).filter(Boolean)
+      const matchTypes = types.length ? types : [port.id]
+      if (!needed.some((need) => matchTypes.some((t) => typeCompatible(t, need, typeProvides)))) continue
       const binding: PipelineBinding = {
         kind: 'upstream',
         step_key: card.key,
-        port_id: name,
+        port_id: port.id,
       }
       options.push({
         value: encodeBinding(binding),
-        label: `${title} · ${card.output_labels?.[name] || typeLabel(name)}`,
+        label: `${title} · ${port.title || card.output_labels?.[port.id] || typeLabel(port.id)}`,
         binding,
       })
     }
@@ -705,6 +869,9 @@ export function newStepFromOp(args: {
     params.yolo_classes = ''
   }
   if (opId === 'parse_bag') params.emit_modalities = [...PARSE_BAG_MODALITIES]
+  if (opId === 'json_extract') params.path_keys = ['']
+  if (opId === 'label_tree_input') params.assignments = []
+  if (op?.expand_outputs_from === 'channel_count') params.channel_count = 1
   return {
     key,
     op_id: opId,
@@ -732,6 +899,49 @@ export function defaultNewSteps(operators: PlatformOperator[]): PipelineStep[] {
   ]
 }
 
+const LEGACY_LABEL_TITLES = new Set(['打标器', 'label', 'labeler'])
+
+export function uniqueCatalogKey(preferred: string, used: Set<string>): string {
+  const base = (preferred || 'op').trim() || 'op'
+  if (!used.has(base)) {
+    used.add(base)
+    return base
+  }
+  let n = 2
+  while (used.has(`${base}-${n}`)) n += 1
+  const key = `${base}-${n}`
+  used.add(key)
+  return key
+}
+
+export function isLegacyHydrateKey(key: string): boolean {
+  const k = String(key || '')
+  return /^prep-\d+-/.test(k) || k.startsWith('prep-bbox-') || k === 'stage-embed'
+}
+
+export function isGenericNodeTitle(stored: string, opId: string, key?: string): boolean {
+  const t = String(stored || '').trim()
+  if (!t) return true
+  if (t === opId) return true
+  if (key && t === key) return true
+  if (t.startsWith('prep-')) return true
+  if (opId && t === `stage-${opId}`) return true
+  if (opId === 'label' && LEGACY_LABEL_TITLES.has(t)) return true
+  return false
+}
+
+export function displayNodeTitle(
+  node: { type?: string; op_id?: string; title?: string; key?: string },
+  operators: PlatformOperator[] = [],
+): string {
+  const opId = String(node.op_id || (node.type === 'label' ? 'label' : '') || '')
+  const catalogTitle = getOp(operators, opId)?.title
+  const stored = String(node.title || '').trim()
+  const key = String(node.key || '')
+  if (catalogTitle && isGenericNodeTitle(stored, opId, key)) return catalogTitle
+  return stored || catalogTitle || node.key || opId
+}
+
 /** Type names shown on cards. */
 export const TYPE_LABELS: Record<string, string> = {
   frames: '连续帧',
@@ -744,6 +954,7 @@ export const TYPE_LABELS: Record<string, string> = {
   spl_jsonl: 'SPL',
   pcm_pa_wavs: 'PCM 声压',
   structured_json: '结构化 JSON',
+  json_value: 'JSON 值',
   bboxes_jsonl: 'BBox',
   labels_tree: '标签树',
   embeddings: '向量',

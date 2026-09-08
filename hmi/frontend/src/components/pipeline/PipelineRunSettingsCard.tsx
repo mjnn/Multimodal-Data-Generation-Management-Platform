@@ -14,6 +14,7 @@ import { rememberDataTypeId } from '../../context/DataTypeWorkspaceContext'
 import { apiErrorMessage } from '../../utils/apiError'
 import {
   applyNodeParamOverrides,
+  catalogizeGraph,
   graphToSteps,
   hydrateGraphFromSteps,
   orderedGraphNodes,
@@ -28,7 +29,7 @@ const TYPE_TITLE: Record<string, string> = {
   source: '数据源',
   op: '算子',
   if: '条件',
-  label: '打标器',
+  label: 'AI打标器',
   review: '校核',
   export: '导出',
 }
@@ -76,6 +77,7 @@ export function PipelineRunSettingsCard({
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [allOverrides, setAllOverrides] = useState<NonNullable<PipelineRunSettings['dag_node_overrides']>>({})
+  const [omniPromptDefaults, setOmniPromptDefaults] = useState<Record<string, string>>({})
 
   const operators = catalog?.operators || []
   const selectedRecipe = useMemo(
@@ -91,7 +93,10 @@ export function PipelineRunSettingsCard({
       const rec = await api.getDataType(dtypeId)
       const ops = cat.operators || []
       const loadedSteps = hydrateRecipeToSteps(rec, ops, cat.type_provides || {})
-      const base = rec.graph?.nodes?.length ? rec.graph : hydrateGraphFromSteps(loadedSteps)
+      const base = catalogizeGraph(
+        rec.graph?.nodes?.length ? rec.graph : hydrateGraphFromSteps(loadedSteps, ops),
+        ops,
+      )
       setGraph(applyNodeParamOverrides(base, overrides[dtypeId]))
     },
     [],
@@ -109,6 +114,7 @@ export function PipelineRunSettingsCard({
       setDataTypes((list.items || []).filter((item) => item.status === 'published'))
       const ov = settingsRes.settings.dag_node_overrides || {}
       setAllOverrides(ov)
+      setOmniPromptDefaults(settingsRes.options.omni_label_prompt_defaults || {})
       const id = selectedId
       if (id) await loadGraph(id, ov, cat)
       else setGraph({ nodes: [], edges: [] })
@@ -222,6 +228,7 @@ export function PipelineRunSettingsCard({
                     <IfConditionForm
                       key={node.key}
                       node={node}
+                      graph={graph}
                       onChange={(all) => applyPatch(node.key, { condition: { all } })}
                     />
                   ) : null}
@@ -238,6 +245,10 @@ export function PipelineRunSettingsCard({
                         node={node}
                         step={step}
                         operators={operators}
+                        steps={steps}
+                        typeProvides={catalog?.type_provides || {}}
+                        taxonomyId={selectedRecipe?.taxonomy_id}
+                        omniPromptDefaults={omniPromptDefaults}
                         onPatch={(patch) => applyPatch(node.key, patch)}
                       />
                     ) : (

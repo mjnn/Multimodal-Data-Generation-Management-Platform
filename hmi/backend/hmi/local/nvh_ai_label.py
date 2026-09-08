@@ -263,7 +263,23 @@ def _find_mel_png(run_root: Path) -> Path | None:
     return matches[0] if matches else None
 
 
-def vl_nvh_semantic(run_root: Path, labels: dict[str, Any], *, model: str) -> dict[str, Any] | None:
+def _append_semantic_note(semantic: dict[str, Any], key: str, extra: str | None) -> None:
+    text = str(extra or "").strip()
+    if not text:
+        return
+    existing = str(semantic.get(key) or "").strip()
+    semantic[key] = f"{existing}\n{text}".strip() if existing else text
+
+
+def vl_nvh_semantic(
+    run_root: Path,
+    labels: dict[str, Any],
+    *,
+    model: str,
+    prompt: str | None = None,
+    vl_model: str | None = None,
+    reference_constraints: str | None = None,
+) -> dict[str, Any] | None:
     """Optional VL fill via DashScope or AIGW OpenAI-compatible chat; None when unavailable."""
     mel = _find_mel_png(run_root)
     if mel is None:
@@ -272,7 +288,8 @@ def vl_nvh_semantic(run_root: Path, labels: dict[str, Any], *, model: str) -> di
 
     leq = labels.get("nvh.clip.spl.leq_db_mean")
     tonality = labels.get("nvh.clip.spec.tonality_index")
-    prompt = (
+    custom = str(prompt or "").strip()
+    default_prompt = (
         "You are an NVH acoustics assistant. Given a mel spectrogram of a 4-ch cabin mic array "
         "and objective metrics, fill ONLY semantic JSON keys. "
         f"Objective: leq_db_mean={leq}, tonality_index={tonality}. "
@@ -283,9 +300,17 @@ def vl_nvh_semantic(run_root: Path, labels: dict[str, Any], *, model: str) -> di
         "ai_hypothesis (short Chinese or English rationale). "
         "Do NOT invent SPL numbers. JSON only."
     )
-    vl_model = model if model and model != "nvh_sem_vl" else (
-        os.getenv("HMI_NVH_VL_MODEL") or "qwen-vl-plus"
-    ).strip()
+    prompt = custom or default_prompt
+    extra = str(reference_constraints or "").strip()
+    if extra:
+        prompt = f"{prompt.rstrip()}\n\n参考约束:\n{extra}"
+    explicit_vl = str(vl_model or "").strip()
+    if explicit_vl:
+        vl_model = explicit_vl
+    else:
+        vl_model = model if model and model != "nvh_sem_vl" else (
+            os.getenv("HMI_NVH_VL_MODEL") or "qwen-vl-plus"
+        ).strip()
 
     provider = (os.getenv("OMNI_PROVIDER") or os.getenv("LLM_PROVIDER") or "dashscope").strip().lower()
     text = ""
@@ -412,6 +437,8 @@ def _semantic_from_ast(
     run_root: Path,
     labels: dict[str, Any],
     _model_name: str,
+    *,
+    ast_top_k: int | None = None,
 ) -> tuple[dict[str, Any], str]:
     heuristic = heuristic_nvh_semantic(labels, run_root=run_root)
     probs = infer_audioset_probs(run_root, labels)
@@ -419,7 +446,8 @@ def _semantic_from_ast(
         return heuristic, "heuristic_fallback"
     from hmi.local.nvh_ast.labels import format_ast_hypothesis, map_audioset_topk
 
-    mapped = map_audioset_topk(probs)
+    k = ast_top_k if isinstance(ast_top_k, int) and ast_top_k > 0 else 5
+    mapped = map_audioset_topk(probs, k=k)
     semantic = dict(heuristic)
     if mapped.get("mapped") and mapped.get("noise_category"):
         semantic["nvh.sem.noise_category"] = mapped["noise_category"]
@@ -443,25 +471,46 @@ def fill_nvh_semantic_labels(
     labels: dict[str, Any],
     *,
     model: str | None = None,
+    ast_top_k: int | None = None,
+    vl_prompt: str | None = None,
+    vl_model: str | None = None,
+    reference_constraints: str | None = None,
 ) -> dict[str, Any]:
     """After deriver: fill nvh.sem.* without touching objective leaves."""
     model_name = (model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     semantic: dict[str, Any] = {}
     used = "heuristic"
+    notes = str(reference_constraints or "").strip() or None
 
     if model_name.startswith("nvh_sem_vl") or model_name in {"qwen-vl-plus", "qwen3-vl-plus"}:
-        vl = vl_nvh_semantic(run_root, labels, model=model_name)
+        vl = vl_nvh_semantic(
+            run_root,
+            labels,
+            model=model_name,
+            prompt=vl_prompt,
+            vl_model=vl_model,
+            reference_constraints=notes,
+        )
         if vl:
             semantic = vl
             used = "vl"
         else:
             semantic = heuristic_nvh_semantic(labels, run_root=run_root)
             used = "heuristic_fallback"
+            _append_semantic_note(semantic, "nvh.sem.annotator_notes", notes)
     elif model_name == AST_MODEL or model_name.startswith("nvh_sem_ast"):
-        semantic, used = _semantic_from_ast(run_root, labels, model_name)
+        semantic, used = _semantic_from_ast(
+            run_root, labels, model_name, ast_top_k=ast_top_k
+        )
+        if used == "heuristic_fallback":
+            _append_semantic_note(semantic, "nvh.sem.annotator_notes", notes)
+        else:
+            _append_semantic_note(semantic, "nvh.sem.ai_hypothesis", notes)
+            _append_semantic_note(semantic, "nvh.sem.annotator_notes", notes)
     else:
         semantic = heuristic_nvh_semantic(labels, run_root=run_root)
         used = "heuristic"
+        _append_semantic_note(semantic, "nvh.sem.annotator_notes", notes)
 
     # Snapshot objective keys for integrity
     objective_snap = {k: deepcopy(v) for k, v in labels.items() if is_objective_key(k)}

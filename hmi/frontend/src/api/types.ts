@@ -35,6 +35,8 @@ export interface ClipOverview {
   clip_id: string
   clip_dir_name: string
   bag_oss_key: string
+  /** This row's pipeline branch. Falls back to active_run_id on older payloads. */
+  run_id?: string
   active_run_id: string
   runs?: ClipRun[]
   duration_sec: number
@@ -1151,18 +1153,42 @@ export interface OperatorPort {
   types: string[]
   title?: string
   multiple?: boolean
+  min_count?: number
+  channel_index?: number
 }
 
 export interface PlatformOperator {
   op_id: string
   title: string
+  description?: string
   input_kinds: string[]
   product: string
   role?: 'preprocess' | 'stage'
   category?: string
+  expand_outputs_from?: 'channel_count'
   input_ports?: OperatorPort[]
   output_ports?: OperatorPort[]
   params_schema?: Record<string, unknown>
+  models?: Array<{ id: string; title: string }>
+  call_fields_by_model?: Record<string, LabelCallField[]>
+  omni_prompt_fields?: Array<{
+    key: string
+    label: string
+    multiline?: boolean
+    description?: string
+  }>
+}
+
+export interface LabelCallField {
+  key: string
+  label: string
+  type?: string
+  description?: string
+  placeholder?: string
+  multiline?: boolean
+  min?: number
+  max?: number
+  step?: number
 }
 
 export interface PlatformViewTemplate {
@@ -1219,6 +1245,8 @@ export interface ViewCard {
   key: string
   widget_id: string
   bindings?: Record<string, PipelinePortBindings>
+  /** Cards sharing the same non-empty id share a playhead. Empty = independent. */
+  sync_group?: string
 }
 
 export interface RecipeOverview {
@@ -1270,7 +1298,20 @@ export interface DataTypeRecipe {
   products?: DataTypeProduct[]
   bbox?: { enabled: boolean; detector: string; yolo_classes?: string }
   stages?: {
-    label?: { enabled: boolean; model?: string; inputs?: string[] }
+    label?: {
+      enabled: boolean
+      model?: string
+      inputs?: string[]
+      omni_model_id?: string
+      omni_label_prompt?: Record<string, string>
+      bbox_in_label_prompt?: boolean
+      temperature?: number
+      max_tokens?: number
+      ast_top_k?: number
+      reference_constraints?: string
+      vl_prompt?: string
+      vl_model?: string
+    }
     embed?: { enabled: boolean; model?: string; inputs?: string[] }
   }
 }

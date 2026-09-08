@@ -18,7 +18,13 @@ from hmi.platform.cache import product_cache_key
 from hmi.platform.file_kinds import modality_of, resolve_source_kind
 from hmi.platform.operators import SOURCE_KINDS, get_operator
 from hmi.platform.preflight import preflight
-from hmi.platform.recipe import eligible_kinds_for_recipe, seed_recipes, validate_recipe
+from hmi.platform.recipe import (
+    AUDIO_DEFECT_VERSION_CODE,
+    SEED_DATA_TYPE_IDS,
+    eligible_kinds_for_recipe,
+    seed_recipes,
+    validate_recipe,
+)
 
 _PLATFORM_SCHEMA = """
 CREATE TABLE IF NOT EXISTS platform_source (
@@ -84,7 +90,16 @@ TEXT_SCHEMAS = (
 
 
 def _row_recipe(row: sqlite3.Row) -> dict[str, Any]:
-    return json.loads(row["recipe_json"])
+    rec = json.loads(row["recipe_json"])
+    if not isinstance(rec, dict):
+        return rec
+    try:
+        from hmi.platform.recipe_graph import hydrate_graph
+
+        rec["graph"] = hydrate_graph(rec)
+    except (ValueError, TypeError, KeyError):
+        pass
+    return rec
 
 
 def ensure_platform_schema() -> None:
@@ -121,6 +136,7 @@ def ensure_platform_schema() -> None:
         _seed_builtin_data_types(conn)
         _seed_ivi_taxonomy(conn)
         _seed_audio_nvh_taxonomy(conn)
+        _seed_audio_defect_taxonomy(conn)
         conn.commit()
 
 
@@ -255,6 +271,102 @@ def _seed_audio_nvh_taxonomy(conn: sqlite3.Connection) -> None:
         )
 
 
+def _seed_audio_defect_taxonomy(conn: sqlite3.Connection) -> None:
+    """Draft bool tree for audio_defect. Do not publish (would archive OMS published)."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='label_taxonomy_version'"
+    ).fetchone()
+    if exists is None:
+        return
+    if conn.execute(
+        "SELECT 1 FROM label_taxonomy_version WHERE version_code = ?",
+        (AUDIO_DEFECT_VERSION_CODE,),
+    ).fetchone():
+        return
+    now = _utc_now_iso()
+    version_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO label_taxonomy_version
+          (id, version_code, status, published_at, created_by, source_import, created_at, updated_at)
+        VALUES (?, ?, 'draft', NULL, NULL, 'platform-kernel-seed', ?, ?)
+        """,
+        (version_id, AUDIO_DEFECT_VERSION_CODE, now, now),
+    )
+    schema = {"type": "bool", "values": ["true", "false"]}
+    conn.execute(
+        """
+        INSERT INTO label_taxonomy_node (
+          id, taxonomy_version_id, parent_id, level_code, level_name,
+          label_id, name, definition, dtype, value_schema_json, sort_order, is_active
+        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """,
+        (
+            str(uuid.uuid4()),
+            version_id,
+            "L1",
+            "片段判定",
+            "audio.defect.has_problem",
+            "是否有问题音频",
+            "这段录音是否存在问题噪音（异响 / 异常噪声）。true=有问题，false=正常。",
+            "bool",
+            json.dumps(schema, ensure_ascii=False),
+            0,
+        ),
+    )
+
+
+def reset_platform_kernel_to_seeds(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Wipe lake/sample/run/product rows, drop extra DataTypes, re-seed builtins.
+
+    Does not commit. Does not touch OSS files (caller clears ``sources/`` etc.).
+    Re-inserts draft IVI / audio_nvh / audio_defect taxonomies if those tables exist.
+    """
+    counts: dict[str, int] = {}
+    extra_ids: list[str] = []
+    tables = (
+        "platform_product",
+        "platform_run",
+        "platform_sample_source",
+        "platform_sample",
+        "platform_source",
+    )
+    for table in tables:
+        try:
+            row = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()
+            n = int(row[0]) if row else 0
+        except sqlite3.OperationalError:
+            n = 0
+        try:
+            conn.execute(f"DELETE FROM {table}")
+        except sqlite3.OperationalError:
+            pass
+        counts[table] = n
+
+    try:
+        placeholders = ",".join("?" * len(SEED_DATA_TYPE_IDS))
+        extra_ids = [
+            str(r[0])
+            for r in conn.execute(
+                f"SELECT id FROM platform_data_type WHERE id NOT IN ({placeholders})",
+                SEED_DATA_TYPE_IDS,
+            ).fetchall()
+        ]
+        conn.execute("DELETE FROM platform_data_type")
+    except sqlite3.OperationalError:
+        extra_ids = []
+
+    _seed_builtin_data_types(conn)
+    _seed_ivi_taxonomy(conn)
+    _seed_audio_nvh_taxonomy(conn)
+    _seed_audio_defect_taxonomy(conn)
+    return {
+        "sqlite_rows_removed": counts,
+        "extra_data_types_removed": extra_ids,
+        "seeded_data_type_ids": list(SEED_DATA_TYPE_IDS),
+    }
+
+
 def list_data_types() -> list[dict[str, Any]]:
     ensure_platform_schema()
     with db_conn() as conn:
@@ -297,6 +409,22 @@ def _source_row(row: Any) -> dict[str, Any]:
     if not item.get("collection_id"):
         item["collection_id"] = item.get("source_id")
     return item
+
+
+def get_source(source_id: str) -> dict[str, Any] | None:
+    sid = str(source_id or "").strip()
+    if not sid:
+        return None
+    with db_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT source_id, kind, filename, text_schema_id, content_hash,
+                   local_oss_key, local_path, collection_id, created_at
+            FROM platform_source WHERE source_id = ?
+            """,
+            (sid,),
+        ).fetchone()
+    return _source_row(row) if row else None
 
 
 def put_source(
@@ -670,6 +798,24 @@ def get_run(run_id: str) -> dict[str, Any] | None:
     }
 
 
+_product_writes_paused = False
+
+
+def pause_product_writes() -> None:
+    """Block lineage inserts while test-data reset is wiping platform_product."""
+    global _product_writes_paused
+    _product_writes_paused = True
+
+
+def resume_product_writes() -> None:
+    global _product_writes_paused
+    _product_writes_paused = False
+
+
+def product_writes_paused() -> bool:
+    return _product_writes_paused
+
+
 def record_product(
     *,
     input_ids: list[str],
@@ -680,6 +826,8 @@ def record_product(
     run_id: str | None = None,
 ) -> str:
     key = product_cache_key(input_ids, op_id, params)
+    if _product_writes_paused:
+        return key
     now = _utc_now_iso()
     with db_conn() as conn:
         conn.execute(
@@ -751,18 +899,16 @@ def lookup_or_record_product(
 
 
 _FALLBACK_OP_TITLES = {
-    "label": "打标器",
+    "label": "AI打标器",
     "embed": "向量化",
     "source": "数据源",
 }
 
 
 def _op_title(op_id: str) -> str:
-    spec = get_operator(op_id) or {}
-    title = spec.get("title")
-    if title:
-        return str(title)
-    return _FALLBACK_OP_TITLES.get(op_id, op_id)
+    from hmi.platform.operators import display_op_title
+
+    return display_op_title(op_id) or _FALLBACK_OP_TITLES.get(op_id, op_id)
 
 
 def _walk_source_refs(

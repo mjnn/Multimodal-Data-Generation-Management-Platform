@@ -2,6 +2,14 @@ import { Alert, Steps, Typography } from 'antd'
 import type { UploadPipelineStep } from '../api/types'
 import { PipelineStatus } from './PipelineStatus'
 
+/** Persist/upload/dispatch run for every clip and are not DAG work nodes. */
+const HIDDEN_INFRA_STEP_IDS = new Set(['sdk_mc_write', 'sdk_upload', 'sdk_dispatch'])
+
+export function visiblePipelineSteps(steps: UploadPipelineStep[] | undefined): UploadPipelineStep[] {
+  if (!steps?.length) return []
+  return steps.filter((s) => !HIDDEN_INFRA_STEP_IDS.has(s.step_id))
+}
+
 function stepStatus(s: UploadPipelineStep['status']): 'wait' | 'process' | 'finish' | 'error' {
   if (s === 'success') return 'finish'
   if (s === 'running') return 'process'
@@ -10,8 +18,9 @@ function stepStatus(s: UploadPipelineStep['status']): 'wait' | 'process' | 'fini
 }
 
 export function firstFailedStepError(steps: UploadPipelineStep[] | undefined): string | null {
-  if (!steps?.length) return null
-  const failed = steps.find((s) => s.status === 'failed')
+  const visible = visiblePipelineSteps(steps)
+  if (!visible.length) return null
+  const failed = visible.find((s) => s.status === 'failed')
   const msg = failed?.error_message?.trim()
   return msg || null
 }
@@ -25,13 +34,14 @@ interface Props {
 }
 
 export function UploadPipelineProgress({ steps, clipId, runId, compact = false }: Props) {
-  const done = steps.filter((s) => s.status === 'success').length
-  const current = steps.find((s) => s.status === 'running')
-  const failedStep = steps.find((s) => s.status === 'failed')
+  const visible = visiblePipelineSteps(steps)
+  const done = visible.filter((s) => s.status === 'success').length
+  const current = visible.find((s) => s.status === 'running')
+  const failedStep = visible.find((s) => s.status === 'failed')
   const failedMsg = failedStep?.error_message?.trim()
 
   return (
-    <div>
+    <div data-testid="upload-pipeline-progress">
       {failedStep && failedMsg ? (
         <Alert
           type="error"
@@ -54,7 +64,7 @@ export function UploadPipelineProgress({ steps, clipId, runId, compact = false }
         />
       ) : null}
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-        管线进度 {done}/{steps.length}
+        管线进度 {done}/{visible.length}
         {current && <> · 当前：{current.label}</>}
       </Typography.Text>
       {!compact && (clipId || runId) && (
@@ -67,9 +77,9 @@ export function UploadPipelineProgress({ steps, clipId, runId, compact = false }
         size="small"
         direction={compact ? 'vertical' : 'horizontal'}
         style={compact ? { maxWidth: 420 } : undefined}
-        current={steps.findIndex((s) => s.status === 'running')}
-        items={steps.map((s) => ({
-          title: s.label,
+        current={visible.findIndex((s) => s.status === 'running')}
+        items={visible.map((s) => ({
+          title: <span data-testid={`pipeline-step-${s.step_id}`}>{s.label}</span>,
           status: stepStatus(s.status),
           description: compact ? (
             <PipelineStatus status={s.status} size="small" />

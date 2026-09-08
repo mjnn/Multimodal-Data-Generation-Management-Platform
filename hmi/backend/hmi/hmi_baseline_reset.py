@@ -73,7 +73,13 @@ _CLOUD_OSS_PREFIXES = (
     "datasets/",
     "reviews/",
     "config/",
+    "sources/",
+    "lake_images/",
+    "platform_runs/",
 )
+
+# Local lake OSS (source packages + compiled platform runs + still-image lake).
+_LAKE_OSS_PREFIXES = ("sources", "lake_images", "platform_runs")
 
 _SDK_MC_SUFFIXES = (
     "dim_clip",
@@ -456,13 +462,15 @@ def _purge_local_pipeline_runtime() -> dict[str, Any]:
     if settings_path.is_file():
         settings_path.unlink(missing_ok=True)
 
-    _set_progress(percent=35, stage="local", message="清理本地 OSS 镜像目录…")
+    _set_progress(percent=35, stage="local", message="清理本地 OSS 镜像目录与源湖…")
     oss_cleared = {
         "rosbags": _clear_oss_subtree("rosbags"),
         "clips": _clear_oss_subtree("clips"),
         "pipeline": _clear_oss_subtree("pipeline"),
         "config": _clear_oss_subtree("config"),
     }
+    for prefix in _LAKE_OSS_PREFIXES:
+        oss_cleared[prefix] = _clear_oss_subtree(prefix)
     _set_progress(percent=55, stage="local", message="清理 artifacts / SDK work…")
     artifacts_removed = _clear_dir_children(LOCAL_ARTIFACTS_ROOT)
     sdk_work_removed = _clear_dir_children(LOCAL_ROOT / "work" / "sdk_runs")
@@ -479,6 +487,46 @@ def _purge_local_pipeline_runtime() -> dict[str, Any]:
     }
 
 
+def _purge_host_runtime_leftovers() -> dict[str, int]:
+    """Wipe HMI-host artifact dirs even when data_source is cloud.
+
+    ``platform_product`` rows point at ``work/sdk_runs/...``; local-mode purge
+    already clears these, but cloud mode used to skip them so the 产物预览
+    index could be empty while leftover dirs remained (or vice versa).
+    """
+    _set_progress(percent=58, stage="local", message="清理本机 artifacts / SDK work…")
+    return {
+        "artifacts_entries_removed": _clear_dir_children(LOCAL_ARTIFACTS_ROOT),
+        "sdk_work_entries_removed": _clear_dir_children(LOCAL_ROOT / "work" / "sdk_runs"),
+    }
+
+
+def _quiesce_sdk_worker_for_reset() -> dict[str, Any]:
+    """Stop the local SDK poller and block product inserts before wiping."""
+    from hmi.platform.store import pause_product_writes
+    from hmi.services import local_sdk_worker
+
+    _set_progress(percent=4, stage="start", message="暂停本地 SDK 轮询，避免产物被写回…")
+    pause_product_writes()
+    local_sdk_worker.stop_poller()
+    idle = local_sdk_worker.wait_idle(timeout_sec=120)
+    status = local_sdk_worker.get_worker_status()
+    if not idle:
+        logger.warning(
+            "reset: SDK worker still busy after wait (active_jobs=%s)",
+            status.get("active_jobs"),
+        )
+    return {"idle": idle, "active_jobs": status.get("active_jobs")}
+
+
+def _resume_sdk_worker_after_reset() -> None:
+    from hmi.platform.store import resume_product_writes
+    from hmi.services import local_sdk_worker
+
+    resume_product_writes()
+    local_sdk_worker.ensure_poller_running()
+
+
 def reset_hmi_artifacts_to_baseline() -> dict[str, Any]:
     """
     Baseline state (requires HMI_TEST_MODE=1):
@@ -487,7 +535,9 @@ def reset_hmi_artifacts_to_baseline() -> dict[str, Any]:
     - Single published taxonomy ``label_tree_baseline`` from repo YAML
     - Local mode: clears oss/datasets, oss/reviews, re-exports taxonomy under oss/config/
     - Local mode: clears SDK pipeline (hmi.db clip/run/facts, execution batches, rosbags/clips/pipeline, artifacts, sdk work)
-    - Cloud mode: clears cloud OSS (rosbags/clips/pipeline/datasets/reviews/config) + MC aig_sdk__/aig_rosbag__ tables, then re-exports taxonomy
+    - Local/cloud: clears lake OSS (sources / lake_images / platform_runs) and extra DataTypes; re-seeds oms_cabin / ivi_ui_stub / audio_array_spec / audio_defect
+    - Local/cloud: clears ``platform_product`` / ``platform_run`` lineage and host ``work/sdk_runs`` + artifacts so 产物预览 is empty
+    - Cloud mode: clears cloud OSS (rosbags/clips/pipeline/datasets/reviews/config/sources/lake_images/platform_runs) + MC aig_sdk__/aig_rosbag__ tables, then re-exports taxonomy
     """
     if not is_test_mode():
         raise PermissionError("重置测试数据仅在测试模式（HMI_TEST_MODE=1）下可用")
@@ -510,49 +560,60 @@ def reset_hmi_artifacts_to_baseline() -> dict[str, Any]:
             raise RuntimeError("admin user missing; run hmi/scripts/bootstrap_admin.py first")
 
         logger.info("test-data reset start (mode=%s)", "local" if is_local_mode() else "cloud")
-        local_pipeline = _purge_local_pipeline_runtime()
-        cloud_pipeline = _purge_cloud_pipeline_runtime()
-        queue_purged = _purge_hmi_pipeline_queue_state()
+        worker_quiesced = _quiesce_sdk_worker_for_reset()
+        try:
+            local_pipeline = _purge_local_pipeline_runtime()
+            cloud_pipeline = _purge_cloud_pipeline_runtime()
+            host_leftovers = _purge_host_runtime_leftovers()
+            queue_purged = _purge_hmi_pipeline_queue_state()
 
-        _set_progress(percent=85, stage="app_db", message="清理应用库（用户/校核/数据集/标签树）…")
-        with sqlite3.connect(APP_DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            db_counts = _purge_app_db_artifacts(conn)
-            conn.commit()
+            _set_progress(percent=85, stage="app_db", message="清理应用库（用户/校核/数据集/标签树/源湖）…")
+            from hmi.platform.store import reset_platform_kernel_to_seeds
 
-        oss_cleared = {
-            "datasets": _clear_oss_subtree("datasets"),
-            "reviews": _clear_oss_subtree("reviews"),
-        }
+            with sqlite3.connect(APP_DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                db_counts = _purge_app_db_artifacts(conn)
+                platform_purged = reset_platform_kernel_to_seeds(conn)
+                conn.commit()
 
-        _set_progress(percent=92, stage="taxonomy", message="写入 baseline 标签树…")
-        taxonomy = _seed_baseline_taxonomy(created_by=str(admin["id"]))
+            oss_cleared = {
+                "datasets": _clear_oss_subtree("datasets"),
+                "reviews": _clear_oss_subtree("reviews"),
+            }
 
-        if is_local_mode() and not local_pipeline.get("skipped"):
-            from hmi.local.pipeline_settings import save_pipeline_settings
+            _set_progress(percent=92, stage="taxonomy", message="写入 baseline 标签树…")
+            taxonomy = _seed_baseline_taxonomy(created_by=str(admin["id"]))
 
-            save_pipeline_settings({"taxonomy_version_id": taxonomy["version_id"]})
+            if is_local_mode() and not local_pipeline.get("skipped"):
+                from hmi.local.pipeline_settings import save_pipeline_settings
 
-        result = {
-            "ok": True,
-            "message": "测试数据已重置为 baseline",
-            "baseline_taxonomy": taxonomy,
-            "db_purged": db_counts,
-            "oss_entries_removed": oss_cleared,
-            "local_pipeline_purged": local_pipeline,
-            "cloud_pipeline_purged": cloud_pipeline,
-            "pipeline_queue_purged": queue_purged,
-        }
-        _set_progress(
-            running=False,
-            percent=100,
-            stage="done",
-            message=result["message"],
-            ok=True,
-            error=None,
-        )
-        logger.info("test-data reset done")
-        return result
+                save_pipeline_settings({"taxonomy_version_id": taxonomy["version_id"]})
+
+            result = {
+                "ok": True,
+                "message": "测试数据已重置为 baseline",
+                "baseline_taxonomy": taxonomy,
+                "db_purged": db_counts,
+                "oss_entries_removed": oss_cleared,
+                "local_pipeline_purged": local_pipeline,
+                "cloud_pipeline_purged": cloud_pipeline,
+                "pipeline_queue_purged": queue_purged,
+                "platform_kernel_purged": platform_purged,
+                "host_runtime_purged": host_leftovers,
+                "sdk_worker_quiesced": worker_quiesced,
+            }
+            _set_progress(
+                running=False,
+                percent=100,
+                stage="done",
+                message=result["message"],
+                ok=True,
+                error=None,
+            )
+            logger.info("test-data reset done")
+            return result
+        finally:
+            _resume_sdk_worker_after_reset()
     except Exception as exc:
         _set_progress(
             running=False,

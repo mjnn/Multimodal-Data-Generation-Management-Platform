@@ -10,7 +10,8 @@
   background: var(--color-surface-1);
   padding: 12px 14px;
   max-height: calc(100% - 16px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: scroll;
   box-shadow: 0 10px 28px color-mix(in srgb, #0d0f17 18%, transparent);
 }
 
@@ -28,6 +29,28 @@
   gap: 8px;
 }
 
-.dag-inspector__pred {
+.dag-inspector__path-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.dag-inspector__call {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.dag-inspector .pipe-step__params {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.dag-inspector .pipe-step__params > .pipe-step__field,
+.dag-inspector .pipe-step__params > .dag-inspector__call {
+  min-width: 0;
   width: 100%;
 }

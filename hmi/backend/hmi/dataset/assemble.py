@@ -205,11 +205,16 @@ def _apply_field_review_gate(reviews: list[dict[str, Any]], filt: dict[str, Any]
 
 
 def _local_active_clip_pairs() -> list[dict[str, str]]:
-    """One entry per dim_clip using active_run_id (avoids stale run duplicates)."""
+    """Every pipeline branch (clip, run); dim_clip.active is a fallback for unseeded tests."""
     rows = store.query(
         """
-        SELECT clip_id, active_run_id AS run_id FROM dim_clip
-        WHERE active_run_id IS NOT NULL AND TRIM(active_run_id) != ''
+        SELECT DISTINCT clip_id, run_id FROM (
+          SELECT clip_id, run_id FROM pipeline_run
+          WHERE run_id IS NOT NULL AND TRIM(run_id) != ''
+          UNION
+          SELECT clip_id, active_run_id AS run_id FROM dim_clip
+          WHERE active_run_id IS NOT NULL AND TRIM(active_run_id) != ''
+        )
         """
     )
     return [{"clip_id": str(r["clip_id"]), "run_id": str(r["run_id"])} for r in rows]

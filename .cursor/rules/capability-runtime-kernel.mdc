@@ -1,0 +1,28 @@
+---
+description: 本地 DAG 用 runtime kernel + 可插拔 capability；禁止一组件一 SDK 包；不改 DataWorks
+globs: hmi/backend/hmi/platform/**,hmi/backend/hmi/services/local_sdk_worker.py,piplinesdk/oms_multimodal/capabilities/**
+alwaysApply: false
+---
+
+# 管线 capability kernel
+
+扩展编排组件 = **注册插件**，不是再发一个 pip SDK。舱内视觉/ASR/Omni/向量仍在 `oms-multimodal-sdk` 的原子能力里。
+
+## 必须
+
+- 有 `recipe.graph` 的配方（舱内 **与** `audio_array_spec`）：`execute_recipe_graph`（`capability_kernel.py` / `capability_sdk.py` / `capability_nvh.py`）
+- 无 graph：舱内整包 `plan_and_run`；阵列仍走 `_run_audio_array_spec`
+- 新算子：在 `OP_PLUGINS` 登记 `sdk` / `local` / `control`；SDK 步复用 `extract`/`transcribe`/`label`/`embed` 等
+- ASR/打标后 if：依赖节点写入 `ctx.asr` / `ctx.labels`（如 `asr.avg_confidence`）
+- 进度：写 `pipeline_step` 的 `dag:{node_key}`，不要把整段 `sdk_infer` 算成第一个解析节点失败
+
+## 禁止
+
+- 一 DAG 组件一个独立 SDK/PyPI 包
+- 为本地 DAG 改 DataWorks / DPE 节点或拆云端 Job
+- 未实现插件用空适配器假装成功（应 `capability 未实现`）
+- 拆 SDK 内核来接温度/`max_tokens`（ClientConfig 无钩子则只存在配方上）
+
+## 来源
+
+沉淀自 session 2026-09-04；规格 `docs/superpowers/specs/2026-09-04-capability-runtime-kernel-design.md`

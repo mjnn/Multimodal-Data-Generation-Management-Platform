@@ -1,6 +1,7 @@
 /**
  * 新建 / 编辑 DataType 配方（admin）。
- * 新建：基本信息模态 → 管线编排页 → 展示页排版；编辑：同页。
+ * 新建：基本信息模态 → 管线编排页 → 展示页排版。
+ * 编辑已保存类型：同页叠卡，管线编排在展示页排版之上。
  * 保存走 PUT /api/platform/data-types/{id}；校验在后端 recipe.py。
  */
 import { SaveOutlined } from '@ant-design/icons'
@@ -36,10 +37,11 @@ import '../components/datatype/OverviewPreview.css'
 import { PipelineDagCanvas } from '../components/datatype/PipelineDagCanvas'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
 import { apiErrorMessage } from '../utils/apiError'
-import { cardsFromPreset, hydrateOverview, remapOverviewKeys } from '../utils/overviewLayout'
+import { emptyOverview, hydrateOverview, remapOverviewKeys } from '../utils/overviewLayout'
 import { compileSteps, duplicateSourceTitleError, hydrateRecipeToSteps } from '../utils/recipePipeline'
 import {
   attachStepBindings,
+  catalogizeGraph,
   defaultNewGraph,
   graphIsLossy,
   graphToSteps,
@@ -64,7 +66,7 @@ function emptyMeta(): EditorForm {
     purpose: '',
     owner: 'platform',
     taxonomy_id: 'oms',
-    overview_view: 'cabin_timeline',
+    overview_view: 'custom',
     status: 'draft',
   }
 }
@@ -119,17 +121,25 @@ function clonePipelineAndOverview(
   }
 }
 
+function OverviewLayoutIntro() {
+  return (
+    <div data-testid="dtype-overview-layout-header" style={{ marginBottom: 12 }}>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+        Clip 详情页按此顺序叠卡。从左侧点选原子组件；绑定通道端口后，运行时按卡渲染。
+      </Typography.Paragraph>
+    </div>
+  )
+}
+
 function DataTypeMetaFields({
   isNew,
   taxonomyOptions,
   templates,
-  catalog,
   onCloneTemplate,
 }: {
   isNew: boolean
   taxonomyOptions: { value: string }[]
   templates: DataTypeRecipe[]
-  catalog: PlatformCatalog | null
   onCloneTemplate: (id: string) => void
 }) {
   return (
@@ -176,21 +186,6 @@ function DataTypeMetaFields({
         >
           <AutoComplete options={taxonomyOptions} placeholder="oms" />
         </Form.Item>
-        <Form.Item
-          name="overview_view"
-          label="从预设填入"
-          rules={[{ required: true }]}
-          style={{ minWidth: 280 }}
-          tooltip="会重置展示页（Clip 详情）组件卡，之后仍可改"
-        >
-          <Select
-            data-testid="dtype-overview-preset"
-            options={(catalog?.views || []).map((v) => ({
-              value: v.id,
-              label: `${v.title}（${v.id}）`,
-            }))}
-          />
-        </Form.Item>
         {isNew ? (
           <Form.Item label="从已有类型复制">
             <Select
@@ -223,8 +218,8 @@ function buildRecipe(
     purpose: String(values.purpose || '').trim(),
     owner: String(values.owner || 'platform').trim() || 'platform',
     taxonomy_id: String(values.taxonomy_id || '').trim(),
-    overview_view: values.overview_view,
-    overview: { ...overview, preset: values.overview_view },
+    overview_view: 'custom',
+    overview: { ...overview, preset: 'custom' },
     graph,
     status: values.status === 'published' ? 'published' : 'draft',
     require_any_kinds: compiled.require_any_kinds,
@@ -245,7 +240,7 @@ export function DataTypeEditorPage() {
   const [catalog, setCatalog] = useState<PlatformCatalog | null>(null)
   const [templates, setTemplates] = useState<DataTypeRecipe[]>([])
   const [graph, setGraph] = useState<RecipeGraph>(() => defaultNewGraph())
-  const [overview, setOverview] = useState<RecipeOverview>(() => cardsFromPreset('cabin_timeline'))
+  const [overview, setOverview] = useState<RecipeOverview>(() => emptyOverview())
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -254,6 +249,7 @@ export function DataTypeEditorPage() {
   const [newStage, setNewStage] = useState<'pipeline' | 'overview'>('pipeline')
   const watchedId = Form.useWatch('id', form)
   const watchedTitle = Form.useWatch('title', form)
+  const watchedTaxonomyId = Form.useWatch('taxonomy_id', form)
   const steps = useMemo(() => graphToSteps(graph), [graph])
   const lossy = useMemo(() => graphIsLossy(graph), [graph])
   const showWorkspace = !isNew || metaReady
@@ -268,8 +264,9 @@ export function DataTypeEditorPage() {
     return [...ids].map((v) => ({ value: v }))
   }, [templates])
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (isCancelled: () => boolean = () => false) => {
     const [cat, list] = await Promise.all([api.listPlatformCatalog(), api.listDataTypes()])
+    if (isCancelled()) return
     setCatalog(cat)
     setTemplates(list.items ?? [])
     const ops = cat.operators || []
@@ -277,32 +274,38 @@ export function DataTypeEditorPage() {
       const cloneId = searchParams.get('from') || ''
       if (cloneId) {
         const src = list.items?.find((x) => x.id === cloneId) || (await api.getDataType(cloneId))
+        if (isCancelled()) return
         const meta = recipeToMeta(src)
         meta.id = ''
         meta.title = `${src.title}（副本）`
         meta.status = 'draft'
         form.setFieldsValue(meta)
         const cloned = clonePipelineAndOverview(src, cat)
-        setSelectedKey(null)
         setNewStage('pipeline')
-        setGraph(src.graph?.nodes?.length ? remapGraphKeys(src.graph) : hydrateGraphFromSteps(cloned.steps))
+        setGraph(
+          src.graph?.nodes?.length
+            ? catalogizeGraph(remapGraphKeys(src.graph), ops)
+            : hydrateGraphFromSteps(cloned.steps, ops),
+        )
         setOverview(cloned.overview)
         return
       }
       form.setFieldsValue(emptyMeta())
-      setSelectedKey(null)
       setNewStage('pipeline')
       setGraph(defaultNewGraph())
-      setOverview(cardsFromPreset('cabin_timeline', cat.views))
+      setOverview(emptyOverview())
       return
     }
     const rec = await api.getDataType(dataTypeId!)
+    if (isCancelled()) return
     form.setFieldsValue(recipeToMeta(rec))
     const loadedSteps = hydrateRecipeToSteps(rec, ops, cat.type_provides || {})
-    setSelectedKey(null)
     setGraph(
       attachStepBindings(
-        rec.graph?.nodes?.length ? rec.graph : hydrateGraphFromSteps(loadedSteps),
+        catalogizeGraph(
+          rec.graph?.nodes?.length ? rec.graph : hydrateGraphFromSteps(loadedSteps, ops),
+          ops,
+        ),
         loadedSteps,
       ),
     )
@@ -312,7 +315,7 @@ export function DataTypeEditorPage() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    void load()
+    void load(() => cancelled)
       .catch((e: unknown) => {
         if (!cancelled) message.error(apiErrorMessage(e, '加载配方失败'))
       })
@@ -323,6 +326,10 @@ export function DataTypeEditorPage() {
       cancelled = true
     }
   }, [load])
+
+  useEffect(() => {
+    setSelectedKey(null)
+  }, [dataTypeId])
 
   const cloneTemplate = useCallback(
     (id: string) => {
@@ -338,7 +345,9 @@ export function DataTypeEditorPage() {
           setSelectedKey(null)
           setNewStage('pipeline')
           setGraph(
-            src.graph?.nodes?.length ? remapGraphKeys(src.graph) : hydrateGraphFromSteps(cloned.steps),
+            src.graph?.nodes?.length
+              ? catalogizeGraph(remapGraphKeys(src.graph), catalog?.operators || [])
+              : hydrateGraphFromSteps(cloned.steps, catalog?.operators || []),
           )
           setOverview(cloned.overview)
         } catch (e: unknown) {
@@ -350,7 +359,7 @@ export function DataTypeEditorPage() {
   )
 
   const confirmMeta = async () => {
-    const values = await form.validateFields(['id', 'title', 'purpose', 'taxonomy_id', 'overview_view'])
+    const values = await form.validateFields(['id', 'title', 'purpose', 'taxonomy_id'])
     const id = String(values.id || '').trim()
     if (!/^[a-z][a-z0-9_]*$/.test(id)) {
       message.error('id 须以小写字母开头，仅含小写字母、数字、下划线')
@@ -403,7 +412,6 @@ export function DataTypeEditorPage() {
       isNew={isNew}
       taxonomyOptions={taxonomyOptions}
       templates={templates}
-      catalog={catalog}
       onCloneTemplate={cloneTemplate}
     />
   )
@@ -446,14 +454,10 @@ export function DataTypeEditorPage() {
         }
       />
       <ContentCard>
-        {showOverviewPage ? (
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            Clip 详情页按此顺序叠卡。点选预设会重置展示页组件；绑定可选，运行时仍走现有 clip/run 接口。
-          </Typography.Paragraph>
-        ) : showPipeline ? (
+        {showOverviewPage ? null : showPipeline ? (
           <>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-              从左侧点选管线组件或控制流节点放到画布上，拖线连接。点选「数据源」增加一路输入。打标器不可删除。
+              从左侧点选管线组件或控制流节点放到画布上，拖线连接。点选「数据源」增加一路输入。标签树需有写入（AI打标器或标签树输入均可作为终点）。
               只能引用已注册算子与展示页组件；默认建议先存 <Typography.Text code>draft</Typography.Text>
               ，验证后再发布。
             </Typography.Paragraph>
@@ -473,11 +477,9 @@ export function DataTypeEditorPage() {
         <Form
           form={form}
           layout="vertical"
-          disabled={loading}
-          onValuesChange={(changed: Partial<EditorForm>) => {
-            if (changed.overview_view) {
-              setOverview(cardsFromPreset(changed.overview_view, catalog?.views))
-            }
+          disabled={loading && isNew}
+          onValuesChange={(_changed: Partial<EditorForm>) => {
+            /* overview_view is always custom; layout is the card list */
           }}
         >
           {isNew ? (
@@ -538,27 +540,11 @@ export function DataTypeEditorPage() {
             </Card>
           ) : null}
 
-          {!isNew && showWorkspace ? (
-            <Card size="small" title="展示页排版" style={{ marginBottom: 16 }}>
-              <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-                Clip 详情页按此顺序叠卡。点选预设会重置展示页组件；绑定可选，运行时仍走现有 clip/run 接口。
-              </Typography.Paragraph>
-              <OverviewComposer
-                overview={overview}
-                onChange={setOverview}
-                widgets={catalog?.view_widgets || []}
-                steps={steps}
-                operators={catalog?.operators || []}
-                typeProvides={catalog?.type_provides || {}}
-              />
-            </Card>
-          ) : null}
-
           {showPipeline ? (
             <Card size="small" title={isNew ? undefined : '管线编排'} style={{ marginBottom: 16 }}>
               {isNew ? null : (
                 <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-                  从左侧点选管线组件或控制流节点放到画布上，拖线连接。点选「数据源」增加一路输入。打标器不可删除。
+                  从左侧点选管线组件或控制流节点放到画布上，拖线连接。点选「数据源」增加一路输入。标签树需有写入（AI打标器或标签树输入均可作为终点）。
                 </Typography.Paragraph>
               )}
               <Alert
@@ -580,6 +566,7 @@ export function DataTypeEditorPage() {
               <PipelineDagCanvas
                 operators={catalog?.operators || []}
                 categoryTitles={catalog?.categories}
+                typeProvides={catalog?.type_provides}
                 graph={graph}
                 onChange={setGraph}
                 selectedKey={selectedKey}
@@ -592,15 +579,31 @@ export function DataTypeEditorPage() {
                   operators={catalog?.operators || []}
                   typeProvides={catalog?.type_provides || {}}
                   sourceKinds={catalog?.source_kinds}
-                  disabled={loading}
+                  taxonomyId={watchedTaxonomyId}
+                  dataTypeId={isNew ? undefined : dataTypeId}
                   onClose={() => setSelectedKey(null)}
                 />
               </PipelineDagCanvas>
             </Card>
           ) : null}
 
+          {!isNew && showWorkspace ? (
+            <Card size="small" title="展示页排版" style={{ marginBottom: 16 }}>
+              <OverviewLayoutIntro />
+              <OverviewComposer
+                overview={overview}
+                onChange={setOverview}
+                widgets={catalog?.view_widgets || []}
+                steps={steps}
+                operators={catalog?.operators || []}
+                typeProvides={catalog?.type_provides || {}}
+              />
+            </Card>
+          ) : null}
+
           {showOverviewPage ? (
             <div data-testid="dtype-overview-page">
+              <OverviewLayoutIntro />
               <div className="overview-page-split">
                 <OverviewComposer
                   overview={overview}

@@ -78,6 +78,11 @@ def _fmt_ts(ns: int, start_ns: int) -> str:
     return f"{m}:{s:05.2f}"
 
 
+def clip_run_key(clip_id: str, run_id: str) -> str:
+    """Stable overview / stats key for one pipeline branch."""
+    return f"{clip_id}::{run_id}"
+
+
 def composite_id(clip_id: str, run_id: str, camera: str, frame_idx: int) -> str:
     return f"f|{clip_id}|{run_id}|{camera}|{frame_idx}"
 

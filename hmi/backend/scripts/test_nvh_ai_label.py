@@ -76,6 +76,19 @@ class TestNvhAiLabelMerge(unittest.TestCase):
             self.assertEqual(out["_meta"]["ai_mode"], "heuristic")
             self.assertEqual(out["_meta"]["taxonomy_version_code"], "audio_nvh-v2")
 
+    def test_heuristic_appends_reference_constraints(self) -> None:
+        from hmi.local.nvh_ai_label import fill_nvh_semantic_labels
+
+        with tempfile.TemporaryDirectory() as td:
+            out = fill_nvh_semantic_labels(
+                Path(td),
+                _synthetic_labels(),
+                model="nvh_sem_heuristic",
+                reference_constraints="人工备注：只看客观 SPL",
+            )
+            self.assertIn("人工备注：只看客观 SPL", out.get("nvh.sem.annotator_notes") or "")
+            self.assertEqual(out["_meta"]["ai_mode"], "heuristic")
+
     def test_recipe_label_enabled(self) -> None:
         from hmi.platform.recipe import seed_recipes
 

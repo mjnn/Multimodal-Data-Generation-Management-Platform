@@ -96,11 +96,8 @@ def _read_jsonl_first(path: Path) -> dict[str, Any]:
 
 
 def _is_importable_run_dir(path: Path) -> bool:
-    return (
-        path.is_dir()
-        and (path / "labels.jsonl").is_file()
-        and (path / "fusion_embeddings.jsonl").is_file()
-    )
+    """A run is importable with labels.jsonl. Embeddings are optional (recipe may skip embed)."""
+    return path.is_dir() and (path / "labels.jsonl").is_file()
 
 
 def _read_clip_video_row(run_dir: Path) -> dict[str, Any] | None:
@@ -414,15 +411,14 @@ def display_name(run_dir: Path, _label_row: dict[str, Any] | None = None) -> str
 
 
 def _copy_sdk_jsonl_bundle(run_dir: Path, run_root: Path) -> None:
-    for name in (SDK_LABELS_JSONL, SDK_EMBEDDINGS_JSONL, SDK_VIDEOS_JSONL):
+    labels = run_dir / SDK_LABELS_JSONL
+    if not labels.is_file():
+        raise FileNotFoundError(f"missing {SDK_LABELS_JSONL} under {run_dir}")
+    shutil.copy2(labels, run_root / SDK_LABELS_JSONL)
+    for name in (SDK_EMBEDDINGS_JSONL, SDK_VIDEOS_JSONL, "bboxes.jsonl", "asr.jsonl", "clips_index.jsonl"):
         src = run_dir / name
-        if not src.is_file():
-            raise FileNotFoundError(f"missing {name} under {run_dir}")
-        shutil.copy2(src, run_root / name)
-    for optional in ("bboxes.jsonl", "asr.jsonl", "clips_index.jsonl"):
-        src = run_dir / optional
         if src.is_file():
-            shutil.copy2(src, run_root / optional)
+            shutil.copy2(src, run_root / name)
 
 
 def _write_sdk_run_json(
@@ -930,18 +926,19 @@ def _write_ai_artifacts(
     )
 
     vector = embed_row.get("embedding") or embed_row.get("vector") or []
-    _write_json(
-        ai_dir / "embedding.json",
-        {
-            "clip_id": clip_id,
-            "run_id": run_id,
-            "dim": len(vector),
-            "model_version": embed_model,
-            "aggregation_method": "clip_omni",
-            "vector": list(vector),
-            "created_at": _utc_now(),
-        },
-    )
+    if vector:
+        _write_json(
+            ai_dir / "embedding.json",
+            {
+                "clip_id": clip_id,
+                "run_id": run_id,
+                "dim": len(vector),
+                "model_version": embed_model,
+                "aggregation_method": "clip_omni",
+                "vector": list(vector),
+                "created_at": _utc_now(),
+            },
+        )
     _write_json(
         ai_dir / "infer_meta.json",
         {
@@ -1050,12 +1047,12 @@ def import_run(
 ) -> dict[str, Any]:
     labels_path = run_dir / "labels.jsonl"
     embed_path = run_dir / "fusion_embeddings.jsonl"
-    if not labels_path.is_file() or not embed_path.is_file():
-        raise FileNotFoundError(f"missing labels/embed jsonl under {run_dir}")
+    if not labels_path.is_file():
+        raise FileNotFoundError(f"missing labels.jsonl under {run_dir}")
 
     run_dir_name = run_dir.name
     label_row = _read_jsonl_first(labels_path)
-    embed_row = _read_jsonl_first(embed_path)
+    embed_row: dict[str, Any] = _read_jsonl_first(embed_path) if embed_path.is_file() else {}
     flat_labels = labels_to_clip_dict(label_row.get("labels") or {})
 
     clip_id = fixed_clip_id or clip_id_from_bag(run_dir, label_row)
@@ -1415,7 +1412,7 @@ def main() -> int:
             vid = run_dir / "clip_videos.jsonl"
             work_mp4 = _clip_output_dir(run_dir)
             has_work = work_mp4.is_dir() and any(work_mp4.glob("clip_preview_camera*.mp4"))
-            ok = "OK" if lab.is_file() and (run_dir / "fusion_embeddings.jsonl").is_file() else "MISSING"
+            ok = "OK" if lab.is_file() else "MISSING"
             media = "sdk-multicam" if vid.is_file() or has_work else "frames?"
             print(f"  [{ok}|{media}] {run_dir.relative_to(data_root)}")
         print(f"\nTotal: {len(runs)} run(s)")

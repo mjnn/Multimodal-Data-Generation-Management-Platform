@@ -1458,3 +1458,13 @@ body {
   color: var(--color-ink-tertiary);
   font-variant-numeric: tabular-nums;
 }
+
+/* Lake products: long paths / CJK lineage must not wrap one character per line. */
+.lake-products-table .ant-table-cell {
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.lake-products-table .ant-table-cell-ellipsis {
+  white-space: nowrap;
+}

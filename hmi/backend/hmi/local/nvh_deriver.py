@@ -327,10 +327,12 @@ def _correlation_matrix(pcm_pa: np.ndarray, channels: list[str]) -> list[list[fl
     n = min(pcm_pa.shape[1], len(channels))
     if n == 0:
         return []
+    if n == 1:
+        return [[1.0]]
     data = pcm_pa[:, :n].astype(np.float64)
     if data.shape[0] < 2:
         return [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
-    c = np.corrcoef(data, rowvar=False)
+    c = np.atleast_2d(np.corrcoef(data, rowvar=False))
     return [[float(c[i, j]) for j in range(n)] for i in range(n)]
 
 
@@ -695,6 +697,8 @@ def apply_nvh_labels_to_facts(
     label_source = "derive"
     if meta.get("ai_label_version"):
         label_source = "derive+ai_sem"
+    if "human" in str(meta.get("label_source") or "") and "human" not in label_source:
+        label_source = f"{label_source}+human"
     upsert_clip_label(
         clip_id,
         run_id,

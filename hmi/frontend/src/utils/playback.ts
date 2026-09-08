@@ -1,5 +1,17 @@
 /** Default: treat cursor within 100ms of end as "at end" for replay-on-play. */
 export const NEAR_END_NS = 100_000_000
+export const PLAYHEAD_TICK_S = 0.1
+
+/** Advance a visual playhead one tick. Callers must pass the latest prev, not a frozen start. */
+export function advancePlayhead(
+  prevS: number,
+  durationS: number,
+  dtS: number = PLAYHEAD_TICK_S,
+): { nextS: number; ended: boolean } {
+  const cap = Math.max(0, durationS)
+  const nextS = Math.min(cap, Math.max(0, prevS) + dtS)
+  return { nextS, ended: cap > 0 && nextS >= cap }
+}
 
 export function isNearClipEnd(
   cursorNs: number,

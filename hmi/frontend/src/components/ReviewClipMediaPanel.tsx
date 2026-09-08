@@ -6,6 +6,7 @@ import type { ReviewTarget, ReviewV2ClipCard as ClipCard, ReviewV2Task } from '.
 import { ClipMediaPanel } from './ClipMediaPanel'
 import type { ClipTimelineState } from './ClipTimelinePanel'
 import { clipDisplayName } from '../utils/clipDisplay'
+import { buildClipExplorerHref } from '../utils/clipExplorerHref'
 import { useDataTypeRecipe } from '../context/DataTypeWorkspaceContext'
 import { resolveDetailCards } from '../utils/overviewLayout'
 
@@ -37,20 +38,21 @@ function renderGateTags(card: ClipCard) {
   return null
 }
 
-function explorerHref(task: ReviewV2Task): string {
-  const params = new URLSearchParams()
-  params.set('run_id', task.run_id)
+function explorerHref(task: ReviewV2Task, dataTypeId?: string | null): string {
   const t = parseAnchorTimestampNs(task.clip_card.anchor_timestamp_ns)
-  if (t != null) params.set('t', String(t))
-  return `/clips/${encodeURIComponent(task.clip_id)}?${params}`
+  return buildClipExplorerHref(task.clip_id, {
+    runId: task.run_id,
+    dataTypeId,
+    t: t ?? null,
+  })
 }
 
 export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
   const { clip_card: card } = task
   const recipe = useDataTypeRecipe()
-  const detailIds = resolveDetailCards(recipe).map((c) => c.widget_id)
-  const layoutNvh = detailIds.includes('nvh_spectrum')
-  const layoutLabelsTree = detailIds.includes('labels_tree')
+  const detailCards = resolveDetailCards(recipe)
+  const layoutNvh = detailCards.some((c) => c.widget_id === 'spectrum_timeline')
+  const layoutLabelsTree = detailCards.some((c) => c.widget_id === 'labels_tree')
   const labelsJson =
     (card as ClipCard & { labels_json?: Record<string, unknown> }).labels_json ?? {}
   const [liveHasBbox, setLiveHasBbox] = useState<boolean | null>(null)
@@ -90,7 +92,7 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
           description="媒体区为四通道梅尔频谱 + SPL + 波形共用时间轴。客观标签只读；语义标签编辑保存待后续工单。"
           data-testid="review-nvh-notice"
           action={
-            <Link to={explorerHref(task)} target="_blank" rel="noreferrer">
+            <Link to={explorerHref(task, recipe?.id)} target="_blank" rel="noreferrer">
               <Button size="small" icon={<ExportOutlined />} data-testid="review-open-explorer">
                 打开总览
               </Button>
@@ -105,7 +107,7 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
           description="切换到「带可编辑框」按帧新建/删除/调整与改识别内容，保存本帧写回 bboxes.jsonl。「原图参考」无叠加框。"
           data-testid="review-bbox-edit-notice"
           action={
-            <Link to={explorerHref(task)} target="_blank" rel="noreferrer">
+            <Link to={explorerHref(task, recipe?.id)} target="_blank" rel="noreferrer">
               <Button size="small" icon={<ExportOutlined />} data-testid="review-open-explorer">
                 打开总览
               </Button>
@@ -120,7 +122,7 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
           description="本任务校核目标为标签。可在「带可编辑框」查看/改框；若需框校核任务，请派发时选择校核目标「识别框」。总览「带识别框预览」为只读 jsonl 叠加。"
           data-testid="review-bbox-preview-notice"
           action={
-            <Link to={explorerHref(task)} target="_blank" rel="noreferrer">
+            <Link to={explorerHref(task, recipe?.id)} target="_blank" rel="noreferrer">
               <Button size="small" icon={<ExportOutlined />} data-testid="review-open-explorer">
                 打开总览
               </Button>
@@ -129,7 +131,7 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
         />
       ) : (
         <div style={{ textAlign: 'right' }}>
-          <Link to={explorerHref(task)} target="_blank" rel="noreferrer">
+          <Link to={explorerHref(task, recipe?.id)} target="_blank" rel="noreferrer">
             <Button size="small" type="link" icon={<ExportOutlined />} data-testid="review-open-explorer">
               打开总览
             </Button>
@@ -147,7 +149,7 @@ export function ReviewClipMediaPanel({ task, reviewTargets }: Props) {
         testId="review-clip-card"
         onTimelineStateChange={onTimelineStateChange}
         onMediaModeChange={onMediaModeChange}
-        detailWidgetIds={detailIds}
+        detailCards={detailCards}
         metaTags={
           <>
             {renderGateTags(card)}

@@ -37,7 +37,7 @@ def content_hash_from_clip_id(clip_id: str) -> str:
 
 def sdk_bundle_present(clip_id: str, run_id: str) -> bool:
     root = artifact_path(clip_id, run_id, "")
-    return (root / SDK_LABELS_JSONL).is_file() and (root / SDK_EMBEDDINGS_JSONL).is_file()
+    return (root / SDK_LABELS_JSONL).is_file()
 
 
 def load_sdk_run_json(clip_id: str, run_id: str) -> dict[str, Any] | None:
@@ -209,14 +209,15 @@ def seed_sqlite_from_sdk_parsed(
         },
     )
     vector = embed_row.get("embedding") or embed_row.get("vector") or []
-    upsert_clip_embedding(
-        clip_id,
-        run_id,
-        ds=ds,
-        vector=list(vector),
-        model_version=str(embed_row.get("model") or "qwen3-vl-embedding"),
-        aggregation_method="clip_native",
-    )
+    if vector:
+        upsert_clip_embedding(
+            clip_id,
+            run_id,
+            ds=ds,
+            vector=list(vector),
+            model_version=str(embed_row.get("model") or "qwen3-vl-embedding"),
+            aggregation_method="clip_native",
+        )
 
 
 def ingest_sdk_run_local(clip_id: str, run_id: str, ds: str) -> dict[str, bool]:
@@ -224,11 +225,11 @@ def ingest_sdk_run_local(clip_id: str, run_id: str, ds: str) -> dict[str, bool]:
     root = artifact_path(clip_id, run_id, "")
     labels_path = root / SDK_LABELS_JSONL
     embed_path = root / SDK_EMBEDDINGS_JSONL
-    if not labels_path.is_file() or not embed_path.is_file():
+    if not labels_path.is_file():
         return {"labels": False, "embedding": False}
 
     label_row = read_jsonl_first(labels_path)
-    embed_row = read_jsonl_first(embed_path)
+    embed_row = read_jsonl_first(embed_path) if embed_path.is_file() else {}
     run_doc = load_sdk_run_json(clip_id, run_id) or {}
 
     clip_dir_name = str(run_doc.get("source_run_dir") or clip_id)
@@ -246,4 +247,7 @@ def ingest_sdk_run_local(clip_id: str, run_id: str, ds: str) -> dict[str, bool]:
         label_row=label_row,
         embed_row=embed_row,
     )
-    return {"labels": True, "embedding": True}
+    return {
+        "labels": True,
+        "embedding": bool(embed_row.get("embedding") or embed_row.get("vector")),
+    }

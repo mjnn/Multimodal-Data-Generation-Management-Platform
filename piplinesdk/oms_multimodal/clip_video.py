@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -53,19 +54,82 @@ class ClipVideoConfig:
         return asdict(self)
 
 
-def _resolve_ffmpeg() -> str:
-    exe = shutil.which("ffmpeg")
-    if exe:
-        return exe
+def _bundled_ffmpeg_exe() -> str | None:
+    """Return imageio-ffmpeg's shipped binary if the file exists (no -version probe)."""
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return None
+    binaries = Path(imageio_ffmpeg.__file__).resolve().parent / "binaries"
+    if not binaries.is_dir():
+        return None
+    if sys.platform.startswith("win"):
+        candidates = sorted(binaries.glob("ffmpeg*.exe"))
+    else:
+        candidates = [
+            p
+            for p in sorted(binaries.glob("ffmpeg*"))
+            if p.is_file() and p.suffix.lower() not in {".md", ".txt", ".py"}
+        ]
+    for cand in candidates:
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+def resolve_ffmpeg() -> str:
+    """Locate ffmpeg: IMAGEIO_FFMPEG_EXE → PATH → bundled imageio-ffmpeg binary.
+
+    ``imageio_ffmpeg.get_ffmpeg_exe()`` can raise RuntimeError even when the
+    bundled file exists (Windows ``_is_valid_exe`` / cached None). Encoding
+    only needs a filesystem path.
+    """
+    env = (os.getenv("IMAGEIO_FFMPEG_EXE") or "").strip()
+    if env:
+        env_path = Path(env)
+        if env_path.is_file():
+            return str(env_path)
+        which_env = shutil.which(env)
+        if which_env:
+            return which_env
+
+    which = shutil.which("ffmpeg")
+    if which:
+        return which
+
+    bundled = _bundled_ffmpeg_exe()
+    if bundled:
+        os.environ.setdefault("IMAGEIO_FFMPEG_EXE", bundled)
+        return bundled
+
     try:
         import imageio_ffmpeg
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        exe = str(imageio_ffmpeg.get_ffmpeg_exe() or "").strip()
     except ImportError as exc:
         raise RuntimeError(
             "ffmpeg not found on PATH and imageio-ffmpeg is not installed. "
             "Install imageio-ffmpeg or add ffmpeg to PATH."
         ) from exc
+    except Exception:
+        exe = ""
+    if exe:
+        exe_path = Path(exe)
+        if exe_path.is_file():
+            return str(exe_path)
+        found = shutil.which(exe)
+        if found:
+            return found
+
+    raise RuntimeError(
+        "ffmpeg not found on PATH and imageio-ffmpeg bundled binary is unusable. "
+        "Install ffmpeg, pip install imageio-ffmpeg, or set IMAGEIO_FFMPEG_EXE "
+        "to the ffmpeg executable."
+    )
+
+
+def _resolve_ffmpeg() -> str:
+    return resolve_ffmpeg()
 
 
 def _video_source_frames(clip: "Clip") -> list:

@@ -1,0 +1,25 @@
+---
+description: 标签树删除后可复用 version_code；用户归档让出名，被顶替的已发布版仍占名
+globs: hmi/backend/hmi/taxonomy_db.py,hmi/frontend/src/pages/TaxonomyPage.tsx,hmi/backend/hmi/taxonomy/**
+alwaysApply: false
+---
+
+# 标签树版本号占用
+
+删除在库里是 `status=archived`，`version_code` 仍 UNIQUE。列表默认不展示用户删除的树，但同名新建会 409。
+
+## 必须
+
+- 唯一性只挡 **仍占用名称** 的行：draft / published / proposal，以及 `archive_reason=superseded`
+- 用户删除（`archive_reason=user` 或非 superseded 的 archived）在 **create_version** 时改名为 `{code}__archived_{id前缀}`，放出原名
+- `get_version_by_code` 不要命中用户已删的行，否则 YAML 导入也会报「已存在」
+- 历史绑定继续用 **version id**，不要靠已释放的 code 找回旧树
+
+## 禁止
+
+- 硬删归档行来腾名称（血缘还要用 id）
+- 创建时改掉 `superseded` 旧发布版的 `version_code`（Hub 列表仍展示它们）
+
+## 来源
+
+沉淀自 session 2026-09-04；`taxonomy_db.py` create_version / archive_version

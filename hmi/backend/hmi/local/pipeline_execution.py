@@ -275,12 +275,14 @@ def list_executions(*, page: int = 1, page_size: int = 10) -> dict[str, Any]:
         (page_size, offset),
     )
 
-    from hmi.config import pipeline_step_label, sdk_pipeline_step_order
     from hmi.db import normalize_pipeline_status
+    from hmi.platform.progress_steps import expand_progress_steps_for_type
 
+    graph_cache: dict[str, dict[str, Any] | None] = {}
     items: list[dict[str, Any]] = []
     for row in rows:
         run_id = str(row["run_id"])
+        data_type_id = str(row.get("data_type_id") or "").strip() or None
         run_rows = store.query(
             """
             SELECT r.clip_id, r.ds, r.status, r.started_at, r.updated_at, c.clip_dir_name
@@ -305,21 +307,19 @@ def list_executions(*, page: int = 1, page_size: int = 10) -> dict[str, Any]:
                 """,
                 (run_id, clip_id, ds),
             )
-            step_map = {str(s["step_id"]): s for s in step_rows}
-            order = sdk_pipeline_step_order(local=True)
-            steps = [
-                {
-                    "step_id": sid,
-                    "label": pipeline_step_label(sid, local=True),
-                    "status": normalize_pipeline_status(
-                        str((step_map.get(sid) or {}).get("status") or "pending")
-                    ),
-                    "error_message": str((step_map.get(sid) or {}).get("error_message") or "").strip()
-                    or None,
+            step_map = {
+                str(s["step_id"]): {
+                    "status": normalize_pipeline_status(str(s.get("status") or "pending")),
+                    "error_message": str(s.get("error_message") or "").strip() or None,
                 }
-                for sid in order
-                if sid not in ("job0_discover", "sdk_discover")
-            ]
+                for s in step_rows
+            }
+            steps = expand_progress_steps_for_type(
+                data_type_id=data_type_id,
+                step_map=step_map,
+                local=True,
+                graph_cache=graph_cache,
+            )
             clip_items.append(
                 {
                     "clip_id": clip_id,
@@ -338,7 +338,7 @@ def list_executions(*, page: int = 1, page_size: int = 10) -> dict[str, Any]:
                 "label": str(row.get("label") or ""),
                 "started_at": str(row.get("started_at") or ""),
                 "created_at": str(row.get("created_at") or ""),
-                "data_type_id": str(row.get("data_type_id") or "").strip() or None,
+                "data_type_id": data_type_id,
                 "pipeline_status": _aggregate_status(statuses),
                 "clip_count": len(clip_items),
                 "clips": clip_items,

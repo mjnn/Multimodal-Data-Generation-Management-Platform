@@ -13,8 +13,10 @@ from hmi.audit import append_audit_log
 from hmi.labels_util import labels_preview, match_label_filters, parse_labels_json
 from hmi.review.candidates import list_review_task_candidates, parse_label_filters_param
 from hmi.review.enqueue import enqueue_clip, enqueue_clips
+from hmi.review.enum_tree import find_incomplete_enum_tree_labels
 from hmi.review.field_review_db import delete_field_reviews
 from hmi.review.oss_export import export_review_to_oss
+from hmi.taxonomy_db import list_nodes
 from hmi.review_db import (
     REVIEW_STATUSES,
     count_reviews,
@@ -245,6 +247,24 @@ def api_review_save(
             status_code=404,
             detail={"code": "404_NOT_FOUND", "message": "review not found"},
         )
+    if body.review_status == "reviewed":
+        version_id = existing.get("taxonomy_version_id")
+        labels = body.labels_json if isinstance(body.labels_json, dict) else {}
+        if version_id and isinstance(labels, dict):
+            incomplete = find_incomplete_enum_tree_labels(
+                labels,
+                list_nodes(str(version_id), active_only=False),
+            )
+            if incomplete:
+                first = incomplete[0]
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "422_VALIDATION",
+                        "message": first.get("message")
+                        or f"嵌套枚举未完成：{first.get('label_id')}",
+                    },
+                )
     try:
         review = update_review(
             clip_id,
@@ -256,6 +276,18 @@ def api_review_save(
         )
     except ValueError as exc:
         raise _review_error(exc) from exc
+    try:
+        from hmi.review.nvh_writeback import writeback_nvh_l6
+
+        writeback_nvh_l6(
+            clip_id=clip_id,
+            run_id=resolved_run,
+            labels_json=body.labels_json if isinstance(body.labels_json, dict) else {},
+        )
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning("nvh L6 writeback failed: %s", exc)
     try:
         from hmi.services.clips_local import label_map_cache_clear
 

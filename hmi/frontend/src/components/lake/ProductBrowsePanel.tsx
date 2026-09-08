@@ -2,6 +2,7 @@ import { Button, Space, Table, Tag, Typography, message } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api'
 import type { PlatformProductRecord } from '../../api/types'
+import { useDataSourceMode } from '../../context/DataSourceModeContext'
 import { ContentCard } from '../ui'
 import { apiErrorMessage } from '../../utils/apiError'
 
@@ -11,7 +12,16 @@ function shortId(id: string | null | undefined, keep = 10): string {
   return v.length > keep + 2 ? `${v.slice(0, keep)}…` : v
 }
 
+function EllipsisCell({ text, type }: { text: string; type?: 'secondary' }) {
+  return (
+    <Typography.Text type={type} ellipsis={{ tooltip: text }} style={{ maxWidth: '100%' }}>
+      {text}
+    </Typography.Text>
+  )
+}
+
 export function ProductBrowsePanel() {
+  const { dataRevision } = useDataSourceMode()
   const [items, setItems] = useState<PlatformProductRecord[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -29,7 +39,7 @@ export function ProductBrowsePanel() {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, dataRevision])
 
   return (
     <ContentCard>
@@ -49,43 +59,56 @@ export function ProductBrowsePanel() {
           </Typography.Text>
         ) : (
           <Table
+            className="lake-products-table"
             size="small"
             rowKey="cache_key"
             loading={loading}
             pagination={{ pageSize: 20, hideOnSinglePage: true }}
             dataSource={items}
+            tableLayout="fixed"
+            scroll={{ x: 1080 }}
             columns={[
               {
                 title: '产物',
-                width: 180,
-                render: (_: unknown, row: PlatformProductRecord) => (
-                  <Space direction="vertical" size={0}>
-                    <Typography.Text>{row.artifact_path || row.product_type || shortId(row.cache_key)}</Typography.Text>
-                    {row.skipped ? <Tag>缓存命中</Tag> : null}
-                  </Space>
-                ),
+                width: 220,
+                ellipsis: true,
+                render: (_: unknown, row: PlatformProductRecord) => {
+                  const path = row.artifact_path || row.product_type || shortId(row.cache_key)
+                  return (
+                    <Space direction="vertical" size={0} style={{ maxWidth: '100%' }}>
+                      <EllipsisCell text={path} />
+                      {row.skipped ? <Tag>缓存命中</Tag> : null}
+                    </Space>
+                  )
+                },
               },
               {
                 title: '步骤',
-                width: 160,
+                width: 140,
+                ellipsis: true,
                 render: (_: unknown, row: PlatformProductRecord) => (
-                  <Space direction="vertical" size={0}>
-                    <Typography.Text>{row.op_title || row.op_id}</Typography.Text>
-                    <Typography.Text type="secondary">{row.op_id}</Typography.Text>
+                  <Space direction="vertical" size={0} style={{ maxWidth: '100%' }}>
+                    <EllipsisCell text={row.op_title || row.op_id} />
+                    <EllipsisCell text={row.op_id} type="secondary" />
                   </Space>
                 ),
               },
               {
                 title: '管线运行',
-                width: 200,
+                width: 180,
+                ellipsis: true,
                 render: (_: unknown, row: PlatformProductRecord) =>
                   row.run_id ? (
-                    <Space direction="vertical" size={0}>
-                      <Typography.Text copyable={{ text: row.run_id }}>{shortId(row.run_id, 12)}</Typography.Text>
-                      <Typography.Text type="secondary">
-                        {row.data_type_title || row.data_type_id || '未知类型'}
-                        {row.run_status ? ` · ${row.run_status}` : ''}
+                    <Space direction="vertical" size={0} style={{ maxWidth: '100%' }}>
+                      <Typography.Text copyable={{ text: row.run_id }} ellipsis={{ tooltip: row.run_id }}>
+                        {shortId(row.run_id, 12)}
                       </Typography.Text>
+                      <EllipsisCell
+                        text={`${row.data_type_title || row.data_type_id || '未知类型'}${
+                          row.run_status ? ` · ${row.run_status}` : ''
+                        }`}
+                        type="secondary"
+                      />
                     </Space>
                   ) : (
                     <Typography.Text type="secondary">未关联运行</Typography.Text>
@@ -93,33 +116,34 @@ export function ProductBrowsePanel() {
               },
               {
                 title: '数据源',
-                width: 180,
+                width: 160,
+                ellipsis: true,
                 render: (_: unknown, row: PlatformProductRecord) =>
                   row.sources?.length ? (
-                    <Space wrap size={[4, 4]}>
-                      {row.sources.map((src) => (
-                        <Tag key={src.source_id}>{src.filename || shortId(src.source_id)}</Tag>
-                      ))}
-                    </Space>
+                    <EllipsisCell text={row.sources.map((src) => src.filename || shortId(src.source_id)).join('、')} />
                   ) : (
                     <Typography.Text type="secondary">未知</Typography.Text>
                   ),
               },
               {
                 title: '产物血缘',
+                width: 280,
+                ellipsis: true,
                 render: (_: unknown, row: PlatformProductRecord) => (
-                  <Typography.Paragraph
-                    style={{ marginBottom: 0 }}
+                  <Typography.Text
+                    ellipsis={{ tooltip: row.lineage }}
+                    style={{ maxWidth: '100%' }}
                     data-testid={`lake-product-lineage-${row.cache_key}`}
                   >
                     {row.lineage}
-                  </Typography.Paragraph>
+                  </Typography.Text>
                 ),
               },
               {
                 title: '时间',
                 dataIndex: 'created_at',
-                width: 180,
+                width: 168,
+                ellipsis: true,
                 render: (v: string | null | undefined) => v || '—',
               },
             ]}

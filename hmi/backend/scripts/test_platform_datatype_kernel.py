@@ -17,9 +17,14 @@ class TestRecipeValidation(unittest.TestCase):
         from hmi.platform.recipe import seed_recipes
 
         seeds = seed_recipes()
-        self.assertEqual(set(seeds), {"oms_cabin", "ivi_ui_stub", "audio_array_spec"})
+        self.assertEqual(
+            set(seeds),
+            {"oms_cabin", "ivi_ui_stub", "audio_array_spec", "audio_defect"},
+        )
         self.assertEqual(seeds["oms_cabin"]["taxonomy_id"], "oms")
         self.assertEqual(seeds["ivi_ui_stub"]["taxonomy_id"], "ivi_ui_stub")
+        self.assertEqual(seeds["audio_defect"]["taxonomy_id"], "audio_defect")
+        self.assertEqual(seeds["audio_defect"]["taxonomy_version_code"], "audio_defect-v1")
         self.assertNotEqual(seeds["oms_cabin"]["taxonomy_id"], seeds["ivi_ui_stub"]["taxonomy_id"])
         self.assertTrue(seeds["ivi_ui_stub"]["stages"]["label"]["enabled"])
         self.assertTrue(seeds["ivi_ui_stub"]["bbox"]["enabled"])
@@ -57,24 +62,36 @@ class TestRecipeValidation(unittest.TestCase):
 
         seeds = seed_recipes()
         oms = seeds["oms_cabin"]["overview"]
-        self.assertEqual(oms["preset"], "cabin_timeline")
+        self.assertEqual(oms["preset"], "custom")
         self.assertEqual([c["widget_id"] for c in oms["list"]], ["clip_metrics", "label_search", "clip_table"])
         self.assertEqual(
             [c["widget_id"] for c in oms["detail"]],
-            ["labels_tree", "cabin_multicam", "asr_panel"],
+            ["video_timeline"] * 4 + ["asr_panel", "labels_tree"],
         )
-        nvh = seeds["audio_array_spec"]["overview"]
-        self.assertEqual([c["widget_id"] for c in nvh["list"]], ["clip_metrics", "nvh_spl_column", "clip_table"])
-        self.assertEqual([c["widget_id"] for c in nvh["detail"]], ["labels_tree", "nvh_spectrum"])
+        nvh = seeds["audio_array_spec"]["overview"]["detail"]
+        self.assertEqual(
+            [c["widget_id"] for c in nvh],
+            ["spectrum_timeline"] * 4 + ["labels_tree"],
+        )
+        self.assertEqual(seeds["audio_array_spec"]["overview_view"], "custom")
+        mel = next(n for n in seeds["audio_array_spec"]["graph"]["nodes"] if n["key"] == "mel_spectrogram")
+        self.assertEqual(int(mel["params"]["channel_count"]), 4)
         ivi = seeds["ivi_ui_stub"]["overview"]
-        self.assertEqual([c["widget_id"] for c in ivi["detail"]], ["labels_tree", "frame_gallery_bbox"])
+        self.assertEqual([c["widget_id"] for c in ivi["detail"]], ["frame_gallery_bbox", "labels_tree"])
+        defect = seeds["audio_defect"]["overview"]
+        self.assertEqual([c["widget_id"] for c in defect["list"]], [])
+        self.assertEqual([c["widget_id"] for c in defect["detail"]], ["spectrum_timeline", "labels_tree"])
+        defect_ops = {n["op_id"] for n in seeds["audio_defect"]["graph"]["nodes"]}
+        self.assertIn("label_tree_input", defect_ops)
+        self.assertIn("json_extract", defect_ops)
+        self.assertIn("if", defect_ops)
 
     def test_unknown_overview_widget_rejected(self) -> None:
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
 
         bad = dict(SEED_RECIPES["oms_cabin"])
         bad["overview"] = {
-            "preset": "cabin_timeline",
+            "preset": "custom",
             "list": [{"key": "x", "widget_id": "not_a_widget", "bindings": {}}],
             "detail": [],
         }
@@ -87,8 +104,8 @@ class TestRecipeValidation(unittest.TestCase):
 
         bad = dict(SEED_RECIPES["oms_cabin"])
         bad["overview"] = {
-            "preset": "cabin_timeline",
-            "list": [{"key": "x", "widget_id": "cabin_multicam", "bindings": {}}],
+            "preset": "custom",
+            "list": [{"key": "x", "widget_id": "video_timeline", "bindings": {}}],
             "detail": [],
         }
         with self.assertRaises(ValueError) as ctx:
@@ -100,16 +117,28 @@ class TestRecipeValidation(unittest.TestCase):
 
         rec = dict(SEED_RECIPES["oms_cabin"])
         rec["overview"] = {
-            "preset": "cabin_timeline",
+            "preset": "custom",
             "list": [{"key": "t", "widget_id": "clip_table", "bindings": {}}],
-            "detail": [{"key": "n", "widget_id": "nvh_spectrum", "bindings": {}}],
+            "detail": [{"key": "n", "widget_id": "spectrum_timeline", "bindings": {}}],
         }
         out = validate_recipe(rec)
         self.assertEqual([c["widget_id"] for c in out["overview"]["list"]], ["clip_table"])
         self.assertEqual(
             [c["widget_id"] for c in out["overview"]["detail"]],
-            ["labels_tree", "nvh_spectrum"],
+            ["spectrum_timeline"],
         )
+
+    def test_legacy_labels_tree_card_still_valid(self) -> None:
+        from hmi.platform.recipe import SEED_RECIPES, validate_recipe
+
+        rec = dict(SEED_RECIPES["oms_cabin"])
+        rec["overview"] = {
+            "preset": "custom",
+            "list": [{"key": "t", "widget_id": "clip_table", "bindings": {}}],
+            "detail": [{"key": "lt", "widget_id": "labels_tree", "bindings": {}}],
+        }
+        out = validate_recipe(rec)
+        self.assertEqual([c["widget_id"] for c in out["overview"]["detail"]], ["labels_tree"])
 
     def test_vl_bbox_rejected(self) -> None:
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe

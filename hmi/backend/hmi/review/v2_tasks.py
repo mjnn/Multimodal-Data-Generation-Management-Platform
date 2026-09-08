@@ -392,26 +392,18 @@ def _collect_label_ids(view: dict[str, Any]) -> list[str]:
 
     labels = view.get("labels_json") or {}
 
-    return sorted(str(k) for k in labels.keys())
+    ids = sorted(str(k) for k in labels.keys())
+    from hmi.review.nvh_writeback import queue_label_ids
+
+    return queue_label_ids(ids)
 
 
 
 
 
 def _active_label_candidate_pairs() -> list[dict[str, str]]:
-    active_rows = store.query(
-        "SELECT clip_id, active_run_id FROM dim_clip "
-        "WHERE active_run_id IS NOT NULL AND TRIM(active_run_id) != ''"
-    )
-    active = {(str(r["clip_id"]), str(r["active_run_id"])) for r in active_rows}
-    if not active:
-        return list_clip_label_candidates()
-    out: list[dict[str, str]] = []
-    for pair in list_clip_label_candidates():
-        cid, rid = str(pair["clip_id"]), str(pair["run_id"])
-        if (cid, rid) in active:
-            out.append({"clip_id": cid, "run_id": rid})
-    return out
+    """Every labeled (clip, run) branch — not only dim_clip.active_run_id."""
+    return list_clip_label_candidates()
 
 
 def build_pending_tasks(

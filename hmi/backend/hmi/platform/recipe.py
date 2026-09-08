@@ -1,7 +1,10 @@
 """DataType 配方校验与内置种子。
 
-种子：oms_cabin（舱内 OMS）、ivi_ui_stub（IVI 占位）、audio_array_spec（阵列 NVH）。
+种子：oms_cabin（舱内 OMS）、ivi_ui_stub（IVI 占位）、audio_array_spec（阵列 NVH）、
+audio_defect（问题音频：wav+JSON tag → if → 标签树输入）。
 `audio_array_spec.stages.label.model` 现为 nvh_sem_ast；taxonomy audio_nvh-v2 保持 draft，禁止 publish。
+audio_defect-v1 同样保持 draft，勿发布以免顶掉 OMS label_tree_baseline。
+配方图基线来自线上 DataType ``test``（2026-09-08）。
 bbox 检测器只允许 opencv/yolo，拒绝 vl。
 """
 
@@ -13,6 +16,7 @@ from typing import Any
 from hmi.platform.file_kinds import (
     AUDIO_EXTS,
     IMAGE_EXTS,
+    PARSE_BAG_MODALITIES,
     VIDEO_EXTS,
     normalize_parse_bag_modality,
     normalize_source_kind,
@@ -32,6 +36,8 @@ STAGE_KEYS = ("label", "embed")
 OMS_TAXONOMY_ID = "oms"
 IVI_TAXONOMY_ID = "ivi_ui_stub"
 AUDIO_NVH_TAXONOMY_ID = "audio_nvh"
+AUDIO_DEFECT_TAXONOMY_ID = "audio_defect"
+AUDIO_DEFECT_VERSION_CODE = "audio_defect-v1"
 
 
 def _require_str(recipe: dict[str, Any], key: str) -> str:
@@ -254,6 +260,10 @@ def validate_recipe(recipe: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(inputs, list):
                 raise ValueError(f"recipe.stages.{key}.inputs must be a list")
             stages[key]["inputs"] = [str(x).strip() for x in inputs if str(x).strip()]
+        if key == "label":
+            from hmi.platform.label_model_params import label_stage_extras
+
+            stages[key].update(label_stage_extras(raw))
     out["stages"] = stages
 
     bbox = out.get("bbox") or {}
@@ -278,16 +288,586 @@ def validate_recipe(recipe: dict[str, Any]) -> dict[str, Any]:
         out["preprocess"] = proj["preprocess"]
         out["products"] = proj["products"]
         out["stages"] = proj["stages"]
-        # keep label.model from original stages if projected enabled
-        prev_model = ((recipe.get("stages") or {}).get("label") or {}).get("model")
-        if prev_model and out["stages"]["label"].get("enabled"):
-            out["stages"]["label"]["model"] = prev_model
+        # Graph node params are source of truth; fall back to previous stages.label extras.
+        prev_label = ((recipe.get("stages") or {}).get("label") or {})
+        if out["stages"]["label"].get("enabled") and prev_label:
+            if prev_label.get("model") and not out["stages"]["label"].get("model"):
+                out["stages"]["label"]["model"] = prev_label["model"]
+            from hmi.platform.label_model_params import label_stage_extras
+
+            extras = label_stage_extras(out["stages"]["label"])
+            if not extras:
+                extras = label_stage_extras(prev_label)
+            out["stages"]["label"].update(extras)
         out["bbox"] = proj["bbox"]
         out["require_any_kinds"] = proj["require_any_kinds"]
     out["overview"] = hydrate_overview(out)
     if not str(out.get("overview", {}).get("preset") or "").strip():
         out["overview"]["preset"] = view
     return out
+
+
+def _gnode(
+    key: str,
+    ntype: str,
+    op_id: str,
+    title: str,
+    x: float,
+    y: float,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "type": ntype,
+        "op_id": op_id,
+        "title": title,
+        "params": dict(params or {}),
+        "position": {"x": x, "y": y},
+    }
+
+
+def _gedge(src: str, tgt: str, source_port: str = "out", target_port: str = "in") -> dict[str, Any]:
+    return {
+        "id": f"{src}->{tgt}",
+        "source": src,
+        "source_port": source_port,
+        "target": tgt,
+        "target_port": target_port,
+    }
+
+
+def _list_cards(*widget_ids: str) -> list[dict[str, Any]]:
+    return [{"key": f"list-{wid}", "widget_id": wid, "bindings": {}} for wid in widget_ids]
+
+
+def _spectrum_cards(step_key: str, n: int, sync: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "key": f"detail-spectrum-ch{i}",
+            "widget_id": "spectrum_timeline",
+            "sync_group": sync,
+            "bindings": {
+                "in": {"kind": "upstream", "step_key": step_key, "port_id": f"ch{i}"},
+            },
+        }
+        for i in range(1, n + 1)
+    ]
+
+
+def _video_cards(step_key: str, n: int, sync: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "key": f"detail-video-ch{i}",
+            "widget_id": "video_timeline",
+            "sync_group": sync,
+            "bindings": {
+                "in": {"kind": "upstream", "step_key": step_key, "port_id": f"ch{i}"},
+            },
+        }
+        for i in range(1, n + 1)
+    ]
+
+
+def _labels_card() -> dict[str, Any]:
+    return {"key": "detail-labels", "widget_id": "labels_tree", "bindings": {}}
+
+
+def _oms_cabin_graph() -> dict[str, Any]:
+    """Authored cabin DAG: catalog/palette ops only (no linear prep-N hydrate aliases)."""
+    parse = OPERATORS["parse_bag"]
+    extract = OPERATORS["extract_frames"]
+    encode = OPERATORS["encode_preview"]
+    asr = OPERATORS["transcribe"]
+    embed = STAGE_OPERATORS["embed"]
+    label = STAGE_OPERATORS["label"]
+    modalities = list(PARSE_BAG_MODALITIES)
+    return {
+        "nodes": [
+            _gnode(
+                "rosbag",
+                "source",
+                "source",
+                "舱内 bag",
+                40,
+                0,
+                {
+                    "kinds": [".bag"],
+                    "cardinality_min": 1,
+                    "cardinality_max": 8,
+                    "role": "bag",
+                    "required": False,
+                },
+            ),
+            _gnode(
+                "video",
+                "source",
+                "source",
+                "舱内视频",
+                240,
+                0,
+                {
+                    "kinds": sorted(VIDEO_EXTS),
+                    "cardinality_min": 1,
+                    "cardinality_max": 4,
+                    "role": "video",
+                    "required": False,
+                },
+            ),
+            _gnode(
+                "image",
+                "source",
+                "source",
+                "舱内图片",
+                440,
+                0,
+                {
+                    "kinds": sorted(IMAGE_EXTS),
+                    "cardinality_min": 1,
+                    "cardinality_max": 64,
+                    "role": "frame",
+                    "required": False,
+                },
+            ),
+            _gnode(
+                "audio",
+                "source",
+                "source",
+                "舱内音频",
+                640,
+                0,
+                {
+                    "kinds": sorted(AUDIO_EXTS),
+                    "cardinality_min": 1,
+                    "cardinality_max": 4,
+                    "role": "audio",
+                    "required": False,
+                },
+            ),
+            _gnode(
+                "parse_bag",
+                "op",
+                "parse_bag",
+                str(parse["title"]),
+                40,
+                140,
+                {
+                    "when_kind": ".bag",
+                    "produces": modalities,
+                    "emit_modalities": modalities,
+                },
+            ),
+            _gnode(
+                "extract_frames",
+                "op",
+                "extract_frames",
+                str(extract["title"]),
+                240,
+                280,
+                {"when_kind": ".mp4", "produces": ["frames"]},
+            ),
+            _gnode(
+                "encode_preview",
+                "op",
+                "encode_preview",
+                str(encode["title"]),
+                440,
+                420,
+                {"when_kind": ".jpg", "produces": ["preview_mp4"], "channel_count": 4},
+            ),
+            _gnode(
+                "transcribe",
+                "op",
+                "transcribe",
+                str(asr["title"]),
+                640,
+                560,
+                {"when_kind": ".wav", "produces": ["asr_jsonl"]},
+            ),
+            _gnode("embed", "op", "embed", str(embed["title"]), 440, 700, {}),
+            _gnode(
+                "stage-label",
+                "label",
+                "label",
+                str(label["title"]),
+                440,
+                840,
+                {"model": "default"},
+            ),
+        ],
+        "edges": [
+            _gedge("rosbag", "parse_bag"),
+            _gedge("parse_bag", "extract_frames"),
+            _gedge("video", "extract_frames"),
+            _gedge("extract_frames", "encode_preview"),
+            _gedge("image", "encode_preview"),
+            _gedge("audio", "transcribe"),
+            _gedge("transcribe", "embed"),
+            _gedge("embed", "stage-label"),
+        ],
+    }
+
+
+def _ivi_ui_graph() -> dict[str, Any]:
+    """Authored IVI DAG: catalog ops only (no linear prep-N hydrate aliases)."""
+    extract = OPERATORS["extract_frames"]
+    detect = OPERATORS["detect_bbox"]
+    label = STAGE_OPERATORS["label"]
+    return {
+        "nodes": [
+            _gnode(
+                "ui_media",
+                "source",
+                "source",
+                "IVI 画面",
+                80,
+                0,
+                {
+                    "kinds": sorted(VIDEO_EXTS | IMAGE_EXTS),
+                    "cardinality_min": 1,
+                    "cardinality_max": 32,
+                    "role": "primary",
+                    "required": True,
+                },
+            ),
+            _gnode(
+                "extract_frames",
+                "op",
+                "extract_frames",
+                str(extract["title"]),
+                80,
+                160,
+                {"when_kind": ".mp4", "produces": ["frames"]},
+            ),
+            _gnode(
+                "detect_bbox",
+                "op",
+                "detect_bbox",
+                str(detect["title"]),
+                80,
+                320,
+                {
+                    "when_kind": None,
+                    "produces": ["bboxes_jsonl"],
+                    "detector": "opencv",
+                    "yolo_classes": "",
+                    "required": True,
+                },
+            ),
+            _gnode(
+                "stage-label",
+                "label",
+                "label",
+                str(label["title"]),
+                80,
+                480,
+                {"model": "default"},
+            ),
+        ],
+        "edges": [
+            _gedge("ui_media", "extract_frames"),
+            _gedge("extract_frames", "detect_bbox"),
+            _gedge("ui_media", "detect_bbox"),
+            _gedge("detect_bbox", "stage-label"),
+        ],
+    }
+
+
+def _audio_array_graph() -> dict[str, Any]:
+    """Authored NVH DAG: catalog spectrogram ops only (no prep-N / transcribe aliases)."""
+    parse_dat = OPERATORS["parse_head_dat"]
+    stft = OPERATORS["stft_spectrogram"]
+    mel = OPERATORS["mel_spectrogram"]
+    third = OPERATORS["third_octave"]
+    spl = OPERATORS["spl_timeline"]
+    label = STAGE_OPERATORS["label"]
+    return {
+        "nodes": [
+            _gnode(
+                "audio_primary",
+                "source",
+                "source",
+                "阵列音频",
+                80,
+                0,
+                {
+                    "kinds": sorted(AUDIO_EXTS),
+                    "cardinality_min": 1,
+                    "cardinality_max": 1,
+                    "role": "primary",
+                    "required": True,
+                },
+            ),
+            _gnode(
+                "parse_head_dat",
+                "op",
+                "parse_head_dat",
+                str(parse_dat["title"]),
+                80,
+                140,
+                {"when_kind": ".dat", "produces": ["pcm_pa"], "required": False},
+            ),
+            _gnode(
+                "stft_spectrogram",
+                "op",
+                "stft_spectrogram",
+                str(stft["title"]),
+                80,
+                260,
+                {"when_kind": ".wav", "produces": ["stft_matrix"], "required": True, "channel_count": 4},
+            ),
+            _gnode(
+                "mel_spectrogram",
+                "op",
+                "mel_spectrogram",
+                str(mel["title"]),
+                80,
+                380,
+                {"when_kind": ".wav", "produces": ["mel_png"], "required": True, "channel_count": 4},
+            ),
+            _gnode(
+                "third_octave",
+                "op",
+                "third_octave",
+                str(third["title"]),
+                80,
+                500,
+                {"when_kind": ".wav", "produces": ["third_octave"], "required": True, "channel_count": 4},
+            ),
+            _gnode(
+                "spl_timeline",
+                "op",
+                "spl_timeline",
+                str(spl["title"]),
+                80,
+                620,
+                {"when_kind": ".wav", "produces": ["spl_timeline"], "required": True, "channel_count": 4},
+            ),
+            _gnode(
+                "stage-label",
+                "label",
+                "label",
+                str(label["title"]),
+                80,
+                740,
+                {"model": "nvh_sem_ast"},
+            ),
+        ],
+        "edges": [
+            _gedge("audio_primary", "parse_head_dat"),
+            _gedge("parse_head_dat", "stft_spectrogram"),
+            _gedge("stft_spectrogram", "mel_spectrogram"),
+            _gedge("mel_spectrogram", "third_octave"),
+            _gedge("third_octave", "spl_timeline"),
+            _gedge("spl_timeline", "stage-label"),
+        ],
+    }
+
+
+def _audio_defect_graph() -> dict[str, Any]:
+    """Copied from live DataType ``test``: wav + JSON tag → if → label_tree_input."""
+    json_src = "op-source-1788845633260"
+    extract = "op-json_extract-1788845651418"
+    mel = "op-mel_spectrogram-1788845699364"
+    octave = "op-third_octave-1788845718012"
+    spl = "op-spl_timeline-1788845725414"
+    cond = "op-if-1788845784271"
+    fill_yes = "op-label_tree_input-1788845853076"
+    fill_no = "op-label_tree_input-1788845889559"
+    return {
+        "nodes": [
+            {
+                **_gnode(
+                    "src-1",
+                    "source",
+                    "source",
+                    "录音",
+                    80.0,
+                    0.0,
+                    {
+                        "kinds": [".wav"],
+                        "required": True,
+                        "cardinality_min": 1,
+                        "cardinality_max": 1,
+                    },
+                ),
+            },
+            {
+                **_gnode(
+                    json_src,
+                    "source",
+                    "source",
+                    "标签",
+                    276.7751937984496,
+                    0.8062015503875877,
+                    {
+                        "kinds": [".json"],
+                        "required": True,
+                        "cardinality_min": 1,
+                        "cardinality_max": 1,
+                    },
+                ),
+            },
+            {
+                **_gnode(
+                    extract,
+                    "op",
+                    "json_extract",
+                    str(OPERATORS["json_extract"]["title"]),
+                    275.72180451127815,
+                    108.38279781484962,
+                    {"path_keys": ["tag"], "required": True},
+                ),
+                "bindings": {"in": {"kind": "slot", "slot_id": json_src}},
+            },
+            {
+                **_gnode(
+                    mel,
+                    "op",
+                    "mel_spectrogram",
+                    str(OPERATORS["mel_spectrogram"]["title"]),
+                    78.38696148459601,
+                    108.89530239219205,
+                    {"required": True},
+                ),
+                "bindings": {"in": {"kind": "slot", "slot_id": "src-1"}},
+            },
+            {
+                **_gnode(
+                    octave,
+                    "op",
+                    "third_octave",
+                    str(OPERATORS["third_octave"]["title"]),
+                    -127.34210526315783,
+                    106.6648701832707,
+                    {},
+                ),
+                "bindings": {"in": {"kind": "slot", "slot_id": "src-1"}},
+            },
+            {
+                **_gnode(
+                    spl,
+                    "op",
+                    "spl_timeline",
+                    str(OPERATORS["spl_timeline"]["title"]),
+                    -326.1052631578946,
+                    106.07339638157899,
+                    {},
+                ),
+                "bindings": {"in": {"kind": "slot", "slot_id": "src-1"}},
+            },
+            {
+                **_gnode(
+                    cond,
+                    "if",
+                    "if",
+                    "条件",
+                    275.1304948718771,
+                    216.9436444226141,
+                    {},
+                ),
+                "condition": {
+                    "all": [
+                        {
+                            "field": f"{extract}.value",
+                            "op": "eq",
+                            "value": "有问题噪音",
+                        }
+                    ]
+                },
+            },
+            {
+                **_gnode(
+                    fill_yes,
+                    "op",
+                    "label_tree_input",
+                    str(OPERATORS["label_tree_input"]["title"]),
+                    188.00912716478246,
+                    359.9748896357209,
+                    {
+                        "assignments": [
+                            {
+                                "label_id": "audio.defect.has_problem",
+                                "mode": "const",
+                                "value": "是",
+                            }
+                        ],
+                        "required": True,
+                    },
+                ),
+            },
+            {
+                **_gnode(
+                    fill_no,
+                    "op",
+                    "label_tree_input",
+                    str(OPERATORS["label_tree_input"]["title"]),
+                    420.2857142857143,
+                    362.33805216165416,
+                    {
+                        "assignments": [
+                            {
+                                "label_id": "audio.defect.has_problem",
+                                "mode": "const",
+                                "value": "否",
+                            }
+                        ],
+                        "required": True,
+                    },
+                ),
+            },
+        ],
+        "edges": [
+            {
+                "id": f"{json_src}-out->{extract}-in",
+                "source": json_src,
+                "source_port": "out",
+                "target": extract,
+                "target_port": "in",
+            },
+            {
+                "id": f"src-1-out->{mel}-in",
+                "source": "src-1",
+                "source_port": "out",
+                "target": mel,
+                "target_port": "in",
+            },
+            {
+                "id": f"src-1-out->{octave}-in",
+                "source": "src-1",
+                "source_port": "out",
+                "target": octave,
+                "target_port": "in",
+            },
+            {
+                "id": f"src-1-out->{spl}-in",
+                "source": "src-1",
+                "source_port": "out",
+                "target": spl,
+                "target_port": "in",
+            },
+            {
+                "id": f"{extract}-out->{cond}-in",
+                "source": extract,
+                "source_port": "out",
+                "target": cond,
+                "target_port": "in",
+            },
+            {
+                "id": f"{cond}-then->{fill_yes}-in",
+                "source": cond,
+                "source_port": "then",
+                "target": fill_yes,
+                "target_port": "in",
+            },
+            {
+                "id": f"{cond}-else->{fill_no}-in",
+                "source": cond,
+                "source_port": "else",
+                "target": fill_no,
+                "target_port": "in",
+            },
+        ],
+    }
 
 
 SEED_RECIPES: dict[str, dict[str, Any]] = {
@@ -297,7 +877,16 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
         "purpose": "舱内人机共驾多模场景打标（画面 + 语音 + 结构化标签）",
         "owner": "platform",
         "taxonomy_id": OMS_TAXONOMY_ID,
-        "overview_view": "cabin_timeline",
+        "overview_view": "custom",
+        "overview": {
+            "preset": "custom",
+            "list": _list_cards("clip_metrics", "label_search", "clip_table"),
+            "detail": [
+                *_video_cards("encode_preview", 4, "cabin-main"),
+                {"key": "detail-asr", "widget_id": "asr_panel", "bindings": {}},
+                _labels_card(),
+            ],
+        },
         "status": "published",
         "require_any_kinds": singleton_kind_groups(
             ".bag", *sorted(VIDEO_EXTS), *sorted(IMAGE_EXTS), *sorted(AUDIO_EXTS)
@@ -309,21 +898,18 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
             {"id": "audio", "title": "舱内音频", "kinds": sorted(AUDIO_EXTS), "cardinality_min": 1, "cardinality_max": 4, "role": "audio", "required": False},
         ],
         "preprocess": [
-            {"op_id": "parse_bag", "when_kind": ".bag", "required": False, "produces": ["frames_audio_topics"]},
+            {"op_id": "parse_bag", "when_kind": ".bag", "required": False, "produces": list(PARSE_BAG_MODALITIES)},
             {"op_id": "extract_frames", "when_kind": ".mp4", "required": False, "produces": ["frames"]},
             {"op_id": "encode_preview", "when_kind": ".jpg", "required": False, "produces": ["preview_mp4"]},
             {"op_id": "transcribe", "when_kind": ".wav", "required": False, "produces": ["asr_jsonl"]},
-            {"op_id": "mel_spectrogram", "when_kind": ".wav", "required": False, "produces": ["mel_matrix"]},
-            {"op_id": "text_to_json", "when_kind": ".txt", "required": False, "produces": ["structured_json"]},
-            {"op_id": "detect_bbox", "when_kind": None, "required": False, "produces": ["bboxes_jsonl"]},
         ],
         "products": [
             {"id": "preview_mp4", "from_op": "encode_preview", "reusable": True},
             {"id": "asr_jsonl", "from_op": "transcribe", "reusable": True},
-            {"id": "bboxes_jsonl", "from_op": "detect_bbox", "reusable": True},
         ],
         "stages": {"label": {"enabled": True, "model": "default"}, "embed": {"enabled": True}},
         "bbox": {"enabled": False, "detector": "opencv", "yolo_classes": ""},
+        "graph": _oms_cabin_graph(),
     },
     "ivi_ui_stub": {
         "id": "ivi_ui_stub",
@@ -331,7 +917,15 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
         "purpose": "车机界面抽帧 + bbox 的可插拔占位类型（第一切片不要求业务效果）",
         "owner": "platform",
         "taxonomy_id": IVI_TAXONOMY_ID,
-        "overview_view": "frame_gallery_bbox",
+        "overview_view": "custom",
+        "overview": {
+            "preset": "custom",
+            "list": _list_cards("clip_metrics", "clip_table"),
+            "detail": [
+                {"key": "detail-gallery", "widget_id": "frame_gallery_bbox", "bindings": {}},
+                _labels_card(),
+            ],
+        },
         "status": "published",
         "require_any_kinds": singleton_kind_groups(*sorted(VIDEO_EXTS), *sorted(IMAGE_EXTS)),
         "slots": [
@@ -352,6 +946,7 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
         "products": [{"id": "bboxes_jsonl", "from_op": "detect_bbox", "reusable": True}],
         "stages": {"label": {"enabled": True, "model": "default"}, "embed": {"enabled": False}},
         "bbox": {"enabled": True, "detector": "opencv", "yolo_classes": ""},
+        "graph": _ivi_ui_graph(),
     },
     "audio_array_spec": {
         "id": "audio_array_spec",
@@ -364,7 +959,15 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
         "owner": "platform",
         "taxonomy_id": AUDIO_NVH_TAXONOMY_ID,
         "taxonomy_version_code": "audio_nvh-v2",
-        "overview_view": "audio_nvh_timeline",
+        "overview_view": "custom",
+        "overview": {
+            "preset": "custom",
+            "list": _list_cards("clip_metrics", "nvh_spl_column", "clip_table"),
+            "detail": [
+                *_spectrum_cards("mel_spectrogram", 4, "nvh-main"),
+                _labels_card(),
+            ],
+        },
         "status": "published",
         "require_any_kinds": singleton_kind_groups(*sorted(AUDIO_EXTS)),
         "slots": [
@@ -394,8 +997,93 @@ SEED_RECIPES: dict[str, dict[str, Any]] = {
             "embed": {"enabled": False},
         },
         "bbox": {"enabled": False, "detector": "opencv", "yolo_classes": ""},
+        "graph": _audio_array_graph(),
+    },
+    "audio_defect": {
+        "id": "audio_defect",
+        "title": "问题音频判定",
+        "purpose": (
+            "对车内录音片段判定是否存在问题噪音。"
+            "源为 wav + AudioLabel 导出 JSON；按 tag 条件写入「是否有问题音频」布尔值。"
+        ),
+        "owner": "platform",
+        "taxonomy_id": AUDIO_DEFECT_TAXONOMY_ID,
+        "taxonomy_version_code": AUDIO_DEFECT_VERSION_CODE,
+        "overview_view": "custom",
+        "overview": {
+            "preset": "custom",
+            "list": [],
+            "detail": [
+                {
+                    "key": "detail-spectrum_timeline-1788845910941",
+                    "widget_id": "spectrum_timeline",
+                    "bindings": {
+                        "in": [
+                            {
+                                "kind": "upstream",
+                                "step_key": "op-mel_spectrogram-1788845699364",
+                                "port_id": "ch1",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "key": "detail-labels_tree-1788846181985",
+                    "widget_id": "labels_tree",
+                    "bindings": {
+                        "in": [
+                            {
+                                "kind": "upstream",
+                                "step_key": "op-label_tree_input-1788845853076",
+                                "port_id": "out",
+                            },
+                            {
+                                "kind": "upstream",
+                                "step_key": "op-label_tree_input-1788845889559",
+                                "port_id": "out",
+                            },
+                        ]
+                    },
+                },
+            ],
+        },
+        "status": "published",
+        "require_any_kinds": singleton_kind_groups(".wav", ".json"),
+        "slots": [
+            {
+                "id": "src-1",
+                "title": "录音",
+                "kinds": [".wav"],
+                "cardinality_min": 1,
+                "cardinality_max": 1,
+                "role": "input",
+                "required": True,
+            },
+            {
+                "id": "op-source-1788845633260",
+                "title": "标签",
+                "kinds": [".json"],
+                "cardinality_min": 1,
+                "cardinality_max": 1,
+                "role": "input",
+                "required": True,
+            },
+        ],
+        "preprocess": [
+            {"op_id": "json_extract", "when_kind": None, "required": False},
+            {"op_id": "mel_spectrogram", "when_kind": None, "required": False},
+            {"op_id": "third_octave", "when_kind": None, "required": False},
+            {"op_id": "spl_timeline", "when_kind": None, "required": False},
+        ],
+        "products": [],
+        "stages": {"label": {"enabled": False}, "embed": {"enabled": False}},
+        "bbox": {"enabled": False, "detector": "opencv", "yolo_classes": ""},
+        "graph": _audio_defect_graph(),
     },
 }
+
+# Baseline DataTypes restored by 「重置测试数据」. Extra user-created types are dropped.
+SEED_DATA_TYPE_IDS: tuple[str, ...] = tuple(SEED_RECIPES)
 
 
 def eligible_kinds_for_recipe(recipe: dict[str, Any]) -> set[str]:

@@ -6,6 +6,7 @@ the legacy recipe JSON so local_sdk_worker / overlay_run_request stay unchanged.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from hmi.platform.operators import (
@@ -13,6 +14,7 @@ from hmi.platform.operators import (
     PARSE_BAG_MODALITIES,
     SOURCE_KINDS,
     get_operator,
+    param_keys_for_op,
     parse_bag_emit_modalities,
     type_compatible,
 )
@@ -21,6 +23,27 @@ from hmi.platform.file_kinds import (
     normalize_source_kind,
     singleton_kind_groups,
 )
+
+_PREP_INDEXED_KEY = re.compile(r"^prep-\d+-")
+
+
+def unique_catalog_key(preferred: str, used: set[str]) -> str:
+    """Stable canvas key: operator id, or ``op_id-2`` on collision (never ``prep-N-``)."""
+    base = str(preferred or "op").strip() or "op"
+    if base not in used:
+        used.add(base)
+        return base
+    n = 2
+    while f"{base}-{n}" in used:
+        n += 1
+    key = f"{base}-{n}"
+    used.add(key)
+    return key
+
+
+def is_legacy_hydrate_key(key: str) -> bool:
+    k = str(key or "")
+    return bool(_PREP_INDEXED_KEY.match(k)) or k.startswith("prep-bbox-") or k == "stage-embed"
 
 
 def default_produces(op: dict[str, Any] | None) -> list[str]:
@@ -82,6 +105,46 @@ def output_ports(op: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [{"id": "out", "types": [product] if product else []}]
 
 
+MAX_CHANNEL_COUNT = 16
+
+
+def channel_count_from_params(params: dict[str, Any] | None) -> int:
+    raw = (params or {}).get("channel_count", 1)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(MAX_CHANNEL_COUNT, n))
+
+
+def expand_output_ports(
+    op: dict[str, Any] | None, params: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """Expand template ports into ch1..chN when expand_outputs_from=channel_count."""
+    template_ports = output_ports(op)
+    if not op or str(op.get("expand_outputs_from") or "") != "channel_count":
+        return template_ports
+    template = dict(template_ports[0]) if template_ports else {"id": "out", "types": []}
+    types = list(template.get("types") or [])
+    base_title = str(template.get("title") or "").strip()
+    titles = params.get("port_titles") if isinstance(params, dict) else None
+    if not isinstance(titles, dict):
+        titles = {}
+    n = channel_count_from_params(params)
+    out: list[dict[str, Any]] = []
+    for i in range(1, n + 1):
+        pid = f"ch{i}"
+        custom = str(titles.get(pid) or "").strip()
+        title = custom or (f"{base_title} {i}" if base_title else pid)
+        port = dict(template)
+        port["id"] = pid
+        port["types"] = types
+        port["title"] = title
+        port["channel_index"] = i - 1
+        out.append(port)
+    return out
+
+
 def is_source_card(card: dict[str, Any] | None) -> bool:
     if not isinstance(card, dict):
         return False
@@ -92,10 +155,16 @@ def is_label_card(card: dict[str, Any] | None) -> bool:
     return isinstance(card, dict) and card.get("op_id") == "label"
 
 
+def is_labels_tree_card(card: dict[str, Any] | None) -> bool:
+    if not isinstance(card, dict):
+        return False
+    return card.get("op_id") in {"label", "label_tree_input"}
+
+
 def pin_label_last(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Ensure a label card exists; do not force it last (DAG may place successors after label)."""
+    """Ensure a labels_tree writer exists; do not force AI打标器 last."""
     out = list(steps)
-    if any(is_label_card(s) for s in out):
+    if any(is_labels_tree_card(s) for s in out):
         return out
     out.append({"op_id": "label"})
     return out
@@ -147,6 +216,14 @@ def slots_from_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _operator_params(op_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Keep only keys declared on the operator schema (drop card fields like required)."""
+    allowed = param_keys_for_op(op_id)
+    if not allowed:
+        return {}
+    return {k: v for k, v in params.items() if k in allowed and v not in (None, "")}
 
 
 def _bind_list(raw: Any) -> list[dict[str, Any]]:
@@ -283,13 +360,14 @@ def hydrate_recipe_to_steps(recipe: dict[str, Any]) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     prior: list[dict[str, Any]] = []
     produce_index: dict[str, tuple[str, str]] = {}
+    used_keys: set[str] = {str(c.get("key") or "") for c in source_cards if c.get("key")}
 
-    for idx, raw in enumerate(recipe.get("preprocess") or []):
+    for raw in recipe.get("preprocess") or []:
         if not isinstance(raw, dict):
             continue
         op_id = str(raw.get("op_id") or "").strip()
         op = get_operator(op_id)
-        key = f"prep-{idx}-{op_id}"
+        key = unique_catalog_key(op_id, used_keys)
         produces = [str(x).strip() for x in (raw.get("produces") or []) if str(x).strip()]
         params = dict(raw.get("params") or {})
         if op_id == "parse_bag":
@@ -300,6 +378,7 @@ def hydrate_recipe_to_steps(recipe: dict[str, Any]) -> list[dict[str, Any]]:
         card: dict[str, Any] = {
             "key": key,
             "op_id": op_id,
+            "title": str((op or {}).get("title") or op_id),
             "role": "preprocess",
             "required": bool(raw.get("required", False)),
             "when_kind": raw.get("when_kind"),
@@ -328,7 +407,7 @@ def hydrate_recipe_to_steps(recipe: dict[str, Any]) -> list[dict[str, Any]]:
     has_bbox_op = any(s.get("op_id") == "detect_bbox" for s in steps)
     if bool(bbox.get("enabled")) and not has_bbox_op:
         op = get_operator("detect_bbox")
-        key = "prep-bbox-detect_bbox"
+        key = unique_catalog_key("detect_bbox", used_keys)
         steps.append(
             {
                 "key": key,
@@ -353,8 +432,9 @@ def hydrate_recipe_to_steps(recipe: dict[str, Any]) -> list[dict[str, Any]]:
         op = get_operator("embed")
         steps.append(
             {
-                "key": "stage-embed",
+                "key": unique_catalog_key("embed", used_keys),
                 "op_id": "embed",
+                "title": str((op or {}).get("title") or "embed"),
                 "role": "stage",
                 "required": False,
                 "when_kind": None,
@@ -376,6 +456,7 @@ def hydrate_recipe_to_steps(recipe: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "key": "stage-label",
                 "op_id": "label",
+                "title": str((op or {}).get("title") or "label"),
                 "role": "stage",
                 "required": False,
                 "when_kind": None,
@@ -501,7 +582,7 @@ def compile_steps(
         if op_id == "detect_bbox":
             bbox_card = card
             params.pop("enabled", None)
-        clean_params = {k: v for k, v in params.items() if v not in (None, "")}
+        clean_params = _operator_params(op_id, params)
         if clean_params:
             entry["params"] = clean_params
         labels = _strip_output_labels(card.get("output_labels"), produces)
@@ -519,9 +600,12 @@ def compile_steps(
         "embed": {"enabled": embed_card is not None},
     }
     if label_card is not None:
+        from hmi.platform.label_model_params import label_stage_extras
+
         model = str((label_card.get("params") or {}).get("model") or "").strip()
         if model:
             stages["label"]["model"] = model
+        stages["label"].update(label_stage_extras(label_card.get("params")))
         label_inputs = _compile_inputs(label_card, by_key, slot_by_id, get_operator("label"))
         stages["label"]["inputs"] = label_inputs
     if embed_card is not None:
@@ -676,6 +760,12 @@ def _default_params(op_id: str, op: dict[str, Any]) -> dict[str, Any]:
         return {"detector": "opencv", "yolo_classes": ""}
     if op_id == "parse_bag":
         return {"emit_modalities": list(PARSE_BAG_MODALITIES)}
+    if op_id == "json_extract":
+        return {"path_keys": [""]}
+    if op_id == "label_tree_input":
+        return {"assignments": []}
+    if op_id == "text_to_json":
+        return {"schema_id": "generic_json"}
     schema = op.get("params_schema") or {}
     if "model" in schema:
         return {"model": ""}

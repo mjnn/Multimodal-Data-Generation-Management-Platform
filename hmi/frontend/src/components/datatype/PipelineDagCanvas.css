@@ -1,7 +1,7 @@
 .dag-canvas {
   position: relative;
-  height: min(320px, 42vh);
-  min-height: 240px;
+  height: min(560px, 62vh);
+  min-height: 360px;
   min-width: 0;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-md);
@@ -33,14 +33,33 @@
 
 .dag-node {
   position: relative;
-  min-width: 168px;
-  max-width: 220px;
-  padding: 8px 10px 12px;
+  min-width: 176px;
+  max-width: 228px;
+  min-height: 56px;
+  padding: 8px 14px 12px 14px;
   border: 1px solid var(--color-hairline-strong);
+  border-left-width: 3px;
   border-radius: var(--radius-md);
   background: var(--color-surface-2);
   color: var(--color-ink);
   font-size: 13px;
+}
+
+.dag-node__io-warn {
+  position: absolute;
+  top: -7px;
+  left: -7px;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f5c518;
+  color: #1a1a1a;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 1px var(--color-surface-2);
 }
 
 .dag-node--source {
@@ -52,6 +71,7 @@
 }
 
 .dag-node--if {
+  min-height: 88px;
   border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-hairline));
 }
 
@@ -74,18 +94,46 @@
 
 .dag-node__ports {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 4px;
   margin-top: 8px;
   font-size: 10px;
   color: var(--color-ink-tertiary);
-  padding: 0 8px;
+  padding-right: 6px;
+  text-align: right;
+}
+
+.dag-node__port-tag {
+  position: absolute;
+  right: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.dag-node__port-tag--then {
+  top: 32%;
+  color: #27a644;
+}
+
+.dag-node__port-tag--else {
+  top: 68%;
+  color: #c43c3c;
 }
 
 .dag-canvas .react-flow__handle {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   background: var(--color-primary);
   border: 1px solid var(--color-surface-1);
+}
+
+.dag-canvas .dag-handle--then {
+  background: #27a644;
+}
+
+.dag-canvas .dag-handle--else {
+  background: #c43c3c;
 }
 
 .dag-canvas .react-flow__edge-path {
@@ -102,7 +150,7 @@
 }
 
 .dag-node:not(.dag-node--label) {
-  padding-right: 26px;
+  padding-right: 28px;
 }
 
 .dag-node__remove,
@@ -130,7 +178,7 @@
 
 .dag-node__remove:hover,
 .dag-edge__remove:hover,
-.dag-edge__remove.is-selected {
+.dag-edge__label.is-selected .dag-edge__remove {
   border-color: var(--color-danger, #c43c3c);
   color: var(--color-danger, #c43c3c);
   background: color-mix(in srgb, #c43c3c 10%, var(--color-surface-2));
@@ -138,4 +186,49 @@
 
 .dag-canvas .react-flow__edge.selected .react-flow__edge-path {
   stroke: var(--color-primary);
+}
+
+.dag-edge__label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dag-edge__port {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.dag-edge__label--then .dag-edge__port {
+  color: #27a644;
+}
+
+.dag-edge__label--else .dag-edge__port {
+  color: #c43c3c;
+}
+
+.dag-auto-layout {
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.dag-auto-layout:hover {
+  border-color: var(--color-primary);
+}
+
+.dag-canvas .react-flow__minimap {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.dag-canvas .react-flow__connection.invalid .react-flow__connection-path {
+  stroke: #c43c3c;
 }

@@ -38,7 +38,7 @@ from .bbox import (
     resolve_yolo_class_ids,
 )
 from .asr_client import AsrClient, AsrConfig
-from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_video
+from .clip_video import ClipVideoConfig, encode_clip_mp4, render_clip_preview_video, resolve_ffmpeg
 from .client import OmsMultimodalClient
 from .config import BagProcessResult, ClientConfig, ClipConfig, ModelBackend, OutputConfig
 from .embedding_client import FusionEmbeddingClient
@@ -244,6 +244,7 @@ __all__ = [
     "render_acoustic_assets",
     "render_acoustic_panel",
     "render_clip_preview_video",
+    "resolve_ffmpeg",
     "resolve_bags",
     "resolve_taxonomy_path",
     "save_mel_matrix",

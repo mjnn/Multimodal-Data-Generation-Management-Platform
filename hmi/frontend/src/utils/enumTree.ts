@@ -131,6 +131,154 @@ export function validateEnumTreeNodes(nodes: EnumTreeNode[]): string[] {
   return errors
 }
 
+export function isNestedEnumSchema(schema: unknown, dtype?: string | null): boolean {
+  if (!isEnumTreeSchema(schema) && (dtype || '').toLowerCase() !== 'enum_tree') return false
+  const values =
+    schema && typeof schema === 'object' && 'values' in schema
+      ? (schema as { values?: unknown[] }).values
+      : undefined
+  const nodes = coerceEnumTreeNodes(values)
+  return nodes.some((n) => Boolean(n.children?.length))
+}
+
+export function parseEnumPath(value: unknown): string[] {
+  if (value == null || value === '') return []
+  if (typeof value === 'boolean') return []
+  if (typeof value === 'number' && Number.isFinite(value)) return [String(value)]
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return []
+    if (text.includes('/')) return text.split('/').map((p) => p.trim()).filter(Boolean)
+    return [text]
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v ?? '').trim()).filter(Boolean)
+  }
+  if (typeof value === 'object') {
+    const obj = value as { path?: unknown; value?: unknown }
+    if (obj.path != null) return parseEnumPath(obj.path)
+    if (obj.value != null) return parseEnumPath(obj.value)
+  }
+  return []
+}
+
+function findChild(nodes: EnumTreeNode[], id: string): EnumTreeNode | undefined {
+  return nodes.find((n) => n.id === id)
+}
+
+function walkFind(nodes: EnumTreeNode[], id: string, trail: string[]): string[] | null {
+  for (const n of nodes) {
+    const next = [...trail, n.id]
+    if (n.id === id) return next
+    if (n.children?.length) {
+      const found = walkFind(n.children, id, next)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+export function resolveEnumPath(nodes: EnumTreeNode[], value: unknown): string[] | null {
+  const raw = parseEnumPath(value)
+  if (!raw.length) return []
+  let cursor = nodes
+  const walked: string[] = []
+  for (let i = 0; i < raw.length; i++) {
+    const match = findChild(cursor, raw[i])
+    if (!match) {
+      if (i === 0 && raw.length === 1) return walkFind(nodes, raw[0], [])
+      return null
+    }
+    walked.push(raw[i])
+    cursor = match.children ?? []
+  }
+  return walked
+}
+
+function nodeAtPath(nodes: EnumTreeNode[], path: string[]): EnumTreeNode | undefined {
+  let cursor = nodes
+  let current: EnumTreeNode | undefined
+  for (const segment of path) {
+    current = findChild(cursor, segment)
+    if (!current) return undefined
+    cursor = current.children ?? []
+  }
+  return current
+}
+
+export function enumChildrenAt(nodes: EnumTreeNode[], pathPrefix: string[]): EnumTreeNode[] {
+  if (!pathPrefix.length) return nodes
+  const node = nodeAtPath(nodes, pathPrefix)
+  return node?.children ?? []
+}
+
+export type EnumReviewInspect = {
+  complete: boolean
+  nested: boolean
+  path: string[]
+  missingLevel: number | null
+  message: string | null
+}
+
+export function inspectEnumReviewValue(
+  schema: unknown,
+  value: unknown,
+  dtype?: string | null,
+): EnumReviewInspect {
+  if (!isNestedEnumSchema(schema, dtype)) {
+    return { complete: true, nested: false, path: parseEnumPath(value), missingLevel: null, message: null }
+  }
+  const values =
+    schema && typeof schema === 'object' && 'values' in schema
+      ? (schema as { values?: unknown[] }).values
+      : undefined
+  const nodes = coerceEnumTreeNodes(values)
+  const raw = parseEnumPath(value)
+  if (!raw.length) {
+    return {
+      complete: false,
+      nested: true,
+      path: [],
+      missingLevel: 1,
+      message: '嵌套枚举未完成：值为空，每一级都需要取值',
+    }
+  }
+  const path = resolveEnumPath(nodes, value)
+  if (!path) {
+    return {
+      complete: false,
+      nested: true,
+      path: raw,
+      missingLevel: null,
+      message: `嵌套枚举取值无效：${raw.join('/')} 不在选项中`,
+    }
+  }
+  const terminal = nodeAtPath(nodes, path)
+  if (terminal?.children?.length) {
+    return {
+      complete: false,
+      nested: true,
+      path,
+      missingLevel: path.length + 1,
+      message: `嵌套枚举未完成：已选 ${path[path.length - 1]}，还需选择第 ${path.length + 1} 级子值`,
+    }
+  }
+  return { complete: true, nested: true, path, missingLevel: null, message: null }
+}
+
+export function toStoredEnumReviewValue(schema: unknown, value: unknown, dtype?: string | null): unknown {
+  const info = inspectEnumReviewValue(schema, value, dtype)
+  if (!info.complete || !info.nested) return value
+  if (info.path.length > 1) return info.path
+  return info.path[0] ?? value
+}
+
+export function formatEnumReviewValue(value: unknown): string {
+  const path = parseEnumPath(value)
+  if (path.length) return path.join(' / ')
+  return ''
+}
+
 export function formatEnumTreeLines(
   nodes: EnumTreeNode[],
   labels: Record<string, string> = {},

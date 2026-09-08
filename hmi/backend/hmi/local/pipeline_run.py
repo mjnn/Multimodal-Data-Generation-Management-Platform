@@ -128,6 +128,16 @@ def set_step(
         )
 
 
+def get_step_status(*, run_id: str, clip_id: str, ds: str, step_id: str) -> str | None:
+    row = store.query_one(
+        "SELECT status FROM pipeline_step WHERE run_id=? AND clip_id=? AND ds=? AND step_id=?",
+        (run_id, clip_id, ds, step_id),
+    )
+    if not row:
+        return None
+    return str(row.get("status") or "") or None
+
+
 def mark_run_from_steps(*, run_id: str, clip_id: str, ds: str) -> str:
     if is_run_cancelled(run_id=run_id, clip_id=clip_id, ds=ds):
         return "cancelled"

@@ -35,6 +35,10 @@ type ClipTimelinePanelProps = {
   selectedBoxKey?: string | null
   onSelectedBoxChange?: (key: string | null) => void
   onOverlaySaved?: () => void
+  /** When set, show only that camera (0-based). */
+  cameraIndex?: number
+  cursorNs?: number
+  onCursorNsChange?: (ns: number) => void
 }
 
 function resolveInitialCursorNs(
@@ -62,6 +66,9 @@ export function ClipTimelinePanel({
   selectedBoxKey,
   onSelectedBoxChange,
   onOverlaySaved,
+  cameraIndex,
+  cursorNs: cursorNsProp,
+  onCursorNsChange,
 }: ClipTimelinePanelProps) {
   const [clip, setClip] = useState<ClipOverview | null>(null)
   const [meta, setMeta] = useState<TimelineMeta | null>(null)
@@ -70,6 +77,11 @@ export function ClipTimelinePanel({
   const [playing, setPlaying] = useState(false)
   const [rangeStartNs, setRangeStartNs] = useState<number | null>(null)
   const [rangeEndNs, setRangeEndNs] = useState<number | null>(null)
+  const displayCursorNs = cursorNsProp ?? cursorNs
+  const pushCursor = (ns: number) => {
+    setCursorNs(ns)
+    onCursorNsChange?.(ns)
+  }
 
   useEffect(() => {
     if (!clipId || !runId) return
@@ -104,17 +116,17 @@ export function ClipTimelinePanel({
   )
 
   const snapped = useMemo(() => {
-    if (cursorNs == null || snapPoints.length === 0) return false
-    return snapToNearest(cursorNs, snapPoints) === cursorNs
-  }, [cursorNs, snapPoints])
+    if (displayCursorNs == null || snapPoints.length === 0) return false
+    return snapToNearest(displayCursorNs, snapPoints) === displayCursorNs
+  }, [displayCursorNs, snapPoints])
 
   useTimelineKeyboard({
-    enabled: cursorNs != null && !!clip,
-    cursorNs: cursorNs ?? 0,
+    enabled: displayCursorNs != null && !!clip,
+    cursorNs: displayCursorNs ?? 0,
     startNs: clip?.start_time_ns ?? 0,
     endNs: clip?.end_time_ns ?? 0,
     snapPoints,
-    onCursorChange: setCursorNs,
+    onCursorChange: pushCursor,
     playing,
     onPlayingChange: setPlaying,
   })
@@ -122,7 +134,7 @@ export function ClipTimelinePanel({
   const clipLabel = meta?.clip_label ?? null
 
   useEffect(() => {
-    if (!onTimelineStateChange || !clip || !meta || cursorNs == null) return
+    if (!onTimelineStateChange || !clip || !meta || displayCursorNs == null) return
     const preview = meta.preview?.mode === 'mp4' ? meta.preview : null
     const hasBboxPreview = Boolean(
       preview?.has_bbox_preview ||
@@ -131,12 +143,12 @@ export function ClipTimelinePanel({
     onTimelineStateChange({
       clip,
       meta,
-      cursorNs,
+      cursorNs: displayCursorNs,
       snapshot: null,
       previewCompositeId: null,
       hasBboxPreview,
     })
-  }, [clip, meta, cursorNs, onTimelineStateChange])
+  }, [clip, meta, displayCursorNs, onTimelineStateChange])
 
   const filteredEvents = useMemo(() => {
     const events = meta?.events ?? []
@@ -152,7 +164,7 @@ export function ClipTimelinePanel({
     )
   }
 
-  if (!clip || cursorNs == null || !meta) {
+  if (!clip || displayCursorNs == null || !meta) {
     return (
       <Empty
         description="无法加载 Clip 预览，请确认管线已完成或稍后重试"
@@ -161,17 +173,22 @@ export function ClipTimelinePanel({
     )
   }
 
+  const previewCameras =
+    cameraIndex == null
+      ? mp4Preview?.cameras
+      : (mp4Preview?.cameras || []).filter((_, i) => i === cameraIndex)
+
   const previewBlock = mp4Preview ? (
     <div className="clip-preview-stage">
       <ClipPreviewVideo
         clipId={clipId}
         runId={runId}
         previewContext={previewContext}
-        gridUrl={mp4Preview.grid_url}
-        cameras={mp4Preview.cameras}
+        gridUrl={cameraIndex == null ? mp4Preview.grid_url : ''}
+        cameras={previewCameras}
         hasBboxPreview={Boolean(
           mp4Preview.has_bbox_preview ||
-            mp4Preview.cameras?.some((c) => Boolean(c.bbox_url)),
+            previewCameras?.some((c) => Boolean(c.bbox_url)),
         )}
         hasPlainPreview={
           typeof mp4Preview.has_plain_preview === 'boolean'
@@ -180,10 +197,10 @@ export function ClipTimelinePanel({
         }
         startNs={clip.start_time_ns}
         endNs={clip.end_time_ns}
-        cursorNs={cursorNs}
+        cursorNs={displayCursorNs}
         playing={playing}
         fps={mp4Preview.fps}
-        onCursorChange={setCursorNs}
+        onCursorChange={pushCursor}
         onPlayingChange={setPlaying}
         height={camerasFirst ? 520 : 480}
         selectedBoxKey={selectedBoxKey}
@@ -195,7 +212,7 @@ export function ClipTimelinePanel({
           audioUrl={clipAudioUrl}
           startNs={clip.start_time_ns}
           endNs={clip.end_time_ns}
-          cursorNs={cursorNs}
+          cursorNs={displayCursorNs}
           playing={playing}
         />
       ) : null}
@@ -214,13 +231,13 @@ export function ClipTimelinePanel({
       <TimelineMinimap
         startNs={clip.start_time_ns}
         endNs={clip.end_time_ns}
-        cursorNs={cursorNs}
+        cursorNs={displayCursorNs}
         sampledTimestamps={[]}
         events={meta.events}
         asrSegments={meta.asr_segments}
         rangeStartNs={rangeStartNs}
         rangeEndNs={rangeEndNs}
-        onCursorChange={setCursorNs}
+        onCursorChange={pushCursor}
         onRangeChange={(s, e) => {
           setRangeStartNs(s)
           setRangeEndNs(e)
@@ -230,8 +247,8 @@ export function ClipTimelinePanel({
       <TimelineScrubber
         startNs={clip.start_time_ns}
         endNs={clip.end_time_ns}
-        valueNs={cursorNs}
-        onChange={setCursorNs}
+        valueNs={displayCursorNs}
+        onChange={pushCursor}
         snapPoints={snapPoints}
         snapped={snapped}
       />
@@ -239,9 +256,9 @@ export function ClipTimelinePanel({
       <AudioWaveform
         startNs={clip.start_time_ns}
         endNs={clip.end_time_ns}
-        cursorNs={cursorNs}
+        cursorNs={displayCursorNs}
         playing={playing}
-        onCursorChange={setCursorNs}
+        onCursorChange={pushCursor}
         onPlayingChange={setPlaying}
         externalPlayback={!!mp4Preview}
       />
@@ -257,7 +274,7 @@ export function ClipTimelinePanel({
               key={i}
               color="orange"
               style={{ cursor: 'pointer' }}
-              onClick={() => setCursorNs(e.timestamp_ns)}
+              onClick={() => pushCursor(e.timestamp_ns)}
             >
               {e.parsed_label} @ {api.formatTimestampNs(e.timestamp_ns, clip.start_time_ns)}
             </Tag>

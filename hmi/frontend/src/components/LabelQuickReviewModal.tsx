@@ -34,12 +34,23 @@ export function LabelQuickReviewModal({
   const [taxonomyNodes, setTaxonomyNodes] = useState<TaxonomyNodeDetail[]>([])
 
   const loadTaxonomy = useCallback(async (versionId: string | null) => {
+    const versions = await api.listTaxonomyVersions()
+    const nvh = labelId.startsWith('nvh.')
+      ? versions.find((v) => v.version_code === 'audio_nvh-v2')
+      : undefined
     if (versionId) {
       const tree = await api.getTaxonomyTree(versionId)
+      const hasFocus = tree.nodes.some((n) => n.label_id === labelId)
+      if (hasFocus || !nvh) {
+        setTaxonomyNodes(tree.nodes)
+        return
+      }
+    }
+    if (nvh) {
+      const tree = await api.getTaxonomyTree(nvh.id)
       setTaxonomyNodes(tree.nodes)
       return
     }
-    const versions = await api.listTaxonomyVersions()
     const published = versions.find((v) => v.status === 'published')
     if (published) {
       const tree = await api.getTaxonomyTree(published.id)
@@ -47,7 +58,7 @@ export function LabelQuickReviewModal({
     } else {
       setTaxonomyNodes([])
     }
-  }, [])
+  }, [labelId])
 
   const loadReview = useCallback(async () => {
     if (!clipId || !runId) return
@@ -86,6 +97,14 @@ export function LabelQuickReviewModal({
 
   const persist = async (reviewStatus: ReviewStatus, markFieldConfirm: boolean) => {
     if (!review) return false
+    if (markFieldConfirm) {
+      try {
+        await form.validateFields([labelId])
+      } catch {
+        message.error('嵌套枚举每一级都需要取值后才能完成本标签校核')
+        return false
+      }
+    }
     setSaving(true)
     try {
       const edited = form.getFieldsValue(true) as Record<string, unknown>

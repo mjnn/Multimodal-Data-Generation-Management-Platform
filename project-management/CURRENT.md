@@ -1,7 +1,7 @@
 # 当前进度指针（跨会话权威入口）
 
-> 最后更新：2026-09-03  
-> 更新人：Agent（UI-DTYPE-DAG-CANVAS A+A-E2E 收工）
+> 最后更新：2026-09-07  
+> 更新人：Agent（PLAT-RUN-BRANCHES：同一 clip 多次 run 并列生效）
 
 ---
 
@@ -10,8 +10,8 @@
 | 字段 | 当前值 |
 |------|--------|
 | 当前里程碑 | **平台内核重构进行中** |
-| 刚完成 | **UI-DTYPE-DAG-CANVAS**（A + A-E2E）— `acceptance/UI-DTYPE-DAG-CANVAS.md` |
-| 推荐下一个工单 | **UI-NVH-REVIEW-SAVE**（语义 L6 人工写回） |
+| 刚完成 | **PLAT-RUN-BRANCHES**（A + A-E2E）— `acceptance/PLAT-RUN-BRANCHES.md` |
+| 推荐下一个工单 | **M7.5-E2E**（可选 Parquet 全链 zip；非内核强制） |
 | M9.3 | A-C 基本闭合；**H-2 暂停，不排期** |
 | 禁止抢跑 | 勿做 HMI 在线 H-2；勿 **publish** `audio_nvh-v2`；勿宣称 IVI 业务打标已完成；勿用 VL 打 bbox；勿改 DataWorks 节点/Job 顺序 |
 
@@ -22,10 +22,9 @@
 ```text
 当前重点是重构平台内核，不要做 HMI 在线 H-2。
 
-刚完成 UI-DTYPE-DAG-CANVAS（A + A-E2E）：acceptance/UI-DTYPE-DAG-CANVAS.md
-推荐下一工单 UI-NVH-REVIEW-SAVE：语义 L6 人工写回。
-不要 publish audio_nvh-v2。不要改 DataWorks。
-ASR/标签 if 本地仍 RuntimeError「本地尚未拆分 plan_and_run：不能在 ASR/打标之后分支」（Task 11 护栏）。
+刚完成 PLAT-RUN-BRANCHES：同一 clip 上每次管线跑完都是独立分支（总览/检索/Dataset/校核都认 clip+run）；active_run_id 只作默认打开指针。
+推荐下一工单可选 M7.5-E2E（Parquet zip）。
+不要改 DataWorks。勿 publish audio_nvh-v2。
 ```
 
 ---
@@ -61,10 +60,14 @@ ASR/标签 if 本地仍 RuntimeError「本地尚未拆分 plan_and_run：不能�
 | DOC-HANDOVER | 交接 Wiki / 架构图 / 技能包 / 压缩脚本 | **done（A）** — `acceptance/DOC-HANDOVER.md` |
 | FIX-SPA-PREFIX | 直连 8012 子路径空白页 | **done（A）** — `acceptance/FIX-SPA-PREFIX.md` |
 | DOC-INTRANET-CICD | 域内堡垒机 save/load/run | **done（A）** — `acceptance/DOC-INTRANET-CICD.md` |
-| UI-NVH-REVIEW-SAVE | 语义 L6 人工写回 | **推荐下一** |
+| FIX-ENCODE-FFMPEG | Windows encode_preview 找不到 ffmpeg | **done（A）** — `acceptance/FIX-ENCODE-FFMPEG.md` |
+| UI-NVH-REVIEW-SAVE | 语义 L6 人工写回 | **done（A + A-E2E）** — `acceptance/UI-NVH-REVIEW-SAVE.md` |
+| PLAT-CAPABILITY-KERNEL | DAG 逐节点 capability | **done（A）** — 阵列 + `text_to_json` 走 kernel；未改 DataWorks |
+| PLAT-DAG-IO-CONTRACT | DAG I/O 契约（黄叹号 / 期望输出 / 试跑） | **done（A + A-E2E）** — `acceptance/PLAT-DAG-IO-CONTRACT.md` |
+| PLAT-RUN-BRANCHES | 同一 clip 每次 run 并列生效 | **done（A + A-E2E）** — `acceptance/PLAT-RUN-BRANCHES.md` |
 | M9.3-H-2 | HMI 在线主观 | **暂停不排期** |
 | M9.3 | sdk_v1 cloud 全链（hybrid） | **in_progress** — A-C-1/2 pass；**H-2 待签** |
-| M7.5 | Parquet 全链 E2E | 可选 |
+| M7.5 | Parquet 全链 E2E | 可选（**推荐下一**） |
 
 **M9.3 入口**：`docs/sdk-v1-cloud-e2e-runbook.md` · `acceptance/M9.3.md`
 

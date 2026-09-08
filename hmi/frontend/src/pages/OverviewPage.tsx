@@ -36,6 +36,8 @@ import {
 } from '../utils/overviewCache'
 import { resolveMediaUrl } from '../utils/mediaUrl'
 import { clipDisplayName } from '../utils/clipDisplay'
+import { buildClipExplorerHref } from '../utils/clipExplorerHref'
+import { overviewRowKey, overviewRunId } from '../utils/clipRun'
 import { isDemoClip } from '../utils/demoClip'
 import {
   classifyOverviewClip,
@@ -48,7 +50,8 @@ function mergeClipStats(
   clip: ClipOverview,
   statsMap: Record<string, Partial<ClipOverview>>,
 ): ClipOverview {
-  return { ...clip, ...(statsMap[clip.clip_id] ?? {}) }
+  const key = overviewRowKey(clip)
+  return { ...clip, ...(statsMap[key] ?? statsMap[clip.clip_id] ?? {}) }
 }
 
 export function OverviewPage() {
@@ -211,9 +214,9 @@ export function OverviewPage() {
     })()
   }
 
-  const scoreByClip = useMemo(() => {
+  const scoreByRow = useMemo(() => {
     const m = new Map<string, number>()
-    for (const h of queryHits) m.set(h.clip_id, h.score)
+    for (const h of queryHits) m.set(`${h.clip_id}::${h.run_id}`, h.score)
     return m
   }, [queryHits])
 
@@ -229,9 +232,9 @@ export function OverviewPage() {
     let rows = clips
     if (queryActive && queryClipIds) {
       const allow = new Set(queryClipIds)
-      rows = rows.filter((c) => allow.has(c.clip_id))
+      rows = rows.filter((c) => allow.has(overviewRowKey(c)) || allow.has(c.clip_id))
       rows = [...rows].sort(
-        (a, b) => (scoreByClip.get(b.clip_id) ?? 0) - (scoreByClip.get(a.clip_id) ?? 0),
+        (a, b) => (scoreByRow.get(overviewRowKey(b)) ?? 0) - (scoreByRow.get(overviewRowKey(a)) ?? 0),
       )
     }
     if (pipelineFilter === 'all') return rows
@@ -247,11 +250,16 @@ export function OverviewPage() {
     return rows.filter(
       (c) => c.pipeline_status !== 'completed' && c.pipeline_status !== 'failed' && c.pipeline_status !== 'running',
     )
-  }, [clips, pipelineFilter, queryActive, queryClipIds, scoreByClip])
+  }, [clips, pipelineFilter, queryActive, queryClipIds, scoreByRow])
 
-  const openClip = (clipId: string) => {
+  const openClip = (row: ClipOverview) => {
     if (!browseClips) return
-    navigate(`/clips/${encodeURIComponent(clipId)}`)
+    navigate(
+      buildClipExplorerHref(row.clip_id, {
+        runId: overviewRunId(row),
+        dataTypeId: row.data_type_id || dataTypeId,
+      }),
+    )
   }
 
   const renderClipName = (r: ClipOverview) => (
@@ -264,6 +272,11 @@ export function OverviewPage() {
       <Typography.Text strong className="mono" style={{ fontSize: 13, wordBreak: 'break-all' }}>
         {clipDisplayName(r)}
       </Typography.Text>
+      {overviewRunId(r) ? (
+        <Tag data-testid="overview-run-id" style={{ margin: 0 }}>
+          {overviewRunId(r).slice(0, 8)}
+        </Tag>
+      ) : null}
     </Space>
   )
 
@@ -282,7 +295,7 @@ export function OverviewPage() {
             key: 'query_score',
             width: 88,
             render: (_: unknown, r: ClipOverview) => {
-              const s = scoreByClip.get(r.clip_id)
+              const s = scoreByRow.get(overviewRowKey(r))
               return s == null ? '—' : s.toFixed(2)
             },
           } as ColumnsType<ClipOverview>[number],
@@ -414,16 +427,16 @@ export function OverviewPage() {
         browseClips || showOssLinks ? (
           <Space size={12} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             {browseClips ? (
-              <span className="text-link" role="button" tabIndex={0} onClick={() => openClip(r.clip_id)}>
+              <span className="text-link" role="button" tabIndex={0} onClick={() => openClip(r)}>
                 预览
               </span>
             ) : null}
-            {showOssLinks && r.active_run_id ? (
+            {showOssLinks && overviewRunId(r) ? (
               <span
                 className="text-link"
                 role="button"
                 tabIndex={0}
-                onClick={() => navigate(ossManageHref(clipRunOssPrefix(r.clip_id, r.active_run_id)))}
+                onClick={() => navigate(ossManageHref(clipRunOssPrefix(r.clip_id, overviewRunId(r))))}
               >
                 产物路径
               </span>
@@ -485,7 +498,9 @@ export function OverviewPage() {
               dataTypeId={dataTypeId}
               onApplied={(result) => {
                 setQueryActive(result.active)
-                setQueryClipIds(result.clipIds)
+                setQueryClipIds(
+                  result.hits.map((h) => `${h.clip_id}::${h.run_id}`).filter(Boolean),
+                )
                 setQueryHits(result.hits)
                 setPage(1)
               }}
@@ -504,7 +519,7 @@ export function OverviewPage() {
             aria-label="管线状态筛选"
             value={pipelineFilter}
             total={filteredClips.length}
-            totalLabel="条 Clip"
+            totalLabel="条运行"
             onChange={setStatus}
             options={[
               { value: 'all', label: '全部', count: clips.length },
@@ -519,7 +534,7 @@ export function OverviewPage() {
         }
       >
         <Table
-          rowKey="clip_id"
+          rowKey={(r) => overviewRowKey(r)}
           loading={loading}
           columns={columns}
           dataSource={filteredClips}
@@ -547,7 +562,10 @@ export function OverviewPage() {
           rowClassName={browseClips ? () => 'clickable-row' : undefined}
           onRow={
             browseClips
-              ? (r) => ({ onClick: () => openClip(r.clip_id) })
+              ? (r) => ({
+                  onClick: () => openClip(r),
+                  'data-testid': `overview-clip-row-${overviewRunId(r) || r.clip_id}`,
+                })
               : undefined
           }
         />

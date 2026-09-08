@@ -11,6 +11,64 @@ sys.path.insert(0, str(REPO / "hmi" / "backend"))
 sys.path.insert(0, str(REPO / "shared"))
 
 
+def _fill_graph(*, extra_wav: bool = False) -> dict:
+    nodes = [
+        {
+            "key": "json_src",
+            "type": "source",
+            "op_id": "source",
+            "title": "问题判断标签",
+            "params": {"required": True, "kinds": [".json"]},
+            "position": {"x": 0, "y": 0},
+        },
+        {
+            "key": "ext",
+            "type": "op",
+            "op_id": "json_extract",
+            "title": "JSON 值提取",
+            "params": {"path_keys": ["tag"]},
+            "position": {"x": 0, "y": 80},
+        },
+        {
+            "key": "fill",
+            "type": "op",
+            "op_id": "label_tree_input",
+            "title": "标签树输入",
+            "params": {"assignments": [{"label_id": "audio.defect.has_problem", "mode": "upstream"}]},
+            "position": {"x": 0, "y": 160},
+        },
+    ]
+    edges = [
+        {"id": "j-e", "source": "json_src", "source_port": "out", "target": "ext", "target_port": "in"},
+        {"id": "e-f", "source": "ext", "source_port": "out", "target": "fill", "target_port": "in"},
+    ]
+    if extra_wav:
+        nodes.extend(
+            [
+                {
+                    "key": "wav_src",
+                    "type": "source",
+                    "op_id": "source",
+                    "title": "车内录音",
+                    "params": {"required": True, "kinds": [".wav"]},
+                    "position": {"x": 240, "y": 0},
+                },
+                {
+                    "key": "mel",
+                    "type": "op",
+                    "op_id": "mel_spectrogram",
+                    "title": "梅尔频谱",
+                    "params": {},
+                    "position": {"x": 240, "y": 80},
+                },
+            ]
+        )
+        edges.append(
+            {"id": "w-m", "source": "wav_src", "source_port": "out", "target": "mel", "target_port": "in"}
+        )
+    return {"nodes": nodes, "edges": edges}
+
+
 def _chain() -> dict:
     return {
         "nodes": [
@@ -42,16 +100,24 @@ class TestValidateGraph(unittest.TestCase):
             validate_graph(g)
         self.assertIn("cycle", str(ctx.exception).lower())
 
-    def test_requires_exactly_one_label(self) -> None:
+    def test_requires_labels_tree_producer(self) -> None:
         from hmi.platform.recipe_graph import validate_graph
 
         g = _chain()
         g["nodes"] = [n for n in g["nodes"] if n["type"] != "label"]
         g["edges"] = [e for e in g["edges"] if e["target"] != "lab"]
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as ctx:
             validate_graph(g)
+        self.assertIn("标签树", str(ctx.exception))
 
-    def test_required_source_must_reach_label(self) -> None:
+    def test_accepts_label_tree_input_without_ai_label(self) -> None:
+        from hmi.platform.recipe_graph import validate_graph
+
+        out = validate_graph(_fill_graph())
+        self.assertFalse(any(n["type"] == "label" for n in out["nodes"]))
+        self.assertTrue(any(n.get("op_id") == "label_tree_input" for n in out["nodes"]))
+
+    def test_required_source_must_connect_downstream(self) -> None:
         from hmi.platform.recipe_graph import validate_graph
 
         g = _chain()
@@ -67,7 +133,14 @@ class TestValidateGraph(unittest.TestCase):
         )
         with self.assertRaises(ValueError) as ctx:
             validate_graph(g)
-        self.assertIn("打标", str(ctx.exception))
+        self.assertIn("下游", str(ctx.exception))
+
+    def test_required_wav_need_not_reach_ai_when_json_fills_tree(self) -> None:
+        from hmi.platform.recipe_graph import validate_graph
+
+        out = validate_graph(_fill_graph(extra_wav=True))
+        self.assertFalse(any(n["type"] == "label" for n in out["nodes"]))
+        self.assertEqual(sum(1 for n in out["nodes"] if n["type"] == "source"), 2)
 
     def test_if_requires_then_else_ports(self) -> None:
         from hmi.platform.recipe_graph import validate_graph
@@ -150,7 +223,7 @@ class TestValidateGraph(unittest.TestCase):
         g["edges"].append({"id": "e4", "source": "lab", "source_port": "out", "target": "rev", "target_port": "in"})
         with self.assertRaises(ValueError) as ctx:
             validate_graph(g)
-        self.assertIn("打标", str(ctx.exception))
+        self.assertIn("标签树", str(ctx.exception))
 
     def test_review_only_after_label_passes(self) -> None:
         from hmi.platform.recipe_graph import validate_graph
@@ -170,7 +243,7 @@ class TestValidateGraph(unittest.TestCase):
         g["edges"].append({"id": "e4", "source": "lab", "source_port": "out", "target": "exp", "target_port": "in"})
         with self.assertRaises(ValueError) as ctx:
             validate_graph(g)
-        self.assertIn("打标", str(ctx.exception))
+        self.assertIn("标签树", str(ctx.exception))
 
 
 class TestHydrateGraph(unittest.TestCase):
@@ -179,16 +252,93 @@ class TestHydrateGraph(unittest.TestCase):
         from hmi.platform.recipe_graph import hydrate_graph, validate_graph
 
         rec = validate_recipe(SEED_RECIPES["oms_cabin"])
-        self.assertFalse(rec.get("graph"))
+        self.assertTrue(rec.get("graph") and rec["graph"]["nodes"])
         g = hydrate_graph(rec)
         validate_graph(g)
         types = [n["type"] for n in g["nodes"]]
         self.assertIn("source", types)
         self.assertEqual(types.count("label"), 1)
+        from hmi.platform.operators import CATALOG
+
+        canvas_ops = {n["op_id"] for n in g["nodes"] if n["type"] in {"op", "label"}}
+        self.assertTrue(canvas_ops <= set(CATALOG))
+        self.assertEqual(
+            {n["op_id"]: n["title"] for n in g["nodes"] if n["type"] == "op"},
+            {
+                "parse_bag": "ROSBAG 解析器",
+                "extract_frames": "视频抽帧",
+                "encode_preview": "视频编码器",
+                "transcribe": "音频 ASR",
+                "embed": "向量化器",
+            },
+        )
+        label_node = next(n for n in g["nodes"] if n["type"] == "label")
+        self.assertEqual(label_node["op_id"], "label")
+        self.assertEqual(label_node["title"], "AI打标器")
+        self.assertNotIn("mel_spectrogram", canvas_ops)
+        self.assertNotIn("text_to_json", canvas_ops)
+        self.assertNotIn("detect_bbox", canvas_ops)
         keys = [n["key"] for n in g["nodes"]]
         idx = {k: i for i, k in enumerate(keys)}
         for e in g["edges"]:
             self.assertLess(idx[e["source"]], idx[e["target"]])
+
+    def test_hydrate_keeps_label_tree_input_without_injecting_ai(self) -> None:
+        from hmi.platform.recipe_graph import hydrate_graph
+
+        rec = {
+            "id": "fill_only",
+            "title": "t",
+            "purpose": "p",
+            "taxonomy_id": "oms",
+            "overview_view": "custom",
+            "require_any_kinds": [[".json"]],
+            "slots": [{"id": "json_src", "kinds": [".json"], "cardinality_min": 1, "cardinality_max": 1}],
+            "graph": _fill_graph(),
+        }
+        g = hydrate_graph(rec)
+        self.assertFalse(any(n["type"] == "label" for n in g["nodes"]))
+        self.assertTrue(any(n.get("op_id") == "label_tree_input" for n in g["nodes"]))
+
+    def test_ivi_and_audio_seeds_use_catalog_keys(self) -> None:
+        from hmi.platform.operators import CATALOG
+        from hmi.platform.recipe import SEED_DATA_TYPE_IDS, seed_recipes
+        from hmi.platform.recipe_graph import hydrate_graph, validate_graph
+
+        seeded = seed_recipes()
+        self.assertEqual(set(seeded), set(SEED_DATA_TYPE_IDS))
+        expected_ops = {
+            "ivi_ui_stub": {"extract_frames", "detect_bbox", "label"},
+            "audio_array_spec": {
+                "parse_head_dat",
+                "stft_spectrogram",
+                "mel_spectrogram",
+                "third_octave",
+                "spl_timeline",
+                "label",
+            },
+            "audio_defect": {
+                "json_extract",
+                "mel_spectrogram",
+                "third_octave",
+                "spl_timeline",
+                "label_tree_input",
+            },
+        }
+        for dtype_id, want in expected_ops.items():
+            rec = seeded[dtype_id]
+            g = hydrate_graph(rec)
+            validate_graph(g)
+            keys = [n["key"] for n in g["nodes"]]
+            self.assertFalse(any(k.startswith("prep-") for k in keys), keys)
+            ops = {n["op_id"] for n in g["nodes"] if n["type"] in {"op", "label"}}
+            self.assertEqual(ops, want)
+            self.assertTrue(ops <= set(CATALOG))
+            self.assertNotIn("transcribe", ops)
+            titles = {n["op_id"]: n["title"] for n in g["nodes"] if n["type"] == "op"}
+            for op_id, title in titles.items():
+                self.assertEqual(title, CATALOG[op_id]["title"])
+                self.assertNotEqual(title, f"prep-{op_id}")
 
     def test_existing_graph_not_rebuilt(self) -> None:
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
@@ -199,6 +349,108 @@ class TestHydrateGraph(unittest.TestCase):
         rec["graph"]["nodes"][0]["title"] = "自定义源名"
         again = hydrate_graph(rec)
         self.assertEqual(again["nodes"][0]["title"], "自定义源名")
+
+    def test_hydrate_without_graph_uses_catalog_keys(self) -> None:
+        from hmi.platform.recipe import SEED_RECIPES, validate_recipe
+        from hmi.platform.recipe_graph import hydrate_graph
+
+        rec = dict(validate_recipe(SEED_RECIPES["ivi_ui_stub"]))
+        rec.pop("graph", None)
+        g = hydrate_graph(rec)
+        keys = [n["key"] for n in g["nodes"]]
+        self.assertFalse(any(k.startswith("prep-") for k in keys), keys)
+        self.assertNotIn("stage-embed", keys)
+        self.assertIn("extract_frames", keys)
+        self.assertIn("detect_bbox", keys)
+        detect = next(n for n in g["nodes"] if n["op_id"] == "detect_bbox")
+        self.assertEqual(detect["key"], "detect_bbox")
+        self.assertEqual(detect["title"], "BBox 检测器")
+
+    def test_legacy_prep_graph_remapped_to_catalog_keys(self) -> None:
+        from hmi.platform.recipe_graph import hydrate_graph
+
+        rec = {
+            "slots": [
+                {
+                    "id": "ui_media",
+                    "title": "IVI 画面",
+                    "kinds": [".mp4"],
+                    "cardinality_min": 1,
+                    "cardinality_max": 1,
+                    "required": True,
+                }
+            ],
+            "preprocess": [
+                {"op_id": "text_to_json", "produces": ["structured_json"]},
+                {"op_id": "detect_bbox", "produces": ["bboxes_jsonl"]},
+            ],
+            "stages": {"label": {"enabled": True}, "embed": {"enabled": True}},
+            "bbox": {"enabled": True, "detector": "opencv"},
+            "graph": {
+                "nodes": [
+                    {
+                        "key": "ui_media",
+                        "type": "source",
+                        "op_id": "source",
+                        "title": "IVI 画面",
+                        "params": {"kinds": [".mp4"], "required": True, "cardinality_min": 1, "cardinality_max": 1},
+                        "position": {"x": 80, "y": 0},
+                    },
+                    {
+                        "key": "prep-5-text_to_json",
+                        "type": "op",
+                        "op_id": "text_to_json",
+                        "title": "prep-5-text_to_json",
+                        "params": {},
+                        "position": {"x": 80, "y": 96},
+                    },
+                    {
+                        "key": "prep-6-detect_bbox",
+                        "type": "op",
+                        "op_id": "detect_bbox",
+                        "title": "prep-6-detect_bbox",
+                        "params": {},
+                        "position": {"x": 80, "y": 192},
+                    },
+                    {
+                        "key": "stage-embed",
+                        "type": "op",
+                        "op_id": "embed",
+                        "title": "stage-embed",
+                        "params": {},
+                        "position": {"x": 80, "y": 288},
+                    },
+                    {
+                        "key": "stage-label",
+                        "type": "label",
+                        "op_id": "label",
+                        "title": "打标器",
+                        "params": {},
+                        "position": {"x": 80, "y": 384},
+                    },
+                ],
+                "edges": [
+                    {"id": "a", "source": "ui_media", "source_port": "out", "target": "prep-5-text_to_json", "target_port": "in"},
+                    {"id": "b", "source": "prep-5-text_to_json", "source_port": "out", "target": "prep-6-detect_bbox", "target_port": "in"},
+                    {"id": "c", "source": "prep-6-detect_bbox", "source_port": "out", "target": "stage-embed", "target_port": "in"},
+                    {"id": "d", "source": "stage-embed", "source_port": "out", "target": "stage-label", "target_port": "in"},
+                ],
+            },
+        }
+        g = hydrate_graph(rec)
+        keys = [n["key"] for n in g["nodes"]]
+        self.assertFalse(any(k.startswith("prep-") for k in keys), keys)
+        self.assertNotIn("stage-embed", keys)
+        self.assertEqual(
+            {n["op_id"]: n["key"] for n in g["nodes"] if n["type"] in {"op", "label"}},
+            {"text_to_json": "text_to_json", "detect_bbox": "detect_bbox", "embed": "embed", "label": "stage-label"},
+        )
+        titles = {n["op_id"]: n["title"] for n in g["nodes"] if n["type"] == "op"}
+        self.assertEqual(titles["text_to_json"], "文本结构化")
+        self.assertEqual(titles["detect_bbox"], "BBox 检测器")
+        self.assertEqual(titles["embed"], "向量化器")
+        label = next(n for n in g["nodes"] if n["type"] == "label")
+        self.assertEqual(label["title"], "AI打标器")
 
 
 class TestProjectGraph(unittest.TestCase):
@@ -211,6 +463,22 @@ class TestProjectGraph(unittest.TestCase):
         self.assertTrue(proj["stages"]["label"]["enabled"])
         ops = [p["op_id"] for p in proj["preprocess"]]
         self.assertEqual(ops, ["transcribe"])
+
+    def test_label_node_params_fill_stage_not_prefix(self) -> None:
+        from hmi.platform.recipe_graph import project_graph, validate_graph
+
+        g = _chain()
+        for n in g["nodes"]:
+            if n["type"] == "label":
+                n["params"] = {
+                    "model": "default",
+                    "omni_label_prompt": {"system_role": "图节点 prompt"},
+                    "temperature": 0.4,
+                }
+        proj = project_graph(validate_graph(g))
+        self.assertEqual(proj["stages"]["label"]["omni_label_prompt"]["system_role"], "图节点 prompt")
+        self.assertEqual(proj["stages"]["label"]["temperature"], 0.4)
+        self.assertEqual([p["op_id"] for p in proj["preprocess"]], ["transcribe"])
 
     def test_then_only_op_not_in_preprocess(self) -> None:
         from hmi.platform.recipe_graph import graph_is_lossy, project_graph, validate_graph
@@ -235,6 +503,15 @@ class TestProjectGraph(unittest.TestCase):
         self.assertTrue(graph_is_lossy(g))
         self.assertTrue(proj["stages"]["label"]["enabled"])
 
+    def test_fill_only_graph_does_not_enable_ai_label_stage(self) -> None:
+        from hmi.platform.recipe_graph import project_graph, validate_graph
+
+        proj = project_graph(validate_graph(_fill_graph()))
+        self.assertFalse(proj["stages"]["label"]["enabled"])
+        ops = [p["op_id"] for p in proj["preprocess"]]
+        self.assertIn("json_extract", ops)
+        self.assertIn("label_tree_input", ops)
+
 
 class TestRecipeGraphIntegration(unittest.TestCase):
     def test_validate_recipe_projects_graph(self) -> None:
@@ -246,7 +523,7 @@ class TestRecipeGraphIntegration(unittest.TestCase):
         out = validate_recipe(rec)
         self.assertTrue(out["graph"]["nodes"])
         self.assertTrue(out["stages"]["label"]["enabled"])
-        self.assertEqual(out["overview"]["detail"][0]["widget_id"], "labels_tree")
+        self.assertEqual(out["overview"]["detail"][0]["widget_id"], "video_timeline")
 
     def test_ivi_seed_label_enabled(self) -> None:
         from hmi.platform.recipe import SEED_RECIPES, validate_recipe
@@ -332,6 +609,123 @@ class TestGraphExpr(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             validate_condition({"all": [{"field": "source.kind", "op": "eval", "value": "1"}]}, after_label=False)
+
+
+class TestGraphToStepsTopo(unittest.TestCase):
+    def test_palette_appended_transcribe_compiles(self) -> None:
+        from hmi.platform.recipe_graph import graph_to_steps, validate_graph
+        from hmi.platform.recipe_pipeline import compile_steps
+
+        g = {
+            "nodes": [
+                {
+                    "key": "audio",
+                    "type": "source",
+                    "op_id": "source",
+                    "title": "音频",
+                    "params": {"kinds": [".wav"], "required": True},
+                    "position": {"x": 0, "y": 0},
+                },
+                {
+                    "key": "embed",
+                    "type": "op",
+                    "op_id": "embed",
+                    "title": "向量化器",
+                    "params": {},
+                    "position": {"x": 0, "y": 80},
+                    "bindings": {
+                        "in": {"kind": "upstream", "step_key": "op-transcribe-1", "port_id": "asr_jsonl"},
+                    },
+                },
+                {
+                    "key": "lab",
+                    "type": "label",
+                    "op_id": "label",
+                    "title": "打标器",
+                    "params": {},
+                    "position": {"x": 0, "y": 160},
+                },
+                {
+                    "key": "op-transcribe-1",
+                    "type": "op",
+                    "op_id": "transcribe",
+                    "title": "音频 ASR",
+                    "params": {},
+                    "position": {"x": 0, "y": 240},
+                },
+            ],
+            "edges": [
+                {"id": "a", "source": "audio", "source_port": "out", "target": "op-transcribe-1", "target_port": "in"},
+                {"id": "b", "source": "op-transcribe-1", "source_port": "out", "target": "embed", "target_port": "in"},
+                {"id": "c", "source": "embed", "source_port": "out", "target": "lab", "target_port": "in"},
+            ],
+        }
+        g = validate_graph(g)
+        self.assertEqual(g["nodes"][1]["bindings"]["in"]["step_key"], "op-transcribe-1")
+        steps = graph_to_steps(g)
+        keys = [s["key"] for s in steps]
+        self.assertLess(keys.index("op-transcribe-1"), keys.index("embed"))
+        compile_steps(steps)
+
+    def test_inspector_binding_without_edge_reorders(self) -> None:
+        from hmi.platform.recipe_graph import graph_to_steps, validate_graph
+        from hmi.platform.recipe_pipeline import compile_steps
+
+        g = {
+            "nodes": [
+                {
+                    "key": "src-1",
+                    "type": "source",
+                    "op_id": "source",
+                    "title": "数据源",
+                    "params": {"kinds": [".mp4"], "required": True},
+                    "position": {"x": 0, "y": 0},
+                },
+                {
+                    "key": "lab",
+                    "type": "label",
+                    "op_id": "label",
+                    "title": "打标器",
+                    "params": {},
+                    "position": {"x": 0, "y": 80},
+                    "bindings": {
+                        "in": {"kind": "upstream", "step_key": "op-transcribe-1", "port_id": "asr_jsonl"},
+                    },
+                },
+                {
+                    "key": "op-transcribe-1",
+                    "type": "op",
+                    "op_id": "transcribe",
+                    "title": "音频 ASR",
+                    "params": {},
+                    "position": {"x": 0, "y": 160},
+                },
+            ],
+            "edges": [
+                {"id": "e1", "source": "src-1", "source_port": "out", "target": "lab", "target_port": "in"},
+            ],
+        }
+        g = validate_graph(g)
+        steps = graph_to_steps(g)
+        keys = [s["key"] for s in steps]
+        self.assertLess(keys.index("op-transcribe-1"), keys.index("lab"))
+        compile_steps(steps)
+
+    def test_storage_order_would_reject_appended_transcribe(self) -> None:
+        from hmi.platform.recipe_pipeline import assert_upward_bindings
+
+        steps = [
+            {"key": "audio", "card_kind": "source", "op_id": "source", "kinds": [".wav"], "bindings": {}},
+            {
+                "key": "embed",
+                "op_id": "embed",
+                "bindings": {"in": {"kind": "upstream", "step_key": "op-transcribe-1"}},
+            },
+            {"key": "op-transcribe-1", "op_id": "transcribe", "bindings": {}},
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            assert_upward_bindings(steps)
+        self.assertIn("op-transcribe-1", str(ctx.exception))
 
 
 if __name__ == "__main__":

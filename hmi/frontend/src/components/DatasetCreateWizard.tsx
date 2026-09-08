@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { apiErrorMessage } from '../utils/apiError'
+import { buildClipExplorerHref } from '../utils/clipExplorerHref'
 import type {
   DatasetExportRecommendation,
   DatasetPoolClipItem,
@@ -651,9 +652,7 @@ export function DatasetCreateWizard({ open, onClose, onCreated }: Props) {
                   onClick={() => {
                     setPoolModalOpen(false)
                     onClose()
-                    navigate(
-                      `/clips/${encodeURIComponent(row.clip_id)}?run_id=${encodeURIComponent(row.run_id)}`,
-                    )
+                    navigate(buildClipExplorerHref(row.clip_id, { runId: row.run_id }))
                   }}
                 >
                   详情

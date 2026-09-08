@@ -1,25 +1,29 @@
 # 进度看板
 
-> 最后更新：2026-09-03
+> 最后更新：2026-09-07
 
 ## Todo
 
 | ID | 标题 | 里程碑 |
 |----|------|--------|
-| UI-NVH-REVIEW-SAVE | 语义 L6 人工写回（**推荐下一**） | platform |
+| M7.5-E2E | Parquet 全链 zip E2E（**推荐下一 / 可选**） | M7.5 |
 | M9.3-H-2 | HMI 在线主观（**暂停不排期**） | M9 |
-| M7.5-E2E | Parquet 全链 zip E2E | M7.5 |
 
 ## Doing
 
 | ID | 标题 | 备注 |
 |----|------|------|
-| 平台内核重构 | DataType 底座 | 源节点 + 开跑分源已接；勿 publish audio_nvh-v2 |
+| 平台内核重构 | DataType 底座 | run 分支已并列生效；勿 publish audio_nvh-v2 |
 
 ## Done
 
 | ID | 标题 | 完成日 |
 |----|------|--------|
+| **PLAT-RUN-BRANCHES** | 同一 clip 每次 run 并列生效 | 2026-09-07 |
+| **PLAT-DAG-IO-CONTRACT** | DAG 输入封闭 + 黄叹号 + 节点试跑 | 2026-09-07 |
+| **PLAT-CAPABILITY-KERNEL** | DAG kernel：阵列 NVH + `text_to_json` | 2026-09-07 |
+| **UI-NVH-REVIEW-SAVE** | 语义 L6 人工写回 facts + nvh_labels.json；e2e tree 2/2 | 2026-09-04 |
+| **FIX-ENCODE-FFMPEG** | Windows 无 PATH ffmpeg 时 encode_preview 用捆绑二进制 | 2026-09-04 |
 | **UI-DTYPE-DAG-CANVAS** | 执行 DAG 画板 + 本地 graph runtime + 橱窗锁标签树；e2e editor 3/3 | 2026-09-03 |
 | **UI-DTYPE-SOURCE-NODES** | 数据源节点 + 开跑分源；2026-09-03 polish：打标器固定最后，e2e editor 3/3 | 2026-09-03 |
 | **UI-DTYPE-OVERVIEW-COMPOSE** | 总览列表 + 详情组件拼版 | 2026-09-02 |

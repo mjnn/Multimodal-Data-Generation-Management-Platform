@@ -15,7 +15,7 @@
 
 ## 种子配方 slots（勿随意删）
 
-见 `recipe.py` 内 `seed_recipes`：`oms_cabin` 多路相机+音频；`audio_array_spec` 阵列+HEAD.dat；`ivi_ui_stub` 画面占位。
+见 `recipe.py` 内 `seed_recipes`：`oms_cabin` 多路相机+音频；`audio_array_spec` 阵列+HEAD.dat；`ivi_ui_stub` 画面占位；`audio_defect` 单路 wav + 布尔「是否有问题音频」（draft `audio_defect-v1`）。梅尔/SPL 运行时解码 PCM `.wav` 或 HEAD `.dat`；`parse_head_dat` 仍只要 `.dat`。
 
 ## 源 kind
 

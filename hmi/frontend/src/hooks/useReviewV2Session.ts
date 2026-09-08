@@ -8,6 +8,7 @@ import { api } from '../api'
 
 import type { ReviewV2Action, ReviewV2Mode, ReviewV2StagedReview, ReviewV2Task } from '../api/types'
 
+import { inspectEnumReviewValue } from '../utils/enumTree'
 import {
 
   buildStagedReview,
@@ -364,6 +365,18 @@ export function useReviewV2Session(batchId?: string | null) {
 
       if (!task) return
 
+      if (action === 'confirm' || action === 'correct') {
+        const inspected = inspectEnumReviewValue(
+          task.value_schema,
+          action === 'confirm' ? task.ai_value : value,
+          task.dtype,
+        )
+        if (!inspected.complete) {
+          message.error(inspected.message ?? '嵌套枚举未完成，无法暂存')
+          return
+        }
+      }
+
       const key = reviewTaskKey(task.clip_id, task.run_id, task.label_id)
 
       const entry = buildStagedReview(task, action, value)
@@ -443,6 +456,18 @@ export function useReviewV2Session(batchId?: string | null) {
         const entry = staged[key]
 
         if (!entry) continue
+
+        if (entry.action === 'confirm' || entry.action === 'correct') {
+          const inspected = inspectEnumReviewValue(
+            item.value_schema,
+            entry.action === 'confirm' ? entry.ai_value : entry.value,
+            item.dtype,
+          )
+          if (!inspected.complete) {
+            message.error(inspected.message ?? `嵌套枚举未完成：${item.label_id}`)
+            return false
+          }
+        }
 
         const clipUpdatedAt = await resolveClipUpdatedAt(item)
 

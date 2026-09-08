@@ -1,7 +1,7 @@
 import type { ClipOverview } from '../api/types'
 
 /** Bump when overview row semantics change (e.g. data_type isolation). */
-const STORAGE_KEY = 'hmi-overview-cache-v3'
+const STORAGE_KEY = 'hmi-overview-cache-v4'
 /** Client-side overview cache TTL: 6 hours. */
 export const OVERVIEW_CACHE_TTL_MS = 6 * 60 * 60 * 1000
 

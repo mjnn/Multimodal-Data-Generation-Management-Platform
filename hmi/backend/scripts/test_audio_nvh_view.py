@@ -17,12 +17,20 @@ sys.path.insert(0, str(REPO / "shared"))
 class TestAudioNvhViewTemplates(unittest.TestCase):
     def test_view_and_recipe(self) -> None:
         from hmi.platform.recipe import seed_recipes
-        from hmi.platform.views import VIEW_TEMPLATE_IDS
+        from hmi.platform.views import VIEW_TEMPLATE_IDS, VIEW_WIDGET_IDS, hydrate_overview
 
-        self.assertIn("audio_nvh_timeline", VIEW_TEMPLATE_IDS)
-        self.assertIn("audio_spec_asr", VIEW_TEMPLATE_IDS)
+        self.assertIn("spectrum_timeline", VIEW_WIDGET_IDS)
+        self.assertIn("video_timeline", VIEW_WIDGET_IDS)
+        self.assertIn("labels_tree", VIEW_WIDGET_IDS)
+        self.assertNotIn("nvh_spectrum", VIEW_WIDGET_IDS)
+        self.assertNotIn("cabin_multicam", VIEW_WIDGET_IDS)
+        self.assertEqual(VIEW_TEMPLATE_IDS, frozenset({"custom"}))
         rec = seed_recipes()["audio_array_spec"]
-        self.assertEqual(rec["overview_view"], "audio_nvh_timeline")
+        self.assertEqual(rec["overview_view"], "custom")
+        ov = hydrate_overview({"overview_view": "custom"})
+        self.assertEqual(ov["detail"], [])
+        with self.assertRaises(ValueError):
+            hydrate_overview({"overview": {"detail": [{"widget_id": "nvh_spectrum"}]}})
 
 
 class TestAudioNvhBootstrap(unittest.TestCase):

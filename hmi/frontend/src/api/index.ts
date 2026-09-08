@@ -60,6 +60,7 @@ import type {
   PlatformProductRecord,
   PlatformSourceRecord,
   SlotAssignment,
+  RecipeGraph,
 } from './types'
 
 /** Query `mode` for review v2 APIs (legacy servers only accept `ai_dispute` for open queue). */
@@ -1011,6 +1012,28 @@ export const api = {
     assignments?: SlotAssignment[]
   }): Promise<PlatformRunPreflight> =>
     fetchJson('/platform/runs/preflight', { method: 'POST', body: JSON.stringify(body) }),
+
+  diagnosePlatformGraph: (body: {
+    graph?: RecipeGraph
+    data_type_id?: string
+  }): Promise<{ nodes: Record<string, { level: string; codes: string[]; message: string }> }> =>
+    fetchJson('/platform/graph/diagnose', { method: 'POST', body: JSON.stringify(body) }),
+
+  probePlatformGraph: (body: {
+    until_key: string
+    graph?: RecipeGraph
+    data_type_id?: string
+    include_ai?: boolean
+    source_ids?: string[]
+  }): Promise<{
+    ok: boolean
+    ran?: boolean
+    error?: string
+    produces_expected?: string[]
+    produces_found?: string[]
+    missing?: string[]
+    consume?: Record<string, boolean>
+  }> => fetchJson('/platform/runs/probe', { method: 'POST', body: JSON.stringify(body) }),
 
   createPlatformRun: (body: {
     data_type_id: string

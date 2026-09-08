@@ -7,6 +7,9 @@ type ClipSyncedAudioProps = {
   endNs: number
   cursorNs: number
   playing: boolean
+  /** Elapsed seconds in the audio file (startNs maps to 0). */
+  onClock?: (elapsedSec: number) => void
+  onEnded?: () => void
 }
 
 export function ClipSyncedAudio({
@@ -15,6 +18,8 @@ export function ClipSyncedAudio({
   endNs,
   cursorNs,
   playing,
+  onClock,
+  onEnded,
 }: ClipSyncedAudioProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const scrubbingRef = useRef(false)
@@ -53,6 +58,15 @@ export function ClipSyncedAudio({
       }}
       onSeeked={() => {
         scrubbingRef.current = false
+      }}
+      onTimeUpdate={(e) => {
+        if (!playing) return
+        const elapsed = Math.min(durationSec, Math.max(0, e.currentTarget.currentTime))
+        onClock?.(elapsed)
+      }}
+      onEnded={() => {
+        onClock?.(durationSec)
+        onEnded?.()
       }}
     />
   )

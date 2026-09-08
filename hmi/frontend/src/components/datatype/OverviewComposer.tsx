@@ -1,5 +1,5 @@
 import { DeleteOutlined } from '@ant-design/icons'
-import { Button, Select, Space, Typography } from 'antd'
+import { Button, Input, Select, Space, Typography } from 'antd'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type {
   PipelineBinding,
@@ -9,7 +9,6 @@ import type {
   ViewCard,
   ViewWidget,
 } from '../../api/types'
-import { ensureLabelsTree } from '../../utils/overviewLayout'
 import {
   asBindingList,
   bindingOptions,
@@ -33,22 +32,17 @@ type Props = {
 }
 
 export function OverviewComposer({ overview, onChange, widgets, steps, operators, typeProvides }: Props) {
-  useEffect(() => {
-    if (overview.detail.some((c) => c.widget_id === 'labels_tree')) return
-    onChange({ ...overview, detail: ensureLabelsTree(overview.detail) })
-  }, [overview, onChange])
-
   return (
     <div className="overview-compose" data-testid="overview-composer" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <OverviewSurface
         surface="detail"
         title="展示页"
-        cards={ensureLabelsTree(overview.detail)}
+        cards={overview.detail}
         widgets={widgets.filter((w) => w.surface === 'detail')}
         steps={steps}
         operators={operators}
         typeProvides={typeProvides}
-        onChange={(detail) => onChange({ ...overview, detail: ensureLabelsTree(detail) })}
+        onChange={(detail) => onChange({ ...overview, detail })}
       />
     </div>
   )
@@ -79,7 +73,6 @@ function OverviewSurface({
   const [dragOver, setDragOver] = useState<number | null>(null)
 
   const add = (widgetId: string) => {
-    if (widgetId === 'labels_tree' && cards.some((c) => c.widget_id === 'labels_tree')) return
     onChange([...cards, { key: `${surface}-${widgetId}-${Date.now()}`, widget_id: widgetId, bindings: {} }])
   }
 
@@ -135,7 +128,6 @@ function OverviewSurface({
       <div className="pipe-orch__palette">
         <p className="pipe-orch__palette-kicker">{title}组件</p>
         {widgets.map((w) => {
-          if (w.id === 'labels_tree' && cards.some((c) => c.widget_id === 'labels_tree')) return null
           return (
             <button
               key={w.id}
@@ -155,18 +147,11 @@ function OverviewSurface({
         ) : (
           cards.map((card, index) => {
             const spec = widgets.find((w) => w.id === card.widget_id)
-            const locked = card.widget_id === 'labels_tree'
             return (
-              <div
-                key={card.key}
-                data-ov-surface={surface}
-                data-ov-index={index}
-                data-testid={locked ? 'overview-locked-labels_tree' : undefined}
-              >
+              <div key={card.key} data-ov-surface={surface} data-ov-index={index}>
                 <OverviewWidgetCard
                   card={card}
                   spec={spec}
-                  locked={locked}
                   steps={steps}
                   operators={operators}
                   typeProvides={typeProvides}
@@ -188,7 +173,6 @@ function OverviewSurface({
 function OverviewWidgetCard({
   card,
   spec,
-  locked,
   steps,
   operators,
   typeProvides,
@@ -200,7 +184,6 @@ function OverviewWidgetCard({
 }: {
   card: ViewCard
   spec?: ViewWidget
-  locked?: boolean
   steps: PipelineStep[]
   operators: PlatformOperator[]
   typeProvides: Record<string, string[]>
@@ -232,9 +215,7 @@ function OverviewWidgetCard({
       dragOver={dragOver}
       onHandlePointerDown={onHandlePointerDown}
       extra={
-        locked ? null : (
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={onRemove} data-testid={`overview-remove-${card.widget_id}`} />
-        )
+        <Button size="small" danger icon={<DeleteOutlined />} onClick={onRemove} data-testid={`overview-remove-${card.widget_id}`} />
       }
     >
       {spec?.description ? (
@@ -250,6 +231,8 @@ function OverviewWidgetCard({
             </Typography.Text>
             <Select
               allowClear
+              showSearch
+              optionFilterProp="label"
               mode="multiple"
               placeholder={options.length ? '数据源或上游产出' : '无兼容输入'}
               style={{ width: '100%' }}
@@ -264,9 +247,40 @@ function OverviewWidgetCard({
                 onChange({ ...card, bindings: next.length ? { in: next } : {} })
               }}
             />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              同步组（同名卡片共用播放头）
+            </Typography.Text>
+            <Input
+              data-testid="overview-sync-group"
+              allowClear
+              placeholder="留空则独立"
+              value={card.sync_group || ''}
+              onChange={(e) => {
+                const v = e.target.value.trim()
+                onChange({ ...card, sync_group: v || undefined })
+              }}
+            />
           </Space>
         </div>
-      ) : null}
+      ) : (
+        <div data-testid={`overview-bind-${card.widget_id}`}>
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              同步组（同名卡片共用播放头）
+            </Typography.Text>
+            <Input
+              data-testid="overview-sync-group"
+              allowClear
+              placeholder="留空则独立"
+              value={card.sync_group || ''}
+              onChange={(e) => {
+                const v = e.target.value.trim()
+                onChange({ ...card, sync_group: v || undefined })
+              }}
+            />
+          </Space>
+        </div>
+      )}
     </PipelineCardShell>
   )
 }
@@ -279,7 +293,7 @@ export function OverviewPreview({
   widgets: ViewWidget[]
 }) {
   const byId = new Map(widgets.map((w) => [w.id, w]))
-  const detail = ensureLabelsTree(overview.detail || [])
+  const detail = overview.detail || []
   return (
     <div className="overview-preview" data-testid="overview-preview">
       <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>

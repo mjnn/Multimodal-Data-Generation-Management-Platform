@@ -1,0 +1,25 @@
+---
+description: DataType 编辑器编排/展示页布局：管线在上、预设在展示页、控制流不下架节点类型
+globs: hmi/frontend/src/pages/DataTypeEditorPage.tsx,hmi/frontend/src/components/datatype/**
+alwaysApply: false
+---
+
+# DataType 编辑器编排 UX
+
+## 必须
+
+- **已保存**类型（`!isNew`）：同页叠卡顺序为基本信息 → **管线编排** → **展示页排版**
+- **新建**向导：仍分步（基本信息 → 管线 → 展示页），不要套用编辑页叠卡顺序
+- **从预设填入**只放在展示页排版模块（`OverviewLayoutIntro`）；`taxonomy_id` 留在基本信息（Job3 绑树）
+- 控制流 palette **不提供**校核、导出；只留数据源与 if/else（改 `PALETTE_EXTRAS`）
+- `labels_tree` 不进展示页组件盘、不自动插入；Clip 详情已有标签。`VIEW_WIDGETS["labels_tree"]` 保留，旧 JSON 才能校验
+
+## 禁止
+
+- 从 `DAG_NODE_TYPES` / `validate_graph` / inspector 删掉 review、export（旧图还要能打开）
+- 保存/GET 时 `hydrate_overview` 再塞回 `labels_tree`
+- 把展示页预设下拉放回 taxonomy 旁边
+
+## 来源
+
+沉淀自 session 2026-09-04；`DataTypeEditorPage.tsx`、`PipelineDagCanvas.tsx`、`views.py`

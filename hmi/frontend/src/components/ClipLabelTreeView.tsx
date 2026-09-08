@@ -6,11 +6,8 @@ import { AiLabelHintReference } from './AiLabelHintReference'
 import { LabelQuickReviewModal } from './LabelQuickReviewModal'
 import { clipLabelsFlat, formatLabelValue } from '../utils/labelDisplay'
 
-function hasClipLabelValue(flat: Record<string, unknown>, labelId: string): boolean {
-  if (!(labelId in flat)) return false
-  const v = flat[labelId]
-  if (v === null || v === undefined) return false
-  if (typeof v === 'string' && v.trim() === '') return false
+function isQuickReviewableLabel(labelId: string): boolean {
+  if (labelId.startsWith('nvh.') && !labelId.startsWith('nvh.sem.')) return false
   return true
 }
 
@@ -51,16 +48,10 @@ function effectiveTaxonomyNodes(
   taxonomyNodes: TaxonomyNodeDetail[],
   flat: Record<string, unknown>,
 ): TaxonomyNodeDetail[] {
+  const activeNodes = taxonomyNodes.filter((node) => node.is_active !== false)
+  if (activeNodes.length) return taxonomyNodes
   const flatKeys = Object.keys(flat)
   if (!flatKeys.length) return taxonomyNodes
-
-  const activeNodes = taxonomyNodes.filter((node) => node.is_active !== false)
-  if (!activeNodes.length) return syntheticNodesFromFlat(flat)
-
-  const nodeIds = new Set(activeNodes.map((node) => node.label_id))
-  const overlap = flatKeys.filter((key) => nodeIds.has(key)).length
-  if (overlap > 0) return taxonomyNodes
-
   return syntheticNodesFromFlat(flat)
 }
 
@@ -74,15 +65,8 @@ type LevelGroup = {
 
 function groupActiveNodes(
   taxonomyNodes: TaxonomyNodeDetail[],
-  flat: Record<string, unknown>,
   reviewedSet: Set<string>,
 ): LevelGroup[] {
-  const nodeByLabelId = new Map<string, TaxonomyNodeDetail>()
-  for (const node of taxonomyNodes) {
-    if (node.is_active === false) continue
-    nodeByLabelId.set(node.label_id, node)
-  }
-
   const groups = new Map<string, LevelGroup>()
   for (const node of taxonomyNodes) {
     if (node.is_active === false) continue
@@ -99,22 +83,14 @@ function groupActiveNodes(
     groups.get(levelCode)!.nodes.push(node)
   }
 
-  for (const labelId of Object.keys(flat)) {
-    const node = nodeByLabelId.get(labelId)
-    if (!node) continue
-    const levelCode = node.level_code || 'other'
-    const group = groups.get(levelCode)
-    if (!group) continue
-    group.totalCount += 1
-    if (reviewedSet.has(labelId)) group.reviewedCount += 1
-  }
-
   for (const group of groups.values()) {
     group.nodes.sort((a, b) => a.sort_order - b.sort_order || a.label_id.localeCompare(b.label_id))
+    group.totalCount = group.nodes.length
+    group.reviewedCount = group.nodes.filter((node) => reviewedSet.has(node.label_id)).length
   }
 
   return [...groups.values()]
-    .filter((group) => group.totalCount > 0)
+    .filter((group) => group.nodes.length > 0)
     .sort((a, b) => a.key.localeCompare(b.key))
 }
 
@@ -148,13 +124,12 @@ export function ClipLabelTreeView({
     () => effectiveTaxonomyNodes(taxonomyNodes, flat),
     [taxonomyNodes, flat],
   )
-  const groups = useMemo(() => {
-    const active = groupActiveNodes(resolvedTaxonomyNodes, flat, reviewedSet)
-    return active.map((group) => ({
-      ...group,
-      nodes: group.nodes.filter((node) => hasClipLabelValue(flat, node.label_id)),
-    }))
-  }, [resolvedTaxonomyNodes, flat, reviewedSet])
+  const groups = useMemo(
+    () => groupActiveNodes(resolvedTaxonomyNodes, reviewedSet),
+    [resolvedTaxonomyNodes, reviewedSet],
+  )
+  const allGroupKeys = groups.map((g) => g.key)
+  const activeGroupKeys = expandedGroupKeys.length > 0 ? expandedGroupKeys : allGroupKeys
 
   if (!groups.length) {
     return (
@@ -186,7 +161,10 @@ export function ClipLabelTreeView({
           <Typography.Text type="secondary" className="mono" style={{ fontSize: 11, display: 'block' }}>
             {labelId}
           </Typography.Text>
-          <Typography.Text style={{ fontSize: 13, display: 'block', marginTop: 4, wordBreak: 'break-word' }}>
+          <Typography.Text
+            data-testid={`label-tree-value-${labelId}`}
+            style={{ fontSize: 13, display: 'block', marginTop: 4, wordBreak: 'break-word' }}
+          >
             {formatLabelValue(flat[labelId], taxonomyNode)}
           </Typography.Text>
           <div style={{ marginTop: 6 }}>
@@ -201,11 +179,12 @@ export function ClipLabelTreeView({
           >
             {reviewed ? '已校核' : '待校核'}
           </Tag>
-          {canQuickReview && clipId && runId ? (
+          {canQuickReview && clipId && runId && isQuickReviewableLabel(labelId) ? (
             <Button
               type="link"
               size="small"
               icon={<EditOutlined />}
+              data-testid={`quick-review-${labelId}`}
               style={{ paddingInline: 0, height: 'auto' }}
               onClick={() => {
                 setActiveLabelId(labelId)
@@ -224,7 +203,7 @@ export function ClipLabelTreeView({
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Collapse
         size="small"
-        activeKey={expandedGroupKeys}
+        activeKey={activeGroupKeys}
         onChange={(keys) => {
           setExpandedGroupKeys(Array.isArray(keys) ? keys : keys ? [keys] : [])
         }}

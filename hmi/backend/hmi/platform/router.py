@@ -84,6 +84,71 @@ class ProductLookupIn(BaseModel):
     run_id: str | None = None
 
 
+class GraphDiagnoseIn(BaseModel):
+    graph: dict[str, Any] | None = None
+    data_type_id: str | None = None
+
+
+class GraphProbeIn(BaseModel):
+    until_key: str
+    graph: dict[str, Any] | None = None
+    data_type_id: str | None = None
+    include_ai: bool = False
+    source_ids: list[str] = Field(default_factory=list)
+    assignments: list[SlotAssignmentIn] | None = None
+
+
+@router.post("/graph/diagnose")
+def api_graph_diagnose(
+    body: GraphDiagnoseIn,
+    _user: dict[str, Any] = Depends(require_overview_access),
+) -> dict[str, Any]:
+    from hmi.platform.io_contract import diagnose_graph
+
+    graph = body.graph
+    if graph is None:
+        rec = get_data_type(str(body.data_type_id or ""))
+        if rec is None:
+            raise HTTPException(404, detail={"code": "UNKNOWN_DATA_TYPE"})
+        graph = rec.get("graph")
+    try:
+        return {"nodes": diagnose_graph(graph if isinstance(graph, dict) else {})}
+    except ValueError as exc:
+        raise HTTPException(400, detail={"code": "INVALID_GRAPH", "message": str(exc)}) from exc
+
+
+@router.post("/runs/probe")
+def api_graph_probe(
+    body: GraphProbeIn,
+    _user: dict[str, Any] = Depends(require_pipeline_write),
+) -> dict[str, Any]:
+    from hmi.data_source import is_local_mode
+    from hmi.platform.io_probe import probe_graph
+
+    if not is_local_mode():
+        raise HTTPException(400, detail="node probe is only available in local mode")
+    graph = body.graph
+    recipe = None
+    if body.data_type_id:
+        recipe = get_data_type(body.data_type_id)
+        if recipe is None:
+            raise HTTPException(404, detail={"code": "UNKNOWN_DATA_TYPE"})
+        if graph is None:
+            graph = recipe.get("graph")
+    if not isinstance(graph, dict):
+        raise HTTPException(400, detail="graph required")
+    try:
+        return probe_graph(
+            graph,
+            until_key=body.until_key,
+            include_ai=body.include_ai,
+            source_ids=list(body.source_ids or []),
+            recipe=recipe,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, detail={"code": "INVALID_GRAPH", "message": str(exc)}) from exc
+
+
 @router.get("/operators")
 def api_list_operators(_user: dict[str, Any] = Depends(require_overview_access)) -> dict[str, Any]:
     return {

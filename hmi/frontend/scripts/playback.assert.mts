@@ -4,8 +4,10 @@
  *   node --experimental-strip-types scripts/playback.assert.mts
  */
 import {
+  advancePlayhead,
   isNearClipEnd,
   NEAR_END_NS,
+  PLAYHEAD_TICK_S,
   replayFromStart,
   togglePlayWithReplay,
 } from '../src/utils/playback.ts'
@@ -85,5 +87,16 @@ replayFromStart({
   },
 })
 assert(cursor === start && playing === true, 'replayFromStart seeks and plays')
+
+let head = 0
+for (let i = 0; i < 10; i += 1) {
+  const step = advancePlayhead(head, 16.5)
+  assert(!step.ended, `tick ${i} should not end`)
+  assert(Math.abs(step.nextS - (i + 1) * PLAYHEAD_TICK_S) < 1e-9, 'ticks accumulate, not freeze at start+dt')
+  head = step.nextS
+}
+assert(Math.abs(head - 1.0) < 1e-9, '10 ticks at 0.1s = 1.0s')
+const last = advancePlayhead(16.4, 16.5)
+assert(last.nextS === 16.5 && last.ended, 'tick past duration ends')
 
 console.log('playback.assert.mts: ok')

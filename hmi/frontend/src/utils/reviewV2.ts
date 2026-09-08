@@ -1,8 +1,14 @@
 import type { ReviewV2Action, ReviewV2StagedReview, ReviewV2Task } from '../api/types'
 
+import { formatEnumReviewValue, parseEnumPath } from './enumTree'
+
 export function formatReviewValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '（空）'
   if (typeof value === 'boolean') return value ? '是' : '否'
+  const path = parseEnumPath(value)
+  if (path.length > 1 || (Array.isArray(value) && path.length === 1)) {
+    return formatEnumReviewValue(value)
+  }
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }

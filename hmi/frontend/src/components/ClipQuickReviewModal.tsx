@@ -81,6 +81,14 @@ export function ClipQuickReviewModal({
 
   const persist = async (reviewStatus: ReviewStatus) => {
     if (!review) return false
+    if (reviewStatus === 'reviewed') {
+      try {
+        await form.validateFields()
+      } catch {
+        message.error('嵌套枚举每一级都需要取值后才能完成校核')
+        return false
+      }
+    }
     setSaving(true)
     try {
       const edited = form.getFieldsValue(true) as Record<string, unknown>

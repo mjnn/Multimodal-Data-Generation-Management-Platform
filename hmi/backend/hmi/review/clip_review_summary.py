@@ -108,7 +108,7 @@ def _batch_review_statuses() -> dict[tuple[str, str], str]:
 def batch_clip_review_summaries(
     clip_runs: list[tuple[str, str]],
 ) -> dict[str, dict[str, Any]]:
-    """Batch summaries keyed by clip_id (uses active run_id per entry)."""
+    """Batch summaries keyed by clip_id::run_id (also clip_id last-write for cloud)."""
     if not clip_runs:
         return {}
 
@@ -148,7 +148,7 @@ def batch_clip_review_summaries(
         if complete and label_total > 0:
             progress_pct = 100.0
 
-        out[clip_id] = {
+        summary = {
             "label_total": label_total,
             "dispute_count": dispute_count,
             "field_reviewed_count": field_reviewed,
@@ -157,4 +157,8 @@ def batch_clip_review_summaries(
             "dataset_ready": label_total > 0 and complete,
             "review_status": review_status,
         }
+        from hmi.services.clips import clip_run_key
+
+        out[clip_run_key(clip_id, run_id)] = summary
+        out[clip_id] = summary
     return out

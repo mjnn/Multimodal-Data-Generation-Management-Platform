@@ -5,7 +5,7 @@ import { api } from '../api'
 import type { AudioNvhBootstrap, AudioNvhChannel } from '../api/types'
 import { getAccessToken } from '../auth/tokenStore'
 import { useTimelineKeyboard } from '../hooks/useTimelineKeyboard'
-import { replayFromStart, togglePlayWithReplay } from '../utils/playback'
+import { replayFromStart, togglePlayWithReplay, advancePlayhead } from '../utils/playback'
 import { resolveMediaUrl } from '../utils/mediaUrl'
 import { ClipSyncedAudio } from './ClipSyncedAudio'
 
@@ -18,6 +18,13 @@ type Props = {
   previewContext?: 'browse' | 'review'
   testId?: string
   onReady?: (boot: AudioNvhBootstrap) => void
+  /** When set, render only boot.channels[channelIndex]. */
+  channelIndex?: number
+  channelName?: string
+  /** Controlled playhead (seconds). Uncontrolled when omitted. */
+  cursorS?: number
+  onCursorChange?: (t: number) => void
+  enableAudio?: boolean
 }
 
 function formatSec(t: number): string {
@@ -224,15 +231,39 @@ export function AudioNvhTimelinePanel({
   runId,
   testId,
   onReady,
+  channelIndex,
+  channelName,
+  cursorS: cursorSProp,
+  onCursorChange,
+  enableAudio = true,
 }: Props) {
   const [boot, setBoot] = useState<AudioNvhBootstrap | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [cursorS, setCursorS] = useState(0)
+  const [cursorSLocal, setCursorSLocal] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [wave, setWave] = useState<number[]>([])
   const [spl, setSpl] = useState<SplPoint[]>([])
-  const activeCh = boot?.channels?.[0]
+  const cursorS = cursorSProp != null ? cursorSProp : cursorSLocal
+  const cursorRef = useRef(cursorS)
+  cursorRef.current = cursorS
+  const onCursorChangeRef = useRef(onCursorChange)
+  onCursorChangeRef.current = onCursorChange
+  const setCursorS = useCallback((t: number | ((prev: number) => number)) => {
+    const prev = cursorRef.current
+    const next = typeof t === 'function' ? t(prev) : t
+    cursorRef.current = next
+    setCursorSLocal(next)
+    onCursorChangeRef.current?.(next)
+  }, [])
+  const channels = boot?.channels || []
+  const sliced =
+    channelIndex == null
+      ? channels
+      : channelIndex >= 0 && channelIndex < channels.length
+        ? [channels[channelIndex]]
+        : []
+  const activeCh = sliced[0]
 
   useEffect(() => {
     let cancelled = false
@@ -302,19 +333,20 @@ export function AudioNvhTimelinePanel({
   const startNs = 0
   const endNs = Math.round(durationS * 1e9)
   const cursorNs = Math.round(cursorS * 1e9)
+  const hasAudio = Boolean(enableAudio && boot?.audio_url)
 
   const onSeek = useCallback(
     (t: number) => {
       setCursorS(Math.min(durationS, Math.max(0, t)))
     },
-    [durationS],
+    [durationS, setCursorS],
   )
 
   const onCursorChangeNs = useCallback(
     (ns: number) => {
       setCursorS(Math.min(durationS, Math.max(0, ns / 1e9)))
     },
-    [durationS],
+    [durationS, setCursorS],
   )
 
   useTimelineKeyboard({
@@ -329,19 +361,14 @@ export function AudioNvhTimelinePanel({
   })
 
   useEffect(() => {
-    if (!playing) return
+    if (!playing || hasAudio) return
     const timer = window.setInterval(() => {
-      setCursorS((prev) => {
-        const next = prev + 0.1
-        if (next >= durationS) {
-          setPlaying(false)
-          return durationS
-        }
-        return next
-      })
+      const { nextS, ended } = advancePlayhead(cursorRef.current, durationS)
+      setCursorS(nextS)
+      if (ended) setPlaying(false)
     }, 100)
     return () => window.clearInterval(timer)
-  }, [playing, durationS])
+  }, [playing, durationS, hasAudio, setCursorS])
 
   const leqMean = useMemo(() => {
     if (boot?.leq_db_mean != null) return boot.leq_db_mean
@@ -405,20 +432,28 @@ export function AudioNvhTimelinePanel({
             >
               重播
             </Button>
-            <Typography.Text type="secondary">
+            <Typography.Text type="secondary" data-testid="audio-nvh-clock">
               {formatSec(cursorS)} / {formatSec(durationS)}
             </Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               空格播放/暂停（结束时再按从头）
             </Typography.Text>
             {leqMean != null ? <Tag color="blue">Leq {leqMean.toFixed(1)} dB</Tag> : null}
-            <Tag icon={<SoundOutlined />}>{boot.channels.length} 通道</Tag>
+            <Tag icon={<SoundOutlined />}>
+              {channelIndex == null
+                ? `${boot.channels.length} 通道`
+                : channelName || sliced[0]?.name || `ch${channelIndex + 1}`}
+            </Tag>
             {boot.fs_hz ? <Tag>{boot.fs_hz} Hz</Tag> : null}
           </Space>
 
-          {(boot.channels || []).map((ch) => (
-            <ChannelSpec key={ch.name} channel={ch} durationS={durationS} cursorS={cursorS} onSeek={onSeek} />
-          ))}
+          {channelIndex != null && !sliced.length ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本路无频谱" />
+          ) : (
+            sliced.map((ch) => (
+              <ChannelSpec key={ch.name} channel={ch} durationS={durationS} cursorS={cursorS} onSeek={onSeek} />
+            ))
+          )}
 
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             SPL 曲线（{activeCh?.name || '—'}）
@@ -438,13 +473,18 @@ export function AudioNvhTimelinePanel({
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无波形" />
           )}
 
-          {boot.audio_url ? (
+          {enableAudio && boot.audio_url ? (
             <ClipSyncedAudio
               audioUrl={boot.audio_url}
               startNs={startNs}
               endNs={endNs}
               cursorNs={cursorNs}
               playing={playing}
+              onClock={(t) => setCursorS(t)}
+              onEnded={() => {
+                setCursorS(durationS)
+                setPlaying(false)
+              }}
             />
           ) : (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>

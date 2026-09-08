@@ -17,17 +17,9 @@ MANIFEST_NAME = "manifest.json"
 
 
 def resolve_ffmpeg() -> str:
-    exe = shutil.which("ffmpeg")
-    if exe:
-        return exe
-    try:
-        import imageio_ffmpeg
+    from oms_multimodal.clip_video import resolve_ffmpeg as sdk_resolve_ffmpeg
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError as exc:
-        raise RuntimeError(
-            "ffmpeg not found on PATH; install ffmpeg or pip install imageio-ffmpeg"
-        ) from exc
+    return sdk_resolve_ffmpeg()
 
 
 def _run_ffmpeg(args: list[str], *, cwd: Path | None = None) -> None:

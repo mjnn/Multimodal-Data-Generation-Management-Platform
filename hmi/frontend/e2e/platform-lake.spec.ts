@@ -155,4 +155,7 @@ test('lake products tab shows lineage for run step and source file', async ({ pa
   await expect(row.getByText(/来自管线运行/)).toBeVisible()
   await expect(row.getByText(/步骤「梅尔频谱」/)).toBeVisible()
   await expect(row.getByText(new RegExp(`数据源 ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))).toBeVisible()
+  const rowBox = await row.boundingBox()
+  expect(rowBox, 'products row should render').toBeTruthy()
+  expect(rowBox!.height, 'lineage must not wrap character-by-character').toBeLessThan(96)
 })

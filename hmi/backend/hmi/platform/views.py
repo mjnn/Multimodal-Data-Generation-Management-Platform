@@ -1,39 +1,18 @@
 """Code-registered overview templates and composable view widgets.
 
-Recipes keep `overview_view` as a preset id. Runtime honors `recipe.overview.list`
-and `recipe.overview.detail` card lists (see UI-DTYPE-OVERVIEW-COMPOSE).
+Recipes keep `overview_view` as a preset id (`custom`). Runtime honors
+`recipe.overview.list` and `recipe.overview.detail` atomic cards.
 """
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 VIEW_TEMPLATES: dict[str, dict[str, Any]] = {
-    "cabin_timeline": {
-        "id": "cabin_timeline",
-        "title": "舱内多模时间轴",
-        "description": "四路画面 + ASR + 标签（现有 Explorer）",
-    },
-    "frame_gallery_bbox": {
-        "id": "frame_gallery_bbox",
-        "title": "帧画廊 + BBox",
-        "description": "抽帧序列叠加检测框",
-    },
-    "audio_spec_asr": {
-        "id": "audio_spec_asr",
-        "title": "音频频谱 + ASR",
-        "description": "波形/梅尔 + 转写（带 ASR 的音频类型）",
-    },
-    "audio_nvh_timeline": {
-        "id": "audio_nvh_timeline",
-        "title": "四通道频谱时间轴",
-        "description": "四通道梅尔频谱 + 波形 + SPL 共用时间轴（无 ASR、无画面）",
-    },
-    "json_tree": {
-        "id": "json_tree",
-        "title": "JSON 结构树",
-        "description": "结构化文本浏览",
+    "custom": {
+        "id": "custom",
+        "title": "自定义展示页",
+        "description": "按原子组件拼版",
     },
 }
 
@@ -68,19 +47,19 @@ VIEW_WIDGETS: dict[str, dict[str, Any]] = {
         "description": "表上 Leq / 通道摘要",
         "needs": ["spl_jsonl", "spl_timeline", ".wav"],
     },
-    "cabin_multicam": {
-        "id": "cabin_multicam",
+    "spectrum_timeline": {
+        "id": "spectrum_timeline",
         "surface": "detail",
-        "title": "舱内多路时间轴",
-        "description": "多路预览 + 时间轴",
-        "needs": ["frames", "preview_mp4"],
+        "title": "频谱时间轴",
+        "description": "单路梅尔或 STFT + 该路波形/SPL",
+        "needs": ["mel_matrix", "stft_matrix"],
     },
-    "nvh_spectrum": {
-        "id": "nvh_spectrum",
+    "video_timeline": {
+        "id": "video_timeline",
         "surface": "detail",
-        "title": "四通道频谱时间轴",
-        "description": "梅尔 + SPL + 波形",
-        "needs": ["mel_matrix", "spl_jsonl", "spl_timeline", ".wav"],
+        "title": "视频时间轴",
+        "description": "单路预览画面",
+        "needs": ["preview_mp4", "frames"],
     },
     "asr_panel": {
         "id": "asr_panel",
@@ -107,7 +86,7 @@ VIEW_WIDGETS: dict[str, dict[str, Any]] = {
         "id": "labels_tree",
         "surface": "detail",
         "title": "标签树",
-        "description": "必选产物：当前 run 的 labels_json",
+        "description": "当前 run 的 labels_json",
         "needs": ["labels_tree"],
     },
 }
@@ -115,26 +94,7 @@ VIEW_WIDGETS: dict[str, dict[str, Any]] = {
 VIEW_WIDGET_IDS = frozenset(VIEW_WIDGETS)
 
 PRESET_LAYOUTS: dict[str, dict[str, list[str]]] = {
-    "cabin_timeline": {
-        "list": ["clip_metrics", "label_search", "clip_table"],
-        "detail": ["cabin_multicam", "asr_panel"],
-    },
-    "audio_nvh_timeline": {
-        "list": ["clip_metrics", "nvh_spl_column", "clip_table"],
-        "detail": ["nvh_spectrum"],
-    },
-    "audio_spec_asr": {
-        "list": ["clip_metrics", "clip_table"],
-        "detail": ["nvh_spectrum", "asr_panel"],
-    },
-    "frame_gallery_bbox": {
-        "list": ["clip_metrics", "clip_table"],
-        "detail": ["frame_gallery_bbox"],
-    },
-    "json_tree": {
-        "list": ["clip_metrics", "clip_table"],
-        "detail": ["json_tree"],
-    },
+    "custom": {"list": [], "detail": []},
 }
 
 
@@ -217,11 +177,15 @@ def _normalize_card(raw: Any, *, surface: str, index: int) -> dict[str, Any]:
             f"widget {widget_id!r} belongs on {spec['surface']}, not {surface}"
         )
     key = str(raw.get("key") or "").strip() or f"{surface}-{index}-{widget_id}"
-    return {
+    card: dict[str, Any] = {
         "key": key,
         "widget_id": widget_id,
         "bindings": _normalize_bindings(raw.get("bindings")),
     }
+    sync = str(raw.get("sync_group") or "").strip()
+    if sync:
+        card["sync_group"] = sync
+    return card
 
 
 def _normalize_card_list(raw: Any, *, surface: str) -> list[dict[str, Any]]:
@@ -239,27 +203,18 @@ def _normalize_card_list(raw: Any, *, surface: str) -> list[dict[str, Any]]:
 
 
 def hydrate_overview(recipe: dict[str, Any]) -> dict[str, Any]:
-    """Return normalized overview object. Missing lists are filled from preset."""
-    preset = str(recipe.get("overview_view") or "").strip() or "cabin_timeline"
+    """Return normalized overview object. Missing lists stay empty (no preset fill)."""
+    preset = str(recipe.get("overview_view") or "").strip() or "custom"
     raw = recipe.get("overview")
     if not isinstance(raw, dict):
         raw = {}
     stored_preset = str(raw.get("preset") or "").strip() or preset
     has_lists = "list" in raw or "detail" in raw
-    filled = cards_from_preset(preset) if not has_lists else None
+    filled = {"list": [], "detail": []}
     list_cards = _normalize_card_list(raw.get("list") if has_lists else filled["list"], surface="list")
     detail_cards = _normalize_card_list(
         raw.get("detail") if has_lists else filled["detail"], surface="detail"
     )
-    if not any(str(c.get("widget_id")) == "labels_tree" for c in detail_cards):
-        detail_cards.insert(
-            0,
-            {
-                "key": "locked-labels_tree",
-                "widget_id": "labels_tree",
-                "bindings": {"in": {"kind": "upstream", "step_key": "stage-label", "port_id": "labels_tree"}},
-            },
-        )
     return {"preset": stored_preset, "list": list_cards, "detail": detail_cards}
 
 

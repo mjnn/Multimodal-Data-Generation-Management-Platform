@@ -56,12 +56,16 @@ def label_clips(
     run_asr: bool = False,
     merge_asr_file: bool = True,
     include_bbox_context: bool | None = None,
+    include_audio: bool | None = None,
 ) -> LabelResult:
     """sdk_label：读 clips_index（可选 merge asr.jsonl / bbox 检出文本），写 labels.jsonl。"""
     if merge_asr_file and ctx.asr_path.is_file():
         merge_asr_into_clips(ctx)
 
     clips = load_clips_from_index(ctx.clips_index_path)
+    if include_audio is False:
+        for clip in clips:
+            clip.audio = None
     attach_bbox_context_to_clips(ctx, clips, include_bbox_context=include_bbox_context)
     taxonomy = client.taxonomy
     label_rows: list[dict] = []

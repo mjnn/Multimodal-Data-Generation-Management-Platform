@@ -11,6 +11,7 @@ BASE_FIELDS = frozenset(
         "source.slot_id",
         "asr.avg_confidence",
         "asr.has_text",
+        "json_extract.value",
     }
 )
 POST_LABEL_FIELDS = frozenset({"label.avg_confidence"})
@@ -24,6 +25,12 @@ def _field_ok(field: str, *, after_label: bool) -> bool:
         return True
     if after_label and field.startswith("labels.") and len(field) > 7:
         return True
+    if field.startswith("json_extract.") and len(field) > 13:
+        return True
+    if field.endswith(".value"):
+        prefix = field[: -len(".value")]
+        if prefix and all(ch.isalnum() or ch in "-_." for ch in prefix):
+            return True
     return False
 
 

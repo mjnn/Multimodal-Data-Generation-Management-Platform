@@ -56,10 +56,15 @@ def enqueue_clip(
         return {"status": "skipped", "reason": "already_exists", "review": existing}
 
     payload = resolve_clip_labels_for_enqueue(clip_id, resolved_run)
-    published = get_published_version()
-    taxonomy_version_id = payload.get("taxonomy_version_id") or (
-        published["id"] if published else None
+    from hmi.review.nvh_writeback import prefer_nvh_taxonomy_id
+
+    taxonomy_version_id = prefer_nvh_taxonomy_id(
+        payload.get("labels_json") if isinstance(payload.get("labels_json"), dict) else {},
+        payload.get("taxonomy_version_id"),
     )
+    if not taxonomy_version_id:
+        published = get_published_version()
+        taxonomy_version_id = published["id"] if published else None
 
     review, created = get_or_create_review(
         clip_id,

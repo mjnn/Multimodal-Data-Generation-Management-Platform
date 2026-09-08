@@ -128,6 +128,7 @@ class TestGraphRuntime(unittest.TestCase):
             g,
             ctx0={"source": {"kind": "audio", "slot_id": "src"}, "asr": {"avg_confidence": 0.1}},
             adapters={"extract_frames": frames, "label": label},
+            enforce_io=False,
         )
         self.assertEqual(ran, ["label"])
         statuses = {r["key"]: r["status"] for r in out["run"]}
@@ -153,6 +154,7 @@ class TestGraphRuntime(unittest.TestCase):
             g,
             ctx0={"source": {"kind": "video", "slot_id": "src"}},
             adapters={"label": lambda n, c: {**c, "labels": {}}},
+            enforce_io=False,
         )
         self.assertEqual(out["ctx"].get("review_status"), "pending_review")
 
@@ -180,6 +182,7 @@ class TestGraphRuntime(unittest.TestCase):
             g,
             ctx0={"source": {"kind": "video", "slot_id": "src"}},
             adapters={"label": lambda n, c: {**c, "labels": {}}},
+            enforce_io=False,
         )
         self.assertEqual(out["ctx"].get("exported_product_ids"), ["labels_tree", "mel_matrix"])
 
@@ -202,6 +205,7 @@ class TestGraphRuntime(unittest.TestCase):
             g,
             ctx0={"source": {"kind": "audio", "slot_id": "src"}, "asr": {"avg_confidence": 0.95}},
             adapters={"extract_frames": frames, "label": label},
+            enforce_io=False,
         )
         self.assertEqual(ran, ["frames", "label"])
         statuses = {r["key"]: r["status"] for r in out["run"]}
@@ -222,10 +226,10 @@ class TestGraphRuntime(unittest.TestCase):
             ],
         })
         with self.assertRaises(RuntimeError) as ctx:
-            execute_graph(g, ctx0={"source": {"kind": "audio", "slot_id": "src"}}, adapters={})
+            execute_graph(g, ctx0={"source": {"kind": "audio", "slot_id": "src"}}, adapters={}, enforce_io=False)
         self.assertIn("missing adapter for op_id=label", str(ctx.exception))
 
-    def test_assert_blocks_asr_if(self) -> None:
+    def test_assert_allows_asr_if(self) -> None:
         from hmi.platform.graph_runtime import assert_runnable_locally
         from hmi.platform.recipe_graph import validate_graph
 
@@ -248,9 +252,7 @@ class TestGraphRuntime(unittest.TestCase):
                 {"id": "c", "source": "iff", "source_port": "else", "target": "lab", "target_port": "in"},
             ],
         })
-        with self.assertRaises(RuntimeError) as ctx:
-            assert_runnable_locally(g)
-        self.assertEqual(str(ctx.exception), "本地尚未拆分 plan_and_run：不能在 ASR/打标之后分支")
+        assert_runnable_locally(g)
 
     def test_assert_allows_source_kind_if(self) -> None:
         from hmi.platform.graph_runtime import assert_runnable_locally

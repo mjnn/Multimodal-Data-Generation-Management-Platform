@@ -9,26 +9,7 @@ import type {
 } from '../api/types'
 
 const FALLBACK_PRESETS: Record<string, { list: string[]; detail: string[] }> = {
-  cabin_timeline: {
-    list: ['clip_metrics', 'label_search', 'clip_table'],
-    detail: ['cabin_multicam', 'asr_panel'],
-  },
-  audio_nvh_timeline: {
-    list: ['clip_metrics', 'nvh_spl_column', 'clip_table'],
-    detail: ['nvh_spectrum'],
-  },
-  audio_spec_asr: {
-    list: ['clip_metrics', 'clip_table'],
-    detail: ['nvh_spectrum', 'asr_panel'],
-  },
-  frame_gallery_bbox: {
-    list: ['clip_metrics', 'clip_table'],
-    detail: ['frame_gallery_bbox'],
-  },
-  json_tree: {
-    list: ['clip_metrics', 'clip_table'],
-    detail: ['json_tree'],
-  },
+  custom: { list: [], detail: [] },
 }
 
 export function widgetCatalog(catalog: PlatformCatalog | null | undefined): ViewWidget[] {
@@ -43,17 +24,8 @@ function defaultCard(widgetId: string, prefix: string): ViewCard {
   return { key: `${prefix}-${widgetId}`, widget_id: widgetId, bindings: {} }
 }
 
-/** Mirror backend `hydrate_overview`: detail always has a locked labels_tree card. */
-export function ensureLabelsTree(detail: ViewCard[]): ViewCard[] {
-  if (detail.some((c) => c.widget_id === 'labels_tree')) return detail
-  return [
-    {
-      key: 'locked-labels_tree',
-      widget_id: 'labels_tree',
-      bindings: { in: { kind: 'upstream', step_key: 'stage-label', port_id: 'labels_tree' } },
-    },
-    ...detail,
-  ]
+export function emptyOverview(): RecipeOverview {
+  return { preset: 'custom', list: [], detail: [] }
 }
 
 export function cardsFromPreset(
@@ -61,33 +33,36 @@ export function cardsFromPreset(
   views?: PlatformViewTemplate[] | null,
 ): RecipeOverview {
   const view = views?.find((v) => v.id === presetId)
-  const fallback = FALLBACK_PRESETS[presetId] || { list: ['clip_table'], detail: [] }
+  const fallback = FALLBACK_PRESETS[presetId] || { list: [], detail: [] }
   const list = view?.list?.length ? view.list : fallback.list
   const detail = view?.detail ? view.detail : fallback.detail
   return {
-    preset: presetId,
+    preset: presetId || 'custom',
     list: list.map((id) => defaultCard(id, 'list')),
-    detail: ensureLabelsTree(detail.map((id) => defaultCard(id, 'detail'))),
+    detail: detail.map((id) => defaultCard(id, 'detail')),
   }
 }
 
 export function hydrateOverview(
   recipe: Pick<DataTypeRecipe, 'overview_view' | 'overview'> | null | undefined,
-  views?: PlatformViewTemplate[] | null,
+  _views?: PlatformViewTemplate[] | null,
 ): RecipeOverview {
   if (!recipe) {
-    return { preset: '', list: [], detail: [] }
+    return emptyOverview()
   }
-  const preset = recipe.overview_view || 'cabin_timeline'
+  const preset = recipe.overview_view || 'custom'
   const raw = recipe?.overview
   if (raw && (Array.isArray(raw.list) || Array.isArray(raw.detail))) {
     return {
       preset: raw.preset || preset,
       list: Array.isArray(raw.list) ? raw.list.map(cloneCard) : [],
-      detail: ensureLabelsTree(Array.isArray(raw.detail) ? raw.detail.map(cloneCard) : []),
+      detail: Array.isArray(raw.detail) ? raw.detail.map(cloneCard) : [],
     }
   }
-  return cardsFromPreset(preset, views)
+  if (raw && Array.isArray(raw.list) === false && Array.isArray(raw.detail) === false) {
+    return { preset: raw.preset || preset, list: [], detail: [] }
+  }
+  return { preset, list: [], detail: [] }
 }
 
 function cloneCard(card: ViewCard): ViewCard {
@@ -95,6 +70,7 @@ function cloneCard(card: ViewCard): ViewCard {
     key: card.key,
     widget_id: card.widget_id,
     bindings: card.bindings ? { ...card.bindings } : {},
+    ...(card.sync_group ? { sync_group: card.sync_group } : {}),
   }
 }
 
@@ -125,6 +101,14 @@ export function resolveDetailCards(recipe: DataTypeRecipe | null | undefined): V
   return hydrateOverview(recipe).detail
 }
 
+export function portIdToChannelIndex(portId: string | undefined | null): number | null {
+  const m = /^ch(\d+)$/.exec(String(portId || '').trim())
+  if (!m) return null
+  const n = Number(m[1])
+  if (!Number.isFinite(n) || n < 1) return null
+  return n - 1
+}
+
 export function remapOverviewKeys(overview: RecipeOverview, keymap: Map<string, string>): RecipeOverview {
   const remapBinding = (b: PipelineBinding): PipelineBinding => {
     if (b.kind === 'slot' && keymap.has(b.slot_id)) return { ...b, slot_id: keymap.get(b.slot_id)! }
@@ -143,7 +127,7 @@ export function remapOverviewKeys(overview: RecipeOverview, keymap: Map<string, 
 }
 
 export function overviewCustomized(overview: RecipeOverview, views?: PlatformViewTemplate[] | null): boolean {
-  const preset = overview.preset || ''
+  const preset = overview.preset || 'custom'
   const base = cardsFromPreset(preset, views)
   const ids = (cards: ViewCard[]) => cards.map((c) => c.widget_id).join('|')
   return ids(overview.list) !== ids(base.list) || ids(overview.detail) !== ids(base.detail)

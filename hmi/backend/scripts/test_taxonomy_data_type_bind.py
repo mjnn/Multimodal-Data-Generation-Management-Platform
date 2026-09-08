@@ -56,6 +56,20 @@ class TestTaxonomyDataTypeBind(unittest.TestCase):
         self.assertIn("nvh.meta.format", ids)
         self.assertNotIn("ivi.control", ids)
 
+    def test_audio_defect_binds_draft_bool_tree(self) -> None:
+        from hmi.taxonomy.data_type_bind import (
+            label_ids_for_data_type,
+            resolve_taxonomy_version_for_data_type,
+        )
+
+        version = resolve_taxonomy_version_for_data_type("audio_defect")
+        assert version is not None
+        self.assertEqual(version["version_code"], "audio_defect-v1")
+        self.assertEqual(version["status"], "draft")
+        ids = label_ids_for_data_type("audio_defect")
+        self.assertEqual(ids, {"audio.defect.has_problem"})
+        self.assertNotIn("ivi.control", ids)
+
     def test_oms_falls_back_to_published_when_present(self) -> None:
         from hmi.taxonomy.data_type_bind import resolve_taxonomy_version_for_data_type
         from hmi.taxonomy_db import create_version, publish_version

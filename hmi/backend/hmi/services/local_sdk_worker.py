@@ -1,8 +1,7 @@
 """本地轮询 rosbags/ 队列并写入 runtime 产物。
 
-仅 data_source=local 时启用。按 DataType：
-- oms_cabin → OMS Multimodal SDK（sdk_v1 jsonl + preview）
-- audio_array_spec → 频谱 / NVH deriver / nvh_sem_ast，再写 platform_product
+仅 data_source=local 时启用。有 recipe.graph 时走 capability kernel（舱内 SDK 单步 + 阵列本地 NVH 插件）。
+无 graph 的舱内配方仍 plan_and_run；无 graph 的 audio_array_spec 仍走专用路径。
 
 完成后镜像到本地 oss/clips/ 并更新 pipeline/dispatch/latest.json。
 """
@@ -345,8 +344,9 @@ def _claim_platform_runs(*, limit: int) -> None:
             _status["last_error"] = str(exc)
 
 
-def _client_config_overrides() -> dict[str, Any]:
+def _client_config_overrides(recipe: dict[str, Any] | None = None) -> dict[str, Any]:
     from hmi.local.pipeline_settings import get_pipeline_settings, omni_label_prompt_overrides_for_worker
+    from hmi.platform.label_model_params import compact_omni_prompt
 
     s = get_pipeline_settings()
     out: dict[str, Any] = {}
@@ -358,7 +358,20 @@ def _client_config_overrides() -> dict[str, Any]:
         out["embedding_model"] = embed
     prompt_overrides = omni_label_prompt_overrides_for_worker()
     if prompt_overrides:
-        out["omni_label_prompt"] = prompt_overrides
+        out["omni_label_prompt"] = dict(prompt_overrides)
+
+    label_stage = ((recipe or {}).get("stages") or {}).get("label") or {}
+    if not isinstance(label_stage, dict):
+        return out
+    # Recipe node params win over global pipeline settings.
+    model_id = str(label_stage.get("omni_model_id") or "").strip()
+    if model_id:
+        out["omni_model"] = model_id
+    node_prompt = compact_omni_prompt(label_stage.get("omni_label_prompt"))
+    if node_prompt:
+        merged = dict(out.get("omni_label_prompt") or {})
+        merged.update(node_prompt)
+        out["omni_label_prompt"] = merged
     return out
 
 
@@ -432,7 +445,6 @@ def _run_audio_array_spec(
     import numpy as np
 
     from hmi.local.nvh_deriver import (
-        apply_nvh_labels_to_facts,
         derive_nvh_labels,
         persist_nvh_labels_artifact,
     )
@@ -491,10 +503,19 @@ def _run_audio_array_spec(
     if bool(label_stage.get("enabled")):
         from hmi.local.nvh_ai_label import fill_nvh_semantic_labels
 
+        ast_top_k = label_stage.get("ast_top_k")
+        try:
+            ast_top_k_i = int(ast_top_k) if ast_top_k is not None else None
+        except (TypeError, ValueError):
+            ast_top_k_i = None
         nvh_labels = fill_nvh_semantic_labels(
             work_run,
             nvh_labels,
             model=str(label_stage.get("model") or "nvh_sem_heuristic"),
+            ast_top_k=ast_top_k_i,
+            vl_prompt=str(label_stage.get("vl_prompt") or "").strip() or None,
+            vl_model=str(label_stage.get("vl_model") or "").strip() or None,
+            reference_constraints=str(label_stage.get("reference_constraints") or "").strip() or None,
         )
         logger.info(
             "audio_array_spec semantic AI clip=%s run=%s model=%s mode=%s",
@@ -504,8 +525,70 @@ def _run_audio_array_spec(
             (nvh_labels.get("_meta") or {}).get("ai_mode"),
         )
     persist_nvh_labels_artifact(work_run, nvh_labels)
+    _publish_nvh_run(
+        work_run=work_run,
+        source_manifest_path=source_manifest_path,
+        clip_id=clip_id,
+        run_id=run_id,
+        ds=ds,
+        bag_oss_key=bag_oss_key,
+        nvh_labels=nvh_labels,
+        mark_infer_success=True,
+    )
 
-    pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_infer", status="success")
+
+def _publish_nvh_run(
+    *,
+    work_run: Path,
+    source_manifest_path: Path | None,
+    clip_id: str,
+    run_id: str,
+    ds: str,
+    bag_oss_key: str,
+    nvh_labels: dict[str, Any] | None = None,
+    mark_infer_success: bool = False,
+    apply_nvh_facts: bool = True,
+) -> None:
+    import shutil
+
+    from hmi.local.nvh_deriver import apply_nvh_labels_to_facts
+
+    if apply_nvh_facts and nvh_labels is None:
+        nvh_path = work_run / "nvh_labels.json"
+        if not nvh_path.is_file():
+            raise RuntimeError("NVH run missing nvh_labels.json")
+        nvh_labels = json.loads(nvh_path.read_text(encoding="utf-8"))
+        if not isinstance(nvh_labels, dict):
+            raise RuntimeError("nvh_labels.json is not an object")
+    elif nvh_labels is None:
+        nvh_path = work_run / "nvh_labels.json"
+        if nvh_path.is_file():
+            try:
+                loaded = json.loads(nvh_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    nvh_labels = loaded
+            except json.JSONDecodeError:
+                nvh_labels = None
+
+    man: dict[str, Any] = {}
+    if source_manifest_path is not None and source_manifest_path.is_file():
+        try:
+            loaded = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                man = loaded
+        except json.JSONDecodeError:
+            man = {}
+    wr_man = work_run / "source_manifest.json"
+    if not man and wr_man.is_file():
+        try:
+            loaded = json.loads(wr_man.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                man = loaded
+        except json.JSONDecodeError:
+            man = {}
+
+    if mark_infer_success:
+        pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_infer", status="success")
     pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_mc_write", status="running")
     try:
         from hmi.data_source import artifacts_dir
@@ -520,7 +603,7 @@ def _run_audio_array_spec(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
         src_wav = Path(str(man.get("audio") or man.get("audio_path") or ""))
-        if src_wav.is_file():
+        if src_wav.is_file() and src_wav.suffix.lower() in {".wav", ".flac", ".mp3"}:
             preview = dest / "preview"
             preview.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_wav, preview / "audio.wav")
@@ -535,13 +618,14 @@ def _run_audio_array_spec(
             bag_oss_key=bag_oss_key,
             ds=ds,
         )
-        apply_nvh_labels_to_facts(
-            clip_id=clip_id,
-            run_id=run_id,
-            ds=ds,
-            labels=nvh_labels,
-            update_platform_run=True,
-        )
+        if apply_nvh_facts and isinstance(nvh_labels, dict):
+            apply_nvh_labels_to_facts(
+                clip_id=clip_id,
+                run_id=run_id,
+                ds=ds,
+                labels=nvh_labels,
+                update_platform_run=True,
+            )
         pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_upload", status="success")
         pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_dispatch", status="success")
         pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="completed")
@@ -668,6 +752,13 @@ def _run_sdk_and_ingest(
         cache_clear()
         raise
     applied_env = apply_bbox_settings_to_environ(settings)
+    try:
+        from oms_multimodal.clip_video import resolve_ffmpeg
+
+        os.environ["IMAGEIO_FFMPEG_EXE"] = resolve_ffmpeg()
+        applied_env = {**applied_env, "IMAGEIO_FFMPEG_EXE": os.environ["IMAGEIO_FFMPEG_EXE"]}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ffmpeg not resolved before SDK run: %s", exc)
     # Clear sticky face-attr load failure from earlier jobs (e.g. weights
     # downloaded after OpenCV5 Caffe miss) so this run can enrich gender/age.
     try:
@@ -711,7 +802,9 @@ def _run_sdk_and_ingest(
         dt_id = get_execution_data_type_id(run_id)
     except Exception:  # noqa: BLE001
         dt_id = None
-    if dt_id == "audio_array_spec" and source_manifest_path is not None:
+    graph = (recipe or {}).get("graph") if recipe else None
+    use_kernel = isinstance(graph, dict) and bool(graph.get("nodes"))
+    if dt_id == "audio_array_spec" and source_manifest_path is not None and not use_kernel:
         _run_audio_array_spec(
             work_run=work_run,
             source_manifest_path=source_manifest_path,
@@ -726,8 +819,9 @@ def _run_sdk_and_ingest(
     client_cfg = ClientConfig.from_env(taxonomy_path=_taxonomy_path())
     # Local / ECS pipeline worker always uses DashScope API; ignore MODEL_BACKEND=mc.
     client_cfg.model_backend = "api"
-    for key, val in _client_config_overrides().items():
+    for key, val in _client_config_overrides(recipe).items():
         setattr(client_cfg, key, val)
+    label_stage = ((recipe or {}).get("stages") or {}).get("label") or {}
     work_dir = work_run / "work"
     client = OmsMultimodalClient(config=client_cfg, work_dir=work_dir)
     ctx = RunContext(
@@ -739,20 +833,121 @@ def _run_sdk_and_ingest(
     )
     clip_cfg = _clip_config_from_settings()
     recipe_req: dict[str, Any] = {}
-    graph = (recipe or {}).get("graph") if recipe else None
     graph_taken: list[str] = []
-    if isinstance(graph, dict) and graph.get("nodes"):
-        from hmi.platform.graph_runtime import (
-            apply_graph_to_run_request,
-            assert_runnable_locally,
-            preview_taken_op_ids,
-        )
+    if use_kernel:
+        from hmi.platform.capability_kernel import execute_recipe_graph
+        from hmi.platform.capability_sdk import sdk_runner_for_bundle
+        from hmi.platform.graph_runtime import assert_runnable_locally, ctx0_from_source_nodes
 
         try:
             assert_runnable_locally(graph)
-            recipe_req = apply_graph_to_run_request(graph, recipe, settings)
-            graph_taken = preview_taken_op_ids(graph, {})
-        except RuntimeError as exc:
+            graph_ctx0 = ctx0_from_source_nodes(
+                graph,
+                {
+                    "clip_id": clip_id,
+                    "run_id": run_id,
+                    "run_dir": str(work_run),
+                    "source_manifest_path": str(source_manifest_path)
+                    if source_manifest_path is not None
+                    else str(work_run / "source_manifest.json"),
+                    "record_lineage": True,
+                },
+            )
+
+            def _on_node(key: str, status: str, err: str | None) -> None:
+                pr.set_step(
+                    run_id=run_id,
+                    clip_id=clip_id,
+                    ds=ds,
+                    step_id=f"dag:{key}",
+                    status=status,
+                    error_message=err,
+                )
+                cache_clear()
+
+            def _on_skipped(key: str) -> None:
+                pr.set_step(
+                    run_id=run_id,
+                    clip_id=clip_id,
+                    ds=ds,
+                    step_id=f"dag:{key}",
+                    status="skipped",
+                )
+                cache_clear()
+
+            out = execute_recipe_graph(
+                graph,
+                ctx0=graph_ctx0,
+                sdk_runner=sdk_runner_for_bundle(
+                    run_dir=work_run,
+                    bag_path=bag_path,
+                    client=client,
+                    clip_config=clip_cfg,
+                    recipe=recipe,
+                ),
+                on_node=_on_node,
+                on_skipped=_on_skipped,
+            )
+            by_key = {str(n.get("key")): n for n in (graph.get("nodes") or []) if isinstance(n, dict)}
+            graph_taken = []
+            for row in out.get("run") or []:
+                if row.get("status") != "success":
+                    continue
+                node = by_key.get(str(row.get("key") or ""))
+                if not node:
+                    continue
+                graph_taken.append(str(node.get("op_id") or node.get("type") or ""))
+            logger.info(
+                "local kernel graph clip=%s run=%s taken=%s",
+                clip_id,
+                run_id,
+                graph_taken,
+            )
+            if pr.is_run_cancelled(run_id=run_id, clip_id=clip_id, ds=ds):
+                cache_clear()
+                return
+            pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_infer", status="success")
+            from hmi.platform.graph_label_publish import (
+                decide_graph_label_publish,
+                graph_ctx_labels,
+                persist_recipe_clip_labels,
+            )
+
+            ctx_labels = graph_ctx_labels(out.get("ctx") if isinstance(out, dict) else None)
+            publish_mode = decide_graph_label_publish(recipe, out.get("ctx") if isinstance(out, dict) else None)
+            has_nvh = (work_run / "nvh_labels.json").is_file()
+            if has_nvh or ctx_labels:
+                _publish_nvh_run(
+                    work_run=work_run,
+                    source_manifest_path=source_manifest_path,
+                    clip_id=clip_id,
+                    run_id=run_id,
+                    ds=ds,
+                    bag_oss_key=bag_oss_key,
+                    mark_infer_success=False,
+                    apply_nvh_facts=publish_mode == "nvh" and has_nvh,
+                )
+                if publish_mode == "recipe" and ctx_labels:
+                    persist_recipe_clip_labels(
+                        clip_id=clip_id,
+                        run_id=run_id,
+                        ds=ds,
+                        recipe=recipe,
+                        labels=ctx_labels,
+                    )
+                try:
+                    _maybe_create_graph_review(
+                        clip_id=clip_id, run_id=run_id, taken=graph_taken
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "graph review node failed clip=%s run=%s: %s",
+                        clip_id,
+                        run_id,
+                        exc,
+                    )
+                return
+        except Exception as exc:
             pr.set_step(
                 run_id=run_id,
                 clip_id=clip_id,
@@ -768,52 +963,57 @@ def _run_sdk_and_ingest(
         from hmi.platform.run_bind import overlay_run_request
 
         recipe_req = overlay_run_request(recipe, settings)
-    req = RunRequest(
-        bag_path=bag_path,
-        run_dir=work_run,
-        source_manifest_path=(work_run / "source_manifest.json")
-        if (work_run / "source_manifest.json").is_file()
-        else None,
-        encode_plain=bool(settings.get("encode_plain", True)),
-        bbox_enabled=bool(
-            recipe_req.get("bbox_enabled", settings.get("bbox_enabled", False))
-        ),
-        bbox_in_label_prompt=bool(settings.get("bbox_in_label_prompt", True)),
-        need_label=recipe_req.get("need_label"),
-        need_embed=recipe_req.get("need_embed"),
-    )
-    try:
-        result = plan_and_run(
-            ctx,
-            bag_path,
-            client,
-            request=req,
-            clip_config=clip_cfg,
+    if not use_kernel:
+        req = RunRequest(
+            bag_path=bag_path,
+            run_dir=work_run,
+            source_manifest_path=(work_run / "source_manifest.json")
+            if (work_run / "source_manifest.json").is_file()
+            else None,
+            encode_plain=bool(settings.get("encode_plain", True)),
+            bbox_enabled=bool(
+                recipe_req.get("bbox_enabled", settings.get("bbox_enabled", False))
+            ),
+            bbox_in_label_prompt=bool(
+                label_stage["bbox_in_label_prompt"]
+                if isinstance(label_stage.get("bbox_in_label_prompt"), bool)
+                else settings.get("bbox_in_label_prompt", True)
+            ),
+            need_label=recipe_req.get("need_label"),
+            need_embed=recipe_req.get("need_embed"),
         )
-        if result.errors:
-            raise RuntimeError(str(result.errors[0]))
-        logger.info(
-            "local SDK plan clip=%s run=%s stages=%s",
-            clip_id,
-            run_id,
-            result.stages_done,
-        )
-        if pr.is_run_cancelled(run_id=run_id, clip_id=clip_id, ds=ds):
+        try:
+            result = plan_and_run(
+                ctx,
+                bag_path,
+                client,
+                request=req,
+                clip_config=clip_cfg,
+            )
+            if result.errors:
+                raise RuntimeError(str(result.errors[0]))
+            logger.info(
+                "local SDK plan clip=%s run=%s stages=%s",
+                clip_id,
+                run_id,
+                result.stages_done,
+            )
+            if pr.is_run_cancelled(run_id=run_id, clip_id=clip_id, ds=ds):
+                cache_clear()
+                return
+            pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_infer", status="success")
+        except Exception as exc:
+            pr.set_step(
+                run_id=run_id,
+                clip_id=clip_id,
+                ds=ds,
+                step_id="sdk_infer",
+                status="failed",
+                error_message=str(exc),
+            )
+            pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="failed")
             cache_clear()
-            return
-        pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_infer", status="success")
-    except Exception as exc:
-        pr.set_step(
-            run_id=run_id,
-            clip_id=clip_id,
-            ds=ds,
-            step_id="sdk_infer",
-            status="failed",
-            error_message=str(exc),
-        )
-        pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="failed")
-        cache_clear()
-        raise
+            raise
 
     pr.set_step(run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_mc_write", status="running")
     env = os.environ.copy()
@@ -841,7 +1041,25 @@ def _run_sdk_and_ingest(
         errors="replace",
     )
     if proc.returncode != 0:
-        msg = (proc.stderr or proc.stdout or "import failed")[:2000]
+        raw = (proc.stderr or proc.stdout or "import failed")[:2000]
+        if "no importable runs" in raw:
+            work_labels = work_run / "labels.jsonl"
+            work_embed = work_run / "fusion_embeddings.jsonl"
+            if work_labels.is_file() and not work_embed.is_file():
+                msg = (
+                    "导入失败：有 labels.jsonl 但缺少 fusion_embeddings.jsonl。"
+                    "未开向量化时应仍能导入标签；请确认当前导入脚本已允许缺 embeddings。\n"
+                    + raw
+                )
+            elif not work_labels.is_file():
+                msg = (
+                    "导入失败：工作目录没有 labels.jsonl（打标步骤可能被跳过）。\n"
+                    + raw
+                )
+            else:
+                msg = "导入失败：\n" + raw
+        else:
+            msg = raw
         pr.set_step(
             run_id=run_id,
             clip_id=clip_id,
@@ -959,17 +1177,23 @@ def _process_one_wrapper(row: dict[str, Any], *, bag_oss_key: str) -> None:
     except Exception as exc:
         logger.exception("local SDK job failed")
         _status["last_error"] = str(exc)
-        # Ensure UI does not stick on sdk_infer=running when the worker raised.
+        # Import/OSS failures are already on sdk_mc_write / sdk_upload.
+        # Do not rewrite sdk_infer=success into failed — the progress UI would
+        # then blame the first DAG node (ROSBAG 解析器) for an ingest error.
         if clip_id and run_id and ds:
             try:
-                pr.set_step(
-                    run_id=run_id,
-                    clip_id=clip_id,
-                    ds=ds,
-                    step_id="sdk_infer",
-                    status="failed",
-                    error_message=str(exc)[:500],
+                infer_status = pr.get_step_status(
+                    run_id=run_id, clip_id=clip_id, ds=ds, step_id="sdk_infer"
                 )
+                if infer_status in {None, "pending", "running"}:
+                    pr.set_step(
+                        run_id=run_id,
+                        clip_id=clip_id,
+                        ds=ds,
+                        step_id="sdk_infer",
+                        status="failed",
+                        error_message=str(exc)[:500],
+                    )
                 pr.upsert_run(run_id=run_id, clip_id=clip_id, ds=ds, status="failed")
                 cache_clear()
             except Exception:  # noqa: BLE001
@@ -1048,6 +1272,8 @@ def start_poller() -> None:
     if not is_poll_enabled():
         return
     if _thread and _thread.is_alive():
+        # Resume a thread that stop_poller() signalled but has not exited yet.
+        _stop.clear()
         return
     _stop.clear()
     _thread = threading.Thread(target=_loop, name="local-sdk-poller", daemon=True)
@@ -1061,3 +1287,15 @@ def start_poller() -> None:
 def stop_poller() -> None:
     _stop.set()
     _status["enabled"] = False
+
+
+def wait_idle(*, timeout_sec: float = 120.0) -> bool:
+    """Wait until in-flight SDK jobs finish (poller may already be stopped)."""
+    deadline = time.monotonic() + max(0.0, float(timeout_sec))
+    while time.monotonic() < deadline:
+        with _lock:
+            if _active_jobs <= 0:
+                return True
+        time.sleep(0.25)
+    with _lock:
+        return _active_jobs <= 0
