@@ -7,9 +7,9 @@
 
 | 项 | 值 |
 |----|-----|
-| 文件 | `rosbag-to-labels-hmi-20260828-1.tar` |
-| SHA256 | `39205AFFFABE8E1A411B3B62CDD2E33FBF58C0E1E8FA01BFD0C5C5E1D4C8CD6D` |
-| 镜像 tag | `rosbag-to-labels-hmi:20260828-1`、`rosbag-to-labels-hmi:latest` |
+| 文件 | `rosbag-to-labels-hmi-20260908-1.tar` |
+| SHA256 | `3663ACFDA8DF063C116D8C4223C005A5996B6596276DC88223124B36D41C129E` |
+| 镜像 tag | `rosbag-to-labels-hmi:20260908-1`、`rosbag-to-labels-hmi:latest` |
 | 构建 | 含 `strip_public_ui_prefix`（直连 `:8012/tools/rosbag-labels/` 可加载 JS） |
 
 旧包 `…-20260820-1.tar` / `…-20260821-1.tar` 可删，勿混用。
@@ -19,7 +19,7 @@
 | 路径 | 说明 |
 |------|------|
 | `/app/shared/config.yaml` | 云侧默认；密钥不写这里 |
-| `/app/.build_revision` | `app_revision=20260828-1` |
+| `/app/.build_revision` | `app_revision=20260908-1` |
 | 运行配置 | 用 `-e` / `env_file`（镜像内通常无 `/app/.env`） |
 
 启动仍会校验 `ODPS_*` + `OSS_BUCKET`（本地模式也可填占位）。
@@ -33,7 +33,7 @@ sudo docker …   # 或 usermod -aG docker ecs-user 后重登
 ## 加载
 
 ```bash
-sudo docker load -i ~/rosbag-to-labels-hmi-20260828-1.tar
+sudo docker load -i ~/rosbag-to-labels-hmi-20260908-1.tar
 sudo docker images | grep rosbag-to-labels-hmi
 ```
 
@@ -77,7 +77,7 @@ sudo docker run -d --name dataplatform --restart unless-stopped \
   -e AIGW_MODEL=ep-20260804101318-bdd5v \
   -v ~/hmi_runtime:/app/data/hmi_runtime \
   -v ~/hmi_app_meta:/app/hmi/data \
-  rosbag-to-labels-hmi:20260828-1
+  rosbag-to-labels-hmi:20260908-1
 
 sudo docker logs dataplatform --tail 40
 curl -fsS http://127.0.0.1:8012/api/health
