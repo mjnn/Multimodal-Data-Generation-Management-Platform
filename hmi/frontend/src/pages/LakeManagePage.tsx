@@ -1,10 +1,24 @@
 import { InboxOutlined, SaveOutlined } from '@ant-design/icons'
-import { Button, Card, List, Space, Table, Tabs, Tag, Typography, Upload, message } from 'antd'
+import {
+  Button,
+  Card,
+  Input,
+  List,
+  Modal,
+  Popconfirm,
+  Space,
+  Table,
+  Tabs,
+  Tag,
+  Typography,
+  Upload,
+  message,
+} from 'antd'
 import type { UploadProps } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
-import type { PlatformSourceRecord } from '../api/types'
+import type { PlatformSourceRecord, PlatformSourceUnit } from '../api/types'
 import { ProductBrowsePanel } from '../components/lake/ProductBrowsePanel'
 import { OssBrowserPanel } from '../components/oss/OssBrowserPanel'
 import { ContentCard, PageHeader, PageStack } from '../components/ui'
@@ -53,6 +67,13 @@ function collectionKey(row: PlatformSourceRecord): string {
   return String(row.collection_id || row.source_id)
 }
 
+function unitDisplayTitle(unit: PlatformSourceUnit): string {
+  const title = (unit.title || '').trim()
+  if (title) return title
+  const names = unit.members.map((m) => m.filename || m.source_id).filter(Boolean)
+  return names.slice(0, 3).join(' + ') || unit.unit_id
+}
+
 async function fileToBase64(file: File): Promise<string> {
   const buf = await file.arrayBuffer()
   let binary = ''
@@ -82,8 +103,15 @@ export function LakeManagePage() {
 
   const [staging, setStaging] = useState<StagedLakeFile[]>([])
   const [sources, setSources] = useState<PlatformSourceRecord[]>([])
+  const [units, setUnits] = useState<PlatformSourceUnit[]>([])
   const [loadingSources, setLoadingSources] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+  const [composeTitle, setComposeTitle] = useState('')
+  const [composing, setComposing] = useState(false)
+  const [memberEdit, setMemberEdit] = useState<PlatformSourceUnit | null>(null)
+  const [memberKeys, setMemberKeys] = useState<string[]>([])
+  const [savingMembers, setSavingMembers] = useState(false)
 
   const sortedSources = useMemo(
     () =>
@@ -96,8 +124,12 @@ export function LakeManagePage() {
   const loadSources = async () => {
     setLoadingSources(true)
     try {
-      const res = await api.listPlatformSources(200)
-      setSources(res.items || [])
+      const [srcRes, unitRes] = await Promise.all([
+        api.listPlatformSources(200),
+        api.listPlatformSourceUnits(),
+      ])
+      setSources(srcRes.items || [])
+      setUnits(unitRes.items || [])
     } catch (e: unknown) {
       message.error(apiErrorMessage(e, '加载已入库源失败'))
     } finally {
@@ -156,10 +188,59 @@ export function LakeManagePage() {
     }
   }
 
+  const composeUnit = async () => {
+    if (selectedRowKeys.length < 2 || composing) return
+    setComposing(true)
+    try {
+      await api.createPlatformSourceUnit({
+        source_ids: selectedRowKeys,
+        title: composeTitle.trim() || undefined,
+      })
+      setSelectedRowKeys([])
+      setComposeTitle('')
+      message.success('已组成数据单元')
+      await loadSources()
+    } catch (e: unknown) {
+      message.error(apiErrorMessage(e, '组成数据单元失败'))
+    } finally {
+      setComposing(false)
+    }
+  }
+
+  const dissolveUnit = async (unitId: string) => {
+    try {
+      await api.deletePlatformSourceUnit(unitId)
+      message.success('已解散数据单元')
+      await loadSources()
+    } catch (e: unknown) {
+      message.error(apiErrorMessage(e, '解散失败'))
+    }
+  }
+
+  const openMemberEdit = (unit: PlatformSourceUnit) => {
+    setMemberEdit(unit)
+    setMemberKeys(unit.members.map((m) => m.source_id))
+  }
+
+  const saveMembers = async () => {
+    if (!memberEdit || memberKeys.length < 2 || savingMembers) return
+    setSavingMembers(true)
+    try {
+      await api.patchPlatformSourceUnit(memberEdit.unit_id, { source_ids: memberKeys })
+      setMemberEdit(null)
+      message.success('已更新单元成员')
+      await loadSources()
+    } catch (e: unknown) {
+      message.error(apiErrorMessage(e, '更新成员失败'))
+    } finally {
+      setSavingMembers(false)
+    }
+  }
+
   const sourcesPanel = (
     <ContentCard>
       <Typography.Paragraph type="secondary">
-        上传源文件并按采集批查看；同批不自动绑定。选类型、筛源、预检与开跑请到「管线管理 → 数据选择」。
+        上传源文件并按采集批查看；同批不自动绑定。勾选至少两个已入库文件可组成数据单元，供多槽开跑选用。选类型、筛源、预检与开跑请到「管线管理 → 数据选择」。
       </Typography.Paragraph>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Upload.Dragger
@@ -204,12 +285,61 @@ export function LakeManagePage() {
           </Card>
         ) : null}
 
+        {units.length > 0 ? (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Typography.Text strong>数据单元</Typography.Text>
+            {units.map((unit) => (
+              <Card key={unit.unit_id} size="small" data-testid="lake-unit-row">
+                <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+                  <Space direction="vertical" size={0}>
+                    <Typography.Text strong data-testid="lake-unit-title">
+                      {unitDisplayTitle(unit)}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      {unit.members.map((m) => m.filename || m.source_id).join('、')}
+                    </Typography.Text>
+                  </Space>
+                  <Space>
+                    <Button size="small" onClick={() => openMemberEdit(unit)}>
+                      改成员
+                    </Button>
+                    <Popconfirm title="解散后文件仍留在源湖" onConfirm={() => void dissolveUnit(unit.unit_id)}>
+                      <Button size="small" danger>
+                        解散
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                </Space>
+              </Card>
+            ))}
+          </Space>
+        ) : null}
+
         <div data-testid="lake-sources-table">
-          <Space style={{ marginBottom: 8 }}>
+          <Space style={{ marginBottom: 8 }} wrap>
             <Button size="small" loading={loadingSources} onClick={() => void loadSources()}>
               刷新
             </Button>
-            <Typography.Text type="secondary">共 {sortedSources.length} 个源</Typography.Text>
+            <Input
+              data-testid="lake-compose-unit-title"
+              placeholder="单元标题（可选）"
+              value={composeTitle}
+              onChange={(e) => setComposeTitle(e.target.value)}
+              style={{ width: 200 }}
+            />
+            <Button
+              data-testid="lake-compose-unit"
+              type="primary"
+              disabled={selectedRowKeys.length < 2}
+              loading={composing}
+              onClick={() => void composeUnit()}
+            >
+              组成单元
+            </Button>
+            <Typography.Text type="secondary">
+              共 {sortedSources.length} 个源
+              {selectedRowKeys.length ? ` · 已选 ${selectedRowKeys.length}` : ''}
+            </Typography.Text>
           </Space>
           {sortedSources.length === 0 ? (
             <Typography.Text type="secondary">还没有入湖源</Typography.Text>
@@ -220,6 +350,10 @@ export function LakeManagePage() {
               loading={loadingSources}
               pagination={{ pageSize: 20, hideOnSinglePage: true }}
               dataSource={sortedSources}
+              rowSelection={{
+                selectedRowKeys,
+                onChange: (keys) => setSelectedRowKeys(keys.map(String)),
+              }}
               columns={[
                 {
                   title: '采集批',
@@ -246,6 +380,14 @@ export function LakeManagePage() {
                   ),
                 },
                 {
+                  title: '数据单元',
+                  width: 160,
+                  render: (_: unknown, row: PlatformSourceRecord) => {
+                    const n = (row.unit_ids || []).length
+                    return n ? <Tag>{n} 个单元</Tag> : <Typography.Text type="secondary">未成组</Typography.Text>
+                  },
+                },
+                {
                   title: '入湖时间',
                   dataIndex: 'created_at',
                   width: 180,
@@ -256,6 +398,39 @@ export function LakeManagePage() {
           )}
         </div>
       </Space>
+
+      <Modal
+        title="改成员"
+        open={Boolean(memberEdit)}
+        onCancel={() => setMemberEdit(null)}
+        onOk={() => void saveMembers()}
+        okButtonProps={{ disabled: memberKeys.length < 2, loading: savingMembers }}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">至少保留两个文件。解散不会删除源文件。</Typography.Paragraph>
+        <Table
+          size="small"
+          rowKey="source_id"
+          pagination={false}
+          dataSource={sortedSources}
+          rowSelection={{
+            selectedRowKeys: memberKeys,
+            onChange: (keys) => setMemberKeys(keys.map(String)),
+          }}
+          columns={[
+            {
+              title: '类型',
+              dataIndex: 'kind',
+              width: 90,
+              render: (kind: string) => <Tag>{kindLabel(kind)}</Tag>,
+            },
+            {
+              title: '文件',
+              render: (_: unknown, row: PlatformSourceRecord) => row.filename || row.source_id,
+            },
+          ]}
+        />
+      </Modal>
     </ContentCard>
   )
 

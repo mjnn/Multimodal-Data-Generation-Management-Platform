@@ -20,19 +20,26 @@ from hmi.data_source import is_local_mode
 from hmi.platform.operators import CATEGORY_TITLES, list_operators, list_source_kinds, list_type_provides
 from hmi.platform.preflight import preflight
 from hmi.platform.run_bind import resolve_run_source_bindings
+from hmi.platform.source_unit import SourceUnitError, assert_run_unit
 from hmi.platform.store import (
     TEXT_SCHEMAS,
     _source_kind_by_id,
     create_run,
     create_run_from_sources,
     create_sample,
+    create_source_unit,
+    delete_source_unit,
     get_data_type,
+    get_source_unit,
     lineage_for_product,
     lineage_for_source,
     list_data_types,
     list_products,
+    list_source_unit_member_ids,
+    list_source_units,
     list_sources,
     lookup_or_record_product,
+    patch_source_unit,
     preflight_sample,
     put_source,
     upsert_data_type,
@@ -67,6 +74,7 @@ class PreflightIn(BaseModel):
     source_kinds: list[str] | None = None
     source_ids: list[str] | None = None
     assignments: list[SlotAssignmentIn] | None = None
+    unit_id: str | None = None
 
 
 class RunIn(BaseModel):
@@ -74,6 +82,17 @@ class RunIn(BaseModel):
     sample_id: str | None = None
     source_ids: list[str] | None = None
     assignments: list[SlotAssignmentIn] | None = None
+    unit_id: str | None = None
+
+
+class SourceUnitIn(BaseModel):
+    source_ids: list[str]
+    title: str | None = None
+
+
+class SourceUnitPatchIn(BaseModel):
+    title: str | None = None
+    source_ids: list[str] | None = None
 
 
 class ProductLookupIn(BaseModel):
@@ -232,6 +251,74 @@ def api_put_source(
         raise HTTPException(400, detail=str(exc)) from exc
 
 
+@router.get("/source-units")
+def api_list_source_units(
+    eligible_for: str | None = Query(default=None),
+    _user: dict[str, Any] = Depends(require_overview_access),
+) -> dict[str, Any]:
+    try:
+        return {"items": list_source_units(eligible_for=eligible_for)}
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.post("/source-units")
+def api_create_source_unit(
+    body: SourceUnitIn,
+    _user: dict[str, Any] = Depends(require_pipeline_write),
+) -> dict[str, Any]:
+    if not is_local_mode():
+        raise HTTPException(400, detail="platform source units are only writable in local mode")
+    try:
+        return create_source_unit(body.source_ids, title=body.title)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.patch("/source-units/{unit_id}")
+def api_patch_source_unit(
+    unit_id: str,
+    body: SourceUnitPatchIn,
+    _user: dict[str, Any] = Depends(require_pipeline_write),
+) -> dict[str, Any]:
+    if not is_local_mode():
+        raise HTTPException(400, detail="platform source units are only writable in local mode")
+    try:
+        return patch_source_unit(unit_id, title=body.title, source_ids=body.source_ids)
+    except ValueError as exc:
+        msg = str(exc)
+        if msg.startswith("unknown unit_id="):
+            raise HTTPException(404, detail={"code": "UNKNOWN_SOURCE_UNIT", "message": msg}) from exc
+        raise HTTPException(400, detail=msg) from exc
+
+
+@router.delete("/source-units/{unit_id}")
+def api_delete_source_unit(
+    unit_id: str,
+    _user: dict[str, Any] = Depends(require_pipeline_write),
+) -> dict[str, Any]:
+    if not is_local_mode():
+        raise HTTPException(400, detail="platform source units are only writable in local mode")
+    try:
+        ok = delete_source_unit(unit_id)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(404, detail={"code": "UNKNOWN_SOURCE_UNIT", "message": unit_id})
+    return {"ok": True, "unit_id": unit_id}
+
+
+@router.get("/source-units/{unit_id}")
+def api_get_source_unit(
+    unit_id: str,
+    _user: dict[str, Any] = Depends(require_overview_access),
+) -> dict[str, Any]:
+    rec = get_source_unit(unit_id)
+    if rec is None:
+        raise HTTPException(404, detail={"code": "UNKNOWN_SOURCE_UNIT", "message": unit_id})
+    return rec
+
+
 @router.post("/samples")
 def api_create_sample(
     body: SampleIn,
@@ -271,7 +358,7 @@ def api_preflight(
                         str(s).strip() for s in (item.get("source_ids") or []) if str(s).strip()
                     )
             else:
-                mentioned = [str(s).strip() for s in body.source_ids if str(s).strip()]
+                mentioned = [str(s).strip() for s in (body.source_ids or []) if str(s).strip()]
             kind_map = _source_kind_by_id(mentioned)
             ids = resolve_run_source_bindings(
                 recipe,
@@ -279,10 +366,19 @@ def api_preflight(
                 assignments=asg,
                 source_kind_by_id=kind_map,
             )
+            assert_run_unit(
+                recipe,
+                unit_id=body.unit_id,
+                assignments=asg,
+                resolved_ids=ids,
+                members_by_unit=list_source_unit_member_ids,
+            )
             kinds.extend(kind_map.get(sid) or "" for sid in ids)
         result = preflight(recipe, kinds)
         result["source_kinds"] = kinds
         return result
+    except SourceUnitError as exc:
+        raise HTTPException(400, detail=exc.http_detail()) from exc
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc)) from exc
 
@@ -299,10 +395,13 @@ def api_create_run(
                 list(body.source_ids or []),
                 body.data_type_id,
                 assignments=asg,
+                unit_id=body.unit_id,
             )
         if not body.sample_id:
             raise ValueError("sample_id or source_ids required")
         return create_run(body.sample_id, body.data_type_id)
+    except SourceUnitError as exc:
+        raise HTTPException(400, detail=exc.http_detail()) from exc
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc)) from exc
 

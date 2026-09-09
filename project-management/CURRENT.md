@@ -1,7 +1,7 @@
 # 当前进度指针（跨会话权威入口）
 
-> 最后更新：2026-09-07  
-> 更新人：Agent（PLAT-RUN-BRANCHES：同一 clip 多次 run 并列生效）
+> 最后更新：2026-09-08  
+> 更新人：Agent（PLAT-SOURCE-UNIT：源湖数据单元）
 
 ---
 
@@ -10,7 +10,7 @@
 | 字段 | 当前值 |
 |------|--------|
 | 当前里程碑 | **平台内核重构进行中** |
-| 刚完成 | **PLAT-RUN-BRANCHES**（A + A-E2E）— `acceptance/PLAT-RUN-BRANCHES.md` |
+| 刚完成 | **PLAT-SOURCE-UNIT**（A + A-E2E）— `acceptance/PLAT-SOURCE-UNIT.md` |
 | 推荐下一个工单 | **M7.5-E2E**（可选 Parquet 全链 zip；非内核强制） |
 | M9.3 | A-C 基本闭合；**H-2 暂停，不排期** |
 | 禁止抢跑 | 勿做 HMI 在线 H-2；勿 **publish** `audio_nvh-v2`；勿宣称 IVI 业务打标已完成；勿用 VL 打 bbox；勿改 DataWorks 节点/Job 顺序 |
@@ -22,7 +22,7 @@
 ```text
 当前重点是重构平台内核，不要做 HMI 在线 H-2。
 
-刚完成 PLAT-RUN-BRANCHES：同一 clip 上每次管线跑完都是独立分支（总览/检索/Dataset/校核都认 clip+run）；active_run_id 只作默认打开指针。
+刚完成 PLAT-SOURCE-UNIT：源湖手动组成数据单元；`audio_defect` 开跑必须选单元，`oms_cabin` 填 ≥2 个槽才锁单元。
 推荐下一工单可选 M7.5-E2E（Parquet zip）。
 不要改 DataWorks。勿 publish audio_nvh-v2。
 ```
@@ -65,6 +65,7 @@
 | PLAT-CAPABILITY-KERNEL | DAG 逐节点 capability | **done（A）** — 阵列 + `text_to_json` 走 kernel；未改 DataWorks |
 | PLAT-DAG-IO-CONTRACT | DAG I/O 契约（黄叹号 / 期望输出 / 试跑） | **done（A + A-E2E）** — `acceptance/PLAT-DAG-IO-CONTRACT.md` |
 | PLAT-RUN-BRANCHES | 同一 clip 每次 run 并列生效 | **done（A + A-E2E）** — `acceptance/PLAT-RUN-BRANCHES.md` |
+| PLAT-SOURCE-UNIT | 源湖数据单元（多槽开跑锁同组） | **done（A + A-E2E）** — `acceptance/PLAT-SOURCE-UNIT.md` |
 | M9.3-H-2 | HMI 在线主观 | **暂停不排期** |
 | M9.3 | sdk_v1 cloud 全链（hybrid） | **in_progress** — A-C-1/2 pass；**H-2 待签** |
 | M7.5 | Parquet 全链 E2E | 可选（**推荐下一**） |

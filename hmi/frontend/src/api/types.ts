@@ -1352,6 +1352,14 @@ export interface PlatformSourceRecord {
   local_path?: string | null
   collection_id?: string | null
   created_at?: string | null
+  unit_ids?: string[]
+}
+
+export interface PlatformSourceUnit {
+  unit_id: string
+  title: string
+  created_at?: string | null
+  members: PlatformSourceRecord[]
 }
 
 export interface PlatformSampleRecord {

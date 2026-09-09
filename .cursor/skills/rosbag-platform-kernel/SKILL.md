@@ -27,6 +27,7 @@ description: >
 | 层 | 表 | 要点 |
 |----|-----|------|
 | 源湖 | `platform_source` | kind + collection_id，与类型解绑 |
+| 数据单元 | `platform_source_unit` | 入湖后手动成组（M:N）；多槽开跑锁同一单元 |
 | 配方 | `platform_data_type` | JSON recipe；`recipe.py` 校验 |
 | Sample | `platform_sample` | 内部；开跑自动建 |
 | Run | `platform_run` | 先 `preflight` |
@@ -36,7 +37,7 @@ description: >
 
 ## API
 
-前缀 `/api/platform`。开跑：`POST /runs` 可带 `source_ids`（单 slot）或 `assignments`（按数据源分槽；多 slot 必填）。血缘：`GET /lineage`。算子目录：`GET /operators`。
+前缀 `/api/platform`。开跑：`POST /runs` 可带 `source_ids`（单 slot）或 `assignments`（按数据源分槽；多 slot 必填）。多槽配方另带 `unit_id`（`audio_defect` 必填；`oms_cabin` 填 ≥2 槽时必填）。血缘：`GET /lineage`。算子目录：`GET /operators`。数据单元：`GET/POST /source-units`。
 
 ## NVH / AST
 

@@ -1,8 +1,8 @@
 """平台内核 SQLite（写入 app.db）。
 
-表：platform_source / sample / sample_source / data_type / run / product。
+表：platform_source / source_unit / sample / sample_source / data_type / run / product。
 配方种子与校验走 recipe.py；开跑多选绑定走 run_bind / create_run_from_sources。
-产物 cache_key = 输入 + 算子 + 参数，供血缘查询。
+多槽开跑用 source_unit 约束同组文件。产物 cache_key = 输入 + 算子 + 参数，供血缘查询。
 """
 
 from __future__ import annotations
@@ -67,6 +67,21 @@ CREATE TABLE IF NOT EXISTS platform_run (
   preflight_json TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS platform_source_unit (
+  unit_id TEXT PRIMARY KEY,
+  title TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS platform_source_unit_member (
+  unit_id TEXT NOT NULL REFERENCES platform_source_unit(unit_id),
+  source_id TEXT NOT NULL REFERENCES platform_source(source_id),
+  PRIMARY KEY (unit_id, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_source_unit_member_source
+  ON platform_source_unit_member (source_id);
 
 CREATE INDEX IF NOT EXISTS idx_platform_run_sample_type
   ON platform_run (sample_id, data_type_id);
@@ -559,7 +574,7 @@ def list_sources(
     if kind_filter is not None:
         items = [row for row in items if str(row.get("kind") or "") in kind_filter]
         items = items[:lim]
-    return items
+    return _attach_unit_ids(items)
 
 
 def _source_kind_by_id(source_ids: list[str]) -> dict[str, str]:
@@ -579,15 +594,205 @@ def _source_kind_by_id(source_ids: list[str]) -> dict[str, str]:
     return out
 
 
+def _normalize_unit_member_ids(source_ids: list[str]) -> list[str]:
+    seen: list[str] = []
+    for raw in source_ids or []:
+        sid = str(raw).strip()
+        if sid and sid not in seen:
+            seen.append(sid)
+    if len(seen) < 2:
+        raise ValueError("source unit requires at least two source_ids")
+    return seen
+
+
+def _require_sources_exist(conn: sqlite3.Connection, ids: list[str]) -> None:
+    for src in ids:
+        row = conn.execute("SELECT 1 FROM platform_source WHERE source_id = ?", (src,)).fetchone()
+        if row is None:
+            raise ValueError(f"unknown source_id={src}")
+
+
+def _unit_row_with_members(conn: sqlite3.Connection, unit_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT unit_id, title, created_at FROM platform_source_unit WHERE unit_id = ?",
+        (unit_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    members = conn.execute(
+        """
+        SELECT s.source_id, s.kind, s.filename, s.text_schema_id, s.content_hash,
+               s.local_oss_key, s.local_path, s.collection_id, s.created_at
+        FROM platform_source_unit_member m
+        JOIN platform_source s ON s.source_id = m.source_id
+        WHERE m.unit_id = ?
+        ORDER BY s.filename, s.source_id
+        """,
+        (unit_id,),
+    ).fetchall()
+    return {
+        "unit_id": row["unit_id"],
+        "title": row["title"] or "",
+        "created_at": row["created_at"],
+        "members": [_source_row(m) for m in members],
+    }
+
+
+def _replace_unit_members(conn: sqlite3.Connection, unit_id: str, source_ids: list[str]) -> None:
+    _require_sources_exist(conn, source_ids)
+    conn.execute("DELETE FROM platform_source_unit_member WHERE unit_id = ?", (unit_id,))
+    for src in source_ids:
+        conn.execute(
+            "INSERT INTO platform_source_unit_member (unit_id, source_id) VALUES (?, ?)",
+            (unit_id, src),
+        )
+
+
+def _attach_unit_ids(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ids = [str(row.get("source_id") or "") for row in items if row.get("source_id")]
+    mapping: dict[str, list[str]] = {sid: [] for sid in ids}
+    if ids:
+        placeholders = ",".join("?" * len(ids))
+        with db_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT source_id, unit_id
+                FROM platform_source_unit_member
+                WHERE source_id IN ({placeholders})
+                ORDER BY unit_id
+                """,
+                ids,
+            ).fetchall()
+        for row in rows:
+            mapping.setdefault(row["source_id"], []).append(row["unit_id"])
+    for item in items:
+        sid = str(item.get("source_id") or "")
+        item["unit_ids"] = list(mapping.get(sid) or [])
+    return items
+
+
+def create_source_unit(
+    source_ids: list[str],
+    *,
+    title: str | None = None,
+    unit_id: str | None = None,
+) -> dict[str, Any]:
+    ids = _normalize_unit_member_ids(source_ids)
+    uid = str(unit_id or "").strip() or str(uuid.uuid4())
+    now = _utc_now_iso()
+    with db_conn() as conn:
+        _require_sources_exist(conn, ids)
+        conn.execute(
+            "INSERT INTO platform_source_unit (unit_id, title, created_at) VALUES (?, ?, ?)",
+            (uid, (title or "").strip() or None, now),
+        )
+        _replace_unit_members(conn, uid, ids)
+        rec = _unit_row_with_members(conn, uid)
+    if rec is None:
+        raise ValueError(f"unknown unit_id={uid}")
+    return rec
+
+
+def get_source_unit(unit_id: str) -> dict[str, Any] | None:
+    uid = str(unit_id or "").strip()
+    if not uid:
+        return None
+    with db_conn() as conn:
+        return _unit_row_with_members(conn, uid)
+
+
+def list_source_unit_member_ids(unit_id: str) -> set[str]:
+    uid = str(unit_id or "").strip()
+    if not uid:
+        return set()
+    with db_conn() as conn:
+        rows = conn.execute(
+            "SELECT source_id FROM platform_source_unit_member WHERE unit_id = ?",
+            (uid,),
+        ).fetchall()
+    return {str(r["source_id"]) for r in rows}
+
+
+def list_source_units(*, eligible_for: str | None = None) -> list[dict[str, Any]]:
+    from hmi.platform.source_unit import unit_eligible_for_recipe
+
+    dtype = (eligible_for or "").strip()
+    recipe = None
+    if dtype:
+        recipe = get_data_type(dtype)
+        if recipe is None:
+            raise ValueError(f"unknown data_type_id={dtype}")
+        recipe = validate_recipe(recipe)
+    with db_conn() as conn:
+        rows = conn.execute(
+            "SELECT unit_id FROM platform_source_unit ORDER BY created_at DESC, unit_id"
+        ).fetchall()
+        items = [_unit_row_with_members(conn, r["unit_id"]) for r in rows]
+    out = [item for item in items if item is not None]
+    if recipe is not None:
+        filtered: list[dict[str, Any]] = []
+        for item in out:
+            kinds = [str(m.get("kind") or "") for m in item.get("members") or []]
+            if unit_eligible_for_recipe(recipe, kinds):
+                filtered.append(item)
+        return filtered
+    return out
+
+
+def patch_source_unit(
+    unit_id: str,
+    *,
+    title: str | None = None,
+    source_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    uid = str(unit_id or "").strip()
+    if not uid:
+        raise ValueError("unit_id required")
+    with db_conn() as conn:
+        existing = _unit_row_with_members(conn, uid)
+        if existing is None:
+            raise ValueError(f"unknown unit_id={uid}")
+        if title is not None:
+            conn.execute(
+                "UPDATE platform_source_unit SET title = ? WHERE unit_id = ?",
+                ((title or "").strip() or None, uid),
+            )
+        if source_ids is not None:
+            ids = _normalize_unit_member_ids(source_ids)
+            _replace_unit_members(conn, uid, ids)
+        rec = _unit_row_with_members(conn, uid)
+    if rec is None:
+        raise ValueError(f"unknown unit_id={uid}")
+    return rec
+
+
+def delete_source_unit(unit_id: str) -> bool:
+    uid = str(unit_id or "").strip()
+    if not uid:
+        raise ValueError("unit_id required")
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM platform_source_unit WHERE unit_id = ?",
+            (uid,),
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute("DELETE FROM platform_source_unit_member WHERE unit_id = ?", (uid,))
+        conn.execute("DELETE FROM platform_source_unit WHERE unit_id = ?", (uid,))
+    return True
+
+
 def create_run_from_sources(
     source_ids: list[str],
     data_type_id: str,
     *,
     pipeline_run_id: str | None = None,
     assignments: list[dict[str, Any]] | None = None,
+    unit_id: str | None = None,
 ) -> dict[str, Any]:
     """Auto-create Sample from multi-selected sources, then queue a platform run."""
     from hmi.platform.run_bind import resolve_run_source_bindings
+    from hmi.platform.source_unit import assert_run_unit
 
     recipe = get_data_type(data_type_id)
     if recipe is None:
@@ -612,6 +817,13 @@ def create_run_from_sources(
     )
     if not ids:
         raise ValueError("source_ids required")
+    assert_run_unit(
+        rec,
+        unit_id=unit_id,
+        assignments=assignments,
+        resolved_ids=ids,
+        members_by_unit=list_source_unit_member_ids,
+    )
     kinds = [kind_map.get(src) or "" for src in ids]
     pf = preflight(recipe, kinds)
     if not pf["ok"]:
@@ -622,6 +834,8 @@ def create_run_from_sources(
     sample = create_sample(ids, sample_id=sample_id)
     run = create_run(sample["sample_id"], data_type_id, pipeline_run_id=pipeline_run_id)
     run["source_ids"] = list(sample["source_ids"])
+    if unit_id:
+        run["unit_id"] = str(unit_id).strip()
     return run
 
 

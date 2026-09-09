@@ -1,6 +1,6 @@
 # 进度看板
 
-> 最后更新：2026-09-07
+> 最后更新：2026-09-08
 
 ## Todo
 
@@ -13,12 +13,13 @@
 
 | ID | 标题 | 备注 |
 |----|------|------|
-| 平台内核重构 | DataType 底座 | run 分支已并列生效；勿 publish audio_nvh-v2 |
+| 平台内核重构 | DataType 底座 | 源湖数据单元已落地；勿 publish audio_nvh-v2 |
 
 ## Done
 
 | ID | 标题 | 完成日 |
 |----|------|--------|
+| **PLAT-SOURCE-UNIT** | 源湖手动成组；audio_defect / oms_cabin 多槽开跑锁单元 | 2026-09-08 |
 | **PLAT-RUN-BRANCHES** | 同一 clip 每次 run 并列生效 | 2026-09-07 |
 | **PLAT-DAG-IO-CONTRACT** | DAG 输入封闭 + 黄叹号 + 节点试跑 | 2026-09-07 |
 | **PLAT-CAPABILITY-KERNEL** | DAG kernel：阵列 NVH + `text_to_json` | 2026-09-07 |

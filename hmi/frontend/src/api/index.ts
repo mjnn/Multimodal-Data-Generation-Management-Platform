@@ -59,6 +59,7 @@ import type {
   PlatformSampleRecord,
   PlatformProductRecord,
   PlatformSourceRecord,
+  PlatformSourceUnit,
   SlotAssignment,
   RecipeGraph,
 } from './types'
@@ -998,6 +999,31 @@ export const api = {
   }): Promise<PlatformSourceRecord> =>
     fetchJson('/platform/sources', { method: 'POST', body: JSON.stringify(body) }),
 
+  listPlatformSourceUnits: (opts?: { eligibleFor?: string }): Promise<{ items: PlatformSourceUnit[] }> => {
+    const params = new URLSearchParams()
+    if (opts?.eligibleFor) params.set('eligible_for', opts.eligibleFor)
+    const q = params.toString()
+    return fetchJson(`/platform/source-units${q ? `?${q}` : ''}`)
+  },
+
+  createPlatformSourceUnit: (body: {
+    source_ids: string[]
+    title?: string
+  }): Promise<PlatformSourceUnit> =>
+    fetchJson('/platform/source-units', { method: 'POST', body: JSON.stringify(body) }),
+
+  patchPlatformSourceUnit: (
+    unitId: string,
+    body: { title?: string; source_ids?: string[] },
+  ): Promise<PlatformSourceUnit> =>
+    fetchJson(`/platform/source-units/${encodeURIComponent(unitId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  deletePlatformSourceUnit: (unitId: string): Promise<{ ok: boolean; unit_id: string }> =>
+    fetchJson(`/platform/source-units/${encodeURIComponent(unitId)}`, { method: 'DELETE' }),
+
   createPlatformSample: (body: {
     source_ids: string[]
     sample_id?: string
@@ -1010,6 +1036,7 @@ export const api = {
     source_kinds?: string[]
     source_ids?: string[]
     assignments?: SlotAssignment[]
+    unit_id?: string
   }): Promise<PlatformRunPreflight> =>
     fetchJson('/platform/runs/preflight', { method: 'POST', body: JSON.stringify(body) }),
 
@@ -1040,6 +1067,7 @@ export const api = {
     sample_id?: string
     source_ids?: string[]
     assignments?: SlotAssignment[]
+    unit_id?: string
   }): Promise<PlatformRunRecord> =>
     fetchJson('/platform/runs', { method: 'POST', body: JSON.stringify(body) }),
 

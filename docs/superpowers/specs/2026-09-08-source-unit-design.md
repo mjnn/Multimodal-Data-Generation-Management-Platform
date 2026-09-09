@@ -22,7 +22,7 @@
 | U2 | 成组时机 | 文件已入湖后，在「数据源」勾选组成；不是上传瞬间自动成组 |
 | U3 | 开跑 UX | 多槽：先选单元（自动填槽）+ 单元内微调。单槽：维持现状，散文件可选 |
 | U4 | Sample | 仍内部；每次开跑 `create_sample`。单元只约束选用集合 |
-| U5 | 约束范围 | **必选槽 ≥ 2** 的配方必须带 `unit_id`；本次 `assignments` 里出现的 **全部** `source_id`（含可选槽）都必须是该单元成员 |
+| U5 | 约束范围 | 配方 **槽位数 ≥ 2** 时开跑 UI 出现单元列表。`unit_id` **必须**当：(a) 必选槽 ≥ 2（如 `audio_defect`），或 (b) 本次 assignments **填了 ≥ 2 个槽**（如 `oms_cabin` 同时勾 bag+音频）。只填一个可选槽时仍可不开单元。本次 assignments 里出现的全部 `source_id` 都必须是该单元成员 |
 
 ## 3. 数据模型
 
@@ -58,12 +58,12 @@ platform_source_unit_member
 开跑：
 
 - `PreflightIn` / `RunIn` 增加可选 `unit_id`
-- 配方 **必选槽数量 ≥ 2** 时必须提供 `unit_id`；缺则 400，`code=SOURCE_UNIT_REQUIRED`
+- 配方 **必选槽 ≥ 2**，或本次填了 **≥ 2 个槽** 时必须提供 `unit_id`；缺则 400，`code=SOURCE_UNIT_REQUIRED`
 - 解析后 `assignments` 中出现的全部 `source_id`（含可选槽）必须是该单元成员；否则 400，`code=SOURCE_UNIT_MISMATCH`
-- 单元候选：成员 kinds 能覆盖 **全部必选槽**；可选槽只能从同一单元剩余成员里勾
-- 必选槽 = 1 的配方忽略 `unit_id`（可传，不强制）
+- 单元候选：必选槽 ≥ 2 时成员 kinds 覆盖 **全部必选槽**；可选多槽（如 oms_cabin）时成员能覆盖 **≥ 2 个槽**
+- 单槽配方（`ivi_ui_stub` / `audio_array_spec`）忽略 `unit_id`
 
-列表开跑候选：前端用 `GET /source-units` 本地过滤「成员 kinds 能覆盖各必选槽」；不必先做专用 query。
+`GET /source-units?eligible_for={data_type_id}` 按上面规则过滤候选。
 
 ## 5. 源湖 UI
 
@@ -77,14 +77,15 @@ test id：`lake-compose-unit`、`lake-unit-row`、`lake-unit-title`。
 
 ## 6. 开跑 UI（`LakeRunBindPanel`）
 
-当当前类型 **必选槽 ≥ 2**：
+当当前类型 **槽位数 ≥ 2**（`audio_defect` 双必选，`oms_cabin` 四路可选）：
 
-1. 上方 **单元列表**（`lake-run-unit-list`）：只列出能覆盖所有必选槽 kinds 的单元（例如 audio_defect：成员里同时有 `.wav` 与 `.json`）
+1. 上方 **单元列表**（`lake-run-unit-list`）：`GET /source-units?eligible_for=` 过滤后的候选
 2. 点选一个单元 → 各槽按 kind **自动勾选** 该单元内匹配文件（每槽若多份则先勾满 `cardinality_min`，其余保持未勾，用户微调）
 3. 槽位表只展示该单元成员；勾选不能超出成员
-4. 未成组散文件 **不出现** 在多槽勾选表
+4. `audio_defect`：未选单元时不展示散文件勾选表
+5. `oms_cabin`：未选单元时仍可勾 **单个** 可选槽的散文件；填两个及以上槽必须先选单元
 
-必选槽 = 1：不出现单元列表，现有按槽勾散文件不变。
+单槽类型：不出现单元列表，现有按槽勾散文件不变。
 
 ## 7. 错误
 

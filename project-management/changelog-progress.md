@@ -1,5 +1,13 @@
 # 进度变更日志（倒序）
 
+## 2026-09-08 — PLAT-SOURCE-UNIT done（源湖数据单元）
+
+- **缺口**：多槽配方（`audio_defect` wav+json、`oms_cabin` 四路可选）开跑可跨文件拼槽；`collection_id` 只表示同一次上传
+- **实现**：`platform_source_unit` 多对多；源湖勾选组成/解散；开跑先选单元自动填槽；必选≥2 或本次填≥2 槽必须 `unit_id`
+- **验收**：`acceptance/PLAT-SOURCE-UNIT.md`；A `test_source_units` **5/5**、`tsc -b` ok；A-E2E lake **6/6 (29.9s)**
+- **未做**：自动按文件名配对；云模式写单元；DataWorks；publish `audio_nvh-v2`
+- **未 git commit**；推荐下一工单可选 M7.5-E2E
+
 ## 2026-09-07 — PLAT-RUN-BRANCHES done（run 并列分支）
 
 - **缺口**：`dim_clip.active_run_id` 把总览/检索/Dataset/校核收成每 clip 一行，后跑的 NVH 会藏起舱内分支
